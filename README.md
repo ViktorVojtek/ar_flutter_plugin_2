@@ -35,8 +35,10 @@ flutter pub add ar_flutter_plugin_2
 Or manually add this to your `pubspec.yaml` file (and run `flutter pub get`):
 
 ```yaml
-dependencies:
-  ar_flutter_plugin_2: ^0.0.3
+ar_flutter_plugin_2:
+    git:
+      url: https://github.com/ViktorVojtek/ar_flutter_plugin_2.git
+      ref: main
 ```
 
 Or in FlutterFlow : 
@@ -109,6 +111,398 @@ If you have problems with permissions on iOS (e.g. with the camera view not show
       end
     end
   end
+```
+
+## Example AR screen implementation
+- with methods for add/remove object
+
+```
+
+import 'dart:io';
+
+import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+
+//AR Flutter Plugin
+import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
+import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
+import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
+import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
+import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
+import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+
+//Other custom imports
+import 'package:vector_math/vector_math_64.dart' as vec;
+
+class ARScreen extends StatefulWidget {
+  const ARScreen({super.key, required this.title});
+
+  final String title;
+
+  @override
+  _ARScreenState createState() => _ARScreenState();
+}
+
+class _ARScreenState extends State<ARScreen> {
+  ARSessionManager? arSessionManager;
+  ARObjectManager? arObjectManager;
+  ARAnchorManager? arAnchorManager;
+  ARLocationManager? arLocationManager;
+
+  HttpClient? httpClient;
+  String? modelUri;
+  String? modelName;
+  String? selectedNode;
+  List<ARNode> nodes = [];
+  List<String> nodeCreationOrder = []; // Track the order nodes were created
+  vec.Vector3 nodePosition = vec.Vector3(0, 0, -1);
+
+  void onARViewCreated(
+    ARSessionManager sessionManager,
+    ARObjectManager objectManager,
+    ARAnchorManager anchorManager,
+    ARLocationManager locationManager
+  ) {
+    arSessionManager = sessionManager;
+    arObjectManager = objectManager;
+    arAnchorManager = anchorManager;
+    arLocationManager = locationManager;
+
+    // Initialize the AR Session
+    arSessionManager?.onInitialize(
+      showFeaturePoints: false,
+      showPlanes: false,
+      // customPlaneTexturePath: "Images/triangle.png",
+      showWorldOrigin: false,
+      handleTaps: true,
+      handlePans: true,
+      handleRotation: true,
+    );
+
+    // Initialize ObjectManager
+    arObjectManager?.onInitialize();
+    arObjectManager?.onNodeTap = onNodeTapped as NodeTapResultHandler?;
+
+    // Set up callback handlers
+    arSessionManager?.onPlaneOrPointTap = onPlaneOrPointTapped;
+    arSessionManager?.onPlaneDetected = onPlaneDetected;
+
+    // Additional configuration for anchorManager and locationManager can also be set
+  }
+
+  Future<void> onNodeTapped(List<String> tappedNodes) async {
+    if (tappedNodes.isEmpty) {
+      debugPrint("No nodes tapped.");
+      return;
+    }
+
+    String tappedNodeId = tappedNodes.first;
+    
+    // Check if the tapped node ID exists in our creation order
+    if (nodeCreationOrder.contains(tappedNodeId)) {
+      setState(() {
+        selectedNode = tappedNodeId;
+      });
+    } else {
+      debugPrint("Tapped node ID not found in nodeCreationOrder");
+      debugPrint("Available node IDs: $nodeCreationOrder");
+    }
+  }
+
+  void onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) {
+    if (hitTestResults.isEmpty) {
+      return;
+    }
+
+    // Check if model is downloaded
+    if (modelName == null) {
+      debugPrint("Model not downloaded yet. Please tap 'Add Model' first.");
+      return;
+    }
+
+    // Get the first hit result - this is where the user tapped
+    var hitTestResult = hitTestResults.first;
+    
+    // Get the world position from hit test
+    vec.Vector3 worldPosition = vec.Vector3(
+      hitTestResult.worldTransform.getColumn(3).x,
+      hitTestResult.worldTransform.getColumn(3).y,
+      hitTestResult.worldTransform.getColumn(3).z,
+    );
+    
+    // Adjust Y position to be slightly above the floor
+    worldPosition.y += 0.05;
+
+    
+    // Place the pending object at the hit position
+    placeObjectAtPosition(worldPosition, NodeType.fileSystemAppFolderGLB, modelName);
+  }
+
+  Future<void> placeObjectAtPosition(vec.Vector3 position, NodeType nodeType, String? modelUri) async {
+    if (modelUri == null || modelUri.isEmpty) {
+      debugPrint("Model URI is empty, cannot place object.");
+      return;
+    }
+
+    Matrix4 transformation = Matrix4.identity();
+    transformation.setTranslationRaw(position.x, position.y, position.z);
+
+    var newAnchor = ARPlaneAnchor(transformation: transformation);
+
+    bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
+
+    if (didAddAnchor != null && didAddAnchor) {
+      String objectUniqueName = "ARObject_${DateTime.now().millisecondsSinceEpoch}"; // Unique name for the object
+      
+      // This function should create an ARNode and add it to the ARObjectManager
+      ARNode node = ARNode(
+        type: nodeType,
+        uri: modelUri,
+        position: vec.Vector3(0.0, 0.0, 0.0),
+        scale: vec.Vector3(0.2, 0.2, 0.2), // Add scale to make object visible
+        rotation: vec.Vector4(1.0, 0.0, 0.0, 0.0), // Add rotation
+        data: {
+          'name': objectUniqueName, // Store the unique name in data
+        },
+      );
+      
+      try {
+        String? addedNodeName = await arObjectManager?.addNode(node, planeAnchor: newAnchor);
+        // Now we get the actual node name that was added
+        debugPrint("Node creation result: $addedNodeName");
+        if (addedNodeName != null) {
+          nodes.add(node);
+          nodeCreationOrder.add(addedNodeName); // Track creation order using the returned name
+          
+          // Print all node names for debugging
+          for (int i = 0; i < nodes.length; i++) {
+            debugPrint("Node $i name: ${nodes[i].data!['name']}, URI: ${nodes[i].uri}");
+          }
+        } else {
+          debugPrint("Failed to add node to anchor");
+        }
+      } catch (e) {
+        debugPrint("Error creating ARNode: $e");
+        return;
+      }
+    } else {
+      debugPrint("Failed to add anchor for the ARNode.");
+    }
+  }
+
+  void onPlaneDetected(dynamic plane) {
+    debugPrint("Plane detected: $plane");
+    // You can add additional plane detection logic here if needed
+    // For example, you might want to track detected planes for better object placement
+  }
+
+  Future<void> addModel() async {
+    // Download the model first
+    httpClient = HttpClient();
+    try {
+      String objectName = "LocalDuck.glb"; // Name of the model file
+      await _downloadFile(
+        "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
+        objectName,
+      );
+      modelName = objectName; // Store the model name for later use
+      debugPrint("Model downloaded successfully, ready to place on tap");
+    } catch (e) {
+      debugPrint("Failed to download model: $e");
+    }
+  }
+
+  void removeModel() {
+    if (nodes.isEmpty) {
+      debugPrint("No nodes to remove");
+      setState(() {
+        selectedNode = null;
+      });
+      return;
+    }
+
+    ARNode? nodeToRemove;
+    int nodeIndexToRemove = -1;
+    
+    // If we have a selected node ID, try to find and remove it
+    if (selectedNode != null) {
+      // Find the index of the selected node ID in our creation order
+      int selectedIndex = nodeCreationOrder.indexOf(selectedNode!);
+      if (selectedIndex >= 0 && selectedIndex < nodes.length) {
+        nodeToRemove = nodes[selectedIndex];
+        nodeIndexToRemove = selectedIndex;
+        debugPrint("Found selected node at index $selectedIndex: ${selectedNode!}");
+      } else {
+        debugPrint("Selected node ID not found in valid range");
+      }
+    }
+    
+    // If no specific node was selected or found, remove the last one
+    if (nodeToRemove == null && nodes.isNotEmpty) {
+      nodeToRemove = nodes.last;
+      nodeIndexToRemove = nodes.length - 1;
+      debugPrint("No selected node found, removing last node instead: ${nodeCreationOrder.last}");
+    }
+    
+    if (nodeToRemove != null && nodeIndexToRemove >= 0) {
+      String nodeIdToRemove = nodeCreationOrder[nodeIndexToRemove];
+      debugPrint("Removing node with ID: $nodeIdToRemove");
+      
+      // Remove from both lists
+      nodes.removeAt(nodeIndexToRemove);
+      nodeCreationOrder.removeAt(nodeIndexToRemove);
+      
+      // Remove from AR scene
+      arObjectManager?.removeNode(nodeToRemove);
+      
+      debugPrint("Node removed successfully.");
+      debugPrint("Remaining nodes: ${nodes.length}");
+      debugPrint("Remaining nodeCreationOrder: $nodeCreationOrder");
+      
+      // Clear selection after removal
+      setState(() {
+        selectedNode = null;
+      });
+      debugPrint("Cleared selection after removal");
+    } else {
+      debugPrint("No node to remove");
+      setState(() {
+        selectedNode = null;
+      });
+    }
+  }
+
+  Future<String> _downloadFile(String url, String filename) async {
+    try {
+      var request = await httpClient!.getUrl(Uri.parse(url));
+      var response = await request.close();
+      var bytes = await consolidateHttpClientResponseBytes(response);
+      String dir = (await getApplicationDocumentsDirectory()).path;
+      String filePath = '$dir/$filename';
+      File file = File(filePath);
+      await file.writeAsBytes(bytes);
+      debugPrint("Downloading finished, path: $filePath");
+
+      return filePath;
+    } catch (e) {
+      debugPrint('Download failed: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                ARView(
+                  onARViewCreated: onARViewCreated,
+                  planeDetectionConfig: PlaneDetectionConfig.horizontal,
+                ),
+                selectedNode != null ? Positioned(
+                  bottom: 80,
+                  left: 20,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Show which node is selected
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "Selected: ${nodeCreationOrder.indexOf(selectedNode!) + 1}/${nodeCreationOrder.length}\n${selectedNode!}",
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Previous button to cycle backwards
+                          ElevatedButton(
+                            onPressed: () {
+                              if (nodeCreationOrder.isNotEmpty) {
+                                int currentIndex = nodeCreationOrder.indexOf(selectedNode!);
+                                int prevIndex = (currentIndex - 1 + nodeCreationOrder.length) % nodeCreationOrder.length;
+                                setState(() {
+                                  selectedNode = nodeCreationOrder[prevIndex];
+                                });
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            child: const Text("Prev", style: TextStyle(fontSize: 10)),
+                          ),
+                          const SizedBox(width: 4),
+                          // Next button to cycle through nodes
+                          ElevatedButton(
+                            onPressed: () {
+                              if (nodeCreationOrder.isNotEmpty) {
+                                int currentIndex = nodeCreationOrder.indexOf(selectedNode!);
+                                int nextIndex = (currentIndex + 1) % nodeCreationOrder.length;
+                                setState(() {
+                                  selectedNode = nodeCreationOrder[nextIndex];
+                                });
+                                debugPrint("Manually cycled forward to: $selectedNode (index: $nextIndex)");
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            child: const Text("Next", style: TextStyle(fontSize: 10)),
+                          ),
+                          const SizedBox(width: 8),
+                          // Remove button
+                          ElevatedButton(
+                            onPressed: removeModel,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              elevation: 8,
+                            ),
+                            child: const Text("Remove", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ) : const SizedBox.shrink(),
+                Positioned(
+                  bottom: 20,
+                  right: 20,
+                  child: ElevatedButton(
+                    onPressed: addModel,
+                    child: const Text("Download Model"),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 ```
 
 In FlutterFlow :
