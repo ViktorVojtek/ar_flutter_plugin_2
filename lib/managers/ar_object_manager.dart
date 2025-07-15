@@ -120,7 +120,7 @@ class ARObjectManager {
   }
 
   /// Add given node to the given anchor of the underlying AR scene (or to its top-level if no anchor is given) and listen to any changes made to its transformation
-  Future<bool?> addNode(ARNode node, {ARPlaneAnchor? planeAnchor}) async {
+  Future<String?> addNode(ARNode node, {ARPlaneAnchor? planeAnchor}) async {
     try {
       node.transformNotifier.addListener(() {
         _channel.invokeMethod<void>('transformationChanged', {
@@ -131,13 +131,15 @@ class ARObjectManager {
       });
       if (planeAnchor != null) {
         planeAnchor.childNodes.add(node.name);
-        return await _channel.invokeMethod<bool>('addNodeToPlaneAnchor',
+        bool? success = await _channel.invokeMethod<bool>('addNodeToPlaneAnchor',
             {'node': node.toMap(), 'anchor': planeAnchor.toJson()});
+        return success == true ? node.name : null;
       } else {
-        return await _channel.invokeMethod<bool>('addNode', node.toMap());
+        bool? success = await _channel.invokeMethod<bool>('addNode', node.toMap());
+        return success == true ? node.name : null;
       }
     } on PlatformException catch (e) {
-      return false;
+      return null;
     }
   }
 
