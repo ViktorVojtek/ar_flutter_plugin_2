@@ -261,39 +261,55 @@ class ArView(
                 ) {
                     // Variables to track pan gesture state
                     private var panStartPosition: ScenePosition? = null
-                    private var panStartTouchX: Float = 0f
-                    private var panStartTouchY: Float = 0f
+                    private var lastTouchX: Float = 0f
+                    private var lastTouchY: Float = 0f
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans && panStartPosition != null) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
                             
                             try {
-                                // Calculate the touch delta from the start position
-                                val deltaX = e.x - panStartTouchX
-                                val deltaY = e.y - panStartTouchY
+                                // Get current touch coordinates
+                                val currentX = e.x
+                                val currentY = e.y
                                 
-                                // Convert screen delta to world space delta
-                                // Use a scaling factor to control movement sensitivity
-                                val scaleFactor = 0.001f // Adjust this for desired sensitivity
-                                val worldDeltaX = deltaX * scaleFactor
-                                val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
+                                // Calculate delta from last position (frame-to-frame movement)
+                                val deltaX = currentX - lastTouchX
+                                val deltaY = currentY - lastTouchY
                                 
-                                // Calculate new position from the original start position
-                                val newPosition = ScenePosition(
-                                    x = panStartPosition!!.x + worldDeltaX,
-                                    y = panStartPosition!!.y, // Keep Y constant for planar movement
-                                    z = panStartPosition!!.z + worldDeltaZ
-                                )
+                                Log.d("ArView", "Touch coordinates - Current: ($currentX, $currentY), Last: ($lastTouchX, $lastTouchY)")
+                                Log.d("ArView", "Frame delta: ($deltaX, $deltaY)")
                                 
-                                // Update the node's transform
-                                transform = Transform(
-                                    position = newPosition,
-                                    rotation = transform.rotation,
-                                    scale = transform.scale
-                                )
+                                // Only apply movement if there's significant delta
+                                if (kotlin.math.abs(deltaX) > 1f || kotlin.math.abs(deltaY) > 1f) {
+                                    // Convert screen delta to world space delta
+                                    val scaleFactor = 0.001f // Adjust this for desired sensitivity
+                                    val worldDeltaX = deltaX * scaleFactor
+                                    val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
+                                    
+                                    // Get current position and apply delta
+                                    val currentPosition = transform.position
+                                    val newPosition = ScenePosition(
+                                        x = currentPosition.x + worldDeltaX,
+                                        y = currentPosition.y, // Keep Y constant for planar movement
+                                        z = currentPosition.z + worldDeltaZ
+                                    )
+                                    
+                                    // Update the node's transform
+                                    transform = Transform(
+                                        position = newPosition,
+                                        rotation = transform.rotation,
+                                        scale = transform.scale
+                                    )
+                                    
+                                    Log.d("ArView", "Applied movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                } else {
+                                    Log.d("ArView", "Small delta ignored: ($deltaX, $deltaY)")
+                                }
                                 
-                                Log.d("ArView", "Manual pan movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                // Update last touch coordinates for next frame
+                                lastTouchX = currentX
+                                lastTouchY = currentY
                                 
                                 // Notify Flutter about the movement
                                 objectChannel.invokeMethod("onPanChange", name)
@@ -314,11 +330,11 @@ class ArView(
                         if (this@ArView.handlePans) {
                             // Store the initial position and touch coordinates
                             panStartPosition = transform.position
-                            panStartTouchX = e.x
-                            panStartTouchY = e.y
+                            lastTouchX = e.x
+                            lastTouchY = e.y
                             
                             Log.d("ArView", "Pan gesture BEGIN - Start pos: (${panStartPosition!!.x}, ${panStartPosition!!.y}, ${panStartPosition!!.z})")
-                            Log.d("ArView", "Pan gesture BEGIN - Start touch: ($panStartTouchX, $panStartTouchY)")
+                            Log.d("ArView", "Pan gesture BEGIN - Start touch: ($lastTouchX, $lastTouchY)")
                             
                             objectChannel.invokeMethod("onPanStart", name)
                             return true
@@ -333,8 +349,8 @@ class ArView(
                             
                             // Clear pan state
                             panStartPosition = null
-                            panStartTouchX = 0f
-                            panStartTouchY = 0f
+                            lastTouchX = 0f
+                            lastTouchY = 0f
                             val transformMap = mapOf(
                                 "name" to name,
                                 "transform" to transform.toFloatArray().toList()
