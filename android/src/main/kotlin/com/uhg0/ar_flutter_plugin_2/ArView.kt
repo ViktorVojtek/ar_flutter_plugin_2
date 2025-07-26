@@ -255,25 +255,68 @@ class ArView(
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                            if (handlePans) {
-                            val defaultResult = super.onMove(detector, e)
-                            objectChannel.invokeMethod("onPanChange", name)
-                            return defaultResult
+                        if (handlePans) {
+                            try {
+                                // Use raycasting to find the world position like iOS implementation
+                                sceneView.session?.update()?.let { frame ->
+                                    val hitResults = frame.hitTest(e)
+                                    val planeHit = hitResults.firstOrNull { hit ->
+                                        val trackable = hit.trackable
+                                        trackable is Plane && trackable.trackingState == TrackingState.TRACKING
+                                    }
+                                    
+                                    if (planeHit != null) {
+                                        // Update position based on hit test
+                                        val newPosition = ScenePosition(
+                                            x = planeHit.hitPose.tx(),
+                                            y = planeHit.hitPose.ty(),
+                                            z = planeHit.hitPose.tz()
+                                        )
+                                        
+                                        // Preserve current rotation and scale
+                                        val currentTransform = transform
+                                        transform(
+                                            position = newPosition,
+                                            rotation = currentTransform.rotation,
+                                            scale = currentTransform.scale
+                                        )
+                                        
+                                        Log.d("ArView", "Pan moved node ${name} to position: ($newPosition)")
+                                        objectChannel.invokeMethod("onPanChange", name)
+                                        return true
+                                    } else {
+                                        // Fallback to default behavior if no plane hit
+                                        val defaultResult = super.onMove(detector, e)
+                                        objectChannel.invokeMethod("onPanChange", name)
+                                        return defaultResult
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w("ArView", "Pan gesture handling error: ${e.message}")
+                                // Fallback to default behavior
+                                val defaultResult = super.onMove(detector, e)
+                                objectChannel.invokeMethod("onPanChange", name)
+                                return defaultResult
                             }
-                    return false
+                        }
+                        return false
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (handlePans) {
+                            Log.d("ArView", "Pan gesture BEGIN for node: $name, handlePans: $handlePans")
                             val defaultResult = super.onMoveBegin(detector, e)
+                            Log.d("ArView", "Pan gesture BEGIN result: $defaultResult")
                             objectChannel.invokeMethod("onPanStart", name)
-                            defaultResult
+                            return defaultResult  // FIX: Actually return the defaultResult instead of always false
                         } 
+                        Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: $handlePans")
                         return false
                     }
                     
                     override fun onMoveEnd(detector: MoveGestureDetector, e: MotionEvent) {
                         if (handlePans) {
+                            Log.d("ArView", "Pan gesture END for node: $name")
                             super.onMoveEnd(detector, e)
                             val transformMap = mapOf(
                                 "name" to name,
@@ -315,6 +358,9 @@ class ArView(
                     isPositionEditable = handlePans
                     isRotationEditable = handleRotation
                     name = nodeData["name"] as? String
+                    // Ensure the node is clickable/selectable
+                    isSelectable = true
+                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, handlePans: $handlePans")
                 }
             } ?: run {
                 null
@@ -348,6 +394,8 @@ class ArView(
                             sceneView.addChildNode(anchorNode)
                             node.name?.let { nodeName ->
                                 nodesMap[nodeName] = node
+                                Log.d("ArView", "Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
+                                Log.d("ArView", "All nodes in map: ${nodesMap.keys}")
                                 result.success(nodeName) // Return node name instead of boolean
                             } ?: result.success(null) // Return null if no node name
                         } ?: result.success(null) // Return null instead of false
@@ -394,6 +442,7 @@ class ArView(
                 // Return the node name if available, otherwise null
                 node.name?.let { nodeName ->
                     nodesMap[nodeName] = node
+                    Log.d("ArView", "Added ModelNode to nodesMap (screen position): $nodeName, total nodes: ${nodesMap.size}")
                     result.success(nodeName)
                 } ?: result.success(null)
             }
@@ -416,6 +465,8 @@ class ArView(
             val handleTaps = call.argument<Boolean>("handleTaps") ?: true
             handlePans = call.argument<Boolean>("handlePans") ?: false
             handleRotation = call.argument<Boolean>("handleRotation") ?: false
+            
+            Log.d("ArView", "Session initialized with gesture settings - handleTaps: $handleTaps, handlePans: $handlePans, handleRotation: $handleRotation")
 
             sceneView.session?.let { session ->
                 session.configure(session.config.apply {
@@ -533,8 +584,35 @@ class ArView(
                 setOnGestureListener(
                     onSingleTapConfirmed = { motionEvent: MotionEvent, node: Node? ->
                         if (node != null) {
-                            var anchorName: String? = null
+                            Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
+                            
+                            // First, try to find a ModelNode (3D object) that was tapped
+                            var modelNodeName: String? = null
                             var currentNode: Node? = node
+                            
+                            // Traverse up the node hierarchy to find a ModelNode
+                            while (currentNode != null) {
+                                if (currentNode is ModelNode && currentNode.name != null) {
+                                    // Check if this ModelNode is in our managed nodes map
+                                    if (nodesMap.containsKey(currentNode.name)) {
+                                        modelNodeName = currentNode.name
+                                        Log.d("ArView", "Found ModelNode: $modelNodeName")
+                                        break
+                                    }
+                                }
+                                currentNode = currentNode.parent
+                            }
+                            
+                            // If we found a ModelNode, report it as tapped
+                            if (modelNodeName != null && handleTaps) {
+                                Log.d("ArView", "Reporting ModelNode tap: $modelNodeName")
+                                objectChannel.invokeMethod("onNodeTap", listOf(modelNodeName))
+                                return@setOnGestureListener true
+                            }
+                            
+                            // Fallback: look for anchor names (for backward compatibility)
+                            var anchorName: String? = null
+                            currentNode = node
                             while (currentNode != null) {
                                 anchorNodesMap.forEach { (name, anchorNode) ->
                                     if (currentNode == anchorNode) {
@@ -545,11 +623,14 @@ class ArView(
                                 if (anchorName != null) break
                                 currentNode = currentNode.parent
                             }
-                            if(handleTaps) {
+                            
+                            if (anchorName != null && handleTaps) {
+                                Log.d("ArView", "Reporting anchor tap: $anchorName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
                             }
                             true
                         } else {
+                            Log.d("ArView", "Tap detected on empty space (no node hit)")
                             session?.update()?.let { frame ->
                                 val hitResults = frame.hitTest(motionEvent)
 
@@ -577,6 +658,66 @@ class ArView(
                             true
                         }
                     },
+                    onMove = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
+                        if (handlePans && node != null) {
+                            // Find the model node that was hit
+                            var modelNode: ModelNode? = null
+                            var currentNode: Node? = node
+                            while (currentNode != null) {
+                                if (currentNode is ModelNode) {
+                                    modelNode = currentNode
+                                    break
+                                }
+                                currentNode = currentNode.parent
+                            }
+                            
+                            if (modelNode != null) {
+                                Log.d("ArView", "SceneView pan detected for node: ${modelNode.name}")
+                                // Let the individual node handle the movement
+                                modelNode.onMove(detector, motionEvent)
+                            }
+                            true
+                        } else false
+                    },
+                    onMoveBegin = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
+                        Log.d("ArView", "SceneView onMoveBegin called - handlePans: $handlePans, node: ${node?.name}")
+                        if (handlePans && node != null) {
+                            // Find the model node that was hit
+                            var modelNode: ModelNode? = null
+                            var currentNode: Node? = node
+                            while (currentNode != null) {
+                                if (currentNode is ModelNode) {
+                                    modelNode = currentNode
+                                    break
+                                }
+                                currentNode = currentNode.parent
+                            }
+                            
+                            if (modelNode != null) {
+                                Log.d("ArView", "SceneView pan begin for ModelNode: ${modelNode.name}")
+                                selectedNode = modelNode
+                                // Let the individual node handle the movement
+                                val result = modelNode.onMoveBegin(detector, motionEvent)
+                                Log.d("ArView", "ModelNode onMoveBegin returned: $result")
+                                result
+                            } else {
+                                Log.d("ArView", "No ModelNode found for pan gesture")
+                                false
+                            }
+                        } else {
+                            Log.d("ArView", "Pan gesture blocked - handlePans: $handlePans, node: $node")
+                            false
+                        }
+                    },
+                    onMoveEnd = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
+                        if (handlePans && selectedNode != null) {
+                            Log.d("ArView", "SceneView pan end for node: ${selectedNode?.name}")
+                            if (selectedNode is ModelNode) {
+                                (selectedNode as ModelNode).onMoveEnd(detector, motionEvent)
+                            }
+                            selectedNode = null
+                        }
+                    }
                 )
 
                 if (argShowAnimatedGuide == true && showAnimatedGuide == true) {
@@ -627,6 +768,7 @@ class ArView(
                     sceneView.addChildNode(node)
                     node.name?.let { nodeName ->
                         nodesMap[nodeName] = node
+                        Log.d("ArView", "Added ModelNode to nodesMap (direct): $nodeName, total nodes: ${nodesMap.size}")
                         result.success(nodeName) // Return node name instead of boolean
                     } ?: result.success(null) // Return null if no node name
                 } else {
