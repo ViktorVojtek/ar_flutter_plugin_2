@@ -131,12 +131,12 @@ class ARObjectManager {
       });
       if (planeAnchor != null) {
         planeAnchor.childNodes.add(node.name);
-        bool? success = await _channel.invokeMethod<bool>('addNodeToPlaneAnchor',
+        String? nodeName = await _channel.invokeMethod<String>('addNodeToPlaneAnchor',
             {'node': node.toMap(), 'anchor': planeAnchor.toJson()});
-        return success == true ? node.name : null;
+        return nodeName; // Return the node name directly from native side
       } else {
-        bool? success = await _channel.invokeMethod<bool>('addNode', node.toMap());
-        return success == true ? node.name : null;
+        String? nodeName = await _channel.invokeMethod<String>('addNode', node.toMap());
+        return nodeName; // Return the node name directly from native side
       }
     } on PlatformException catch (e) {
       return null;

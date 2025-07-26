@@ -310,7 +310,7 @@ class ArView(
             val dict_node = nodeData?.get("node") as? Map<String, Any>
             val dict_anchor = nodeData?.get("anchor") as? Map<String, Any>
             if (dict_node == null || dict_anchor == null) {
-                result.success(false)
+                result.success(null) // Return null instead of false
                 return
             }
 
@@ -324,18 +324,18 @@ class ArView(
                             sceneView.addChildNode(anchorNode)
                             node.name?.let { nodeName ->
                                 nodesMap[nodeName] = node
-                            }
-                            result.success(true)
-                        } ?: result.success(false)
+                                result.success(nodeName) // Return node name instead of boolean
+                            } ?: result.success(null) // Return null if no node name
+                        } ?: result.success(null) // Return null instead of false
                     } catch (e: Exception) {
-                        result.success(false)
+                        result.success(null) // Return null instead of false
                     }
                 }
             } else {
-                result.success(false)
+                result.success(null) // Return null instead of false
             }
         } catch (e: Exception) {
-            result.success(false)
+            result.success(null) // Return null instead of false
         }
     }
 
@@ -353,7 +353,10 @@ class ArView(
             }
 
             mainScope.launch {
-                val node = buildModelNode(nodeData) ?: return@launch
+                val node = buildModelNode(nodeData) ?: run {
+                    result.success(null)
+                    return@launch
+                }
                 val hitResultNode =
                     HitResultNode(
                         engine = sceneView.engine,
@@ -364,7 +367,11 @@ class ArView(
                     }
 
                 sceneView.addChildNode(hitResultNode)
-                result.success(null)
+                // Return the node name if available, otherwise null
+                node.name?.let { nodeName ->
+                    nodesMap[nodeName] = node
+                    result.success(nodeName)
+                } ?: result.success(null)
             }
         } catch (e: Exception) {
             result.error("ADD_NODE_TO_SCREEN_ERROR", e.message, null)
@@ -596,14 +603,14 @@ class ArView(
                     sceneView.addChildNode(node)
                     node.name?.let { nodeName ->
                         nodesMap[nodeName] = node
-                    }
-                    result.success(true)
+                        result.success(nodeName) // Return node name instead of boolean
+                    } ?: result.success(null) // Return null if no node name
                 } else {
-                    result.success(false)
+                    result.success(null) // Return null instead of false
                 }
             }
         } catch (e: Exception) {
-            result.success(false)
+            result.success(null) // Return null instead of false
         }
     }
 
