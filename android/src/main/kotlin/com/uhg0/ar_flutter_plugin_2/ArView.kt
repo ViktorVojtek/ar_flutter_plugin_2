@@ -57,6 +57,9 @@ import io.github.sceneview.math.Scale
 import io.github.sceneview.math.colorOf
 import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
+import kotlin.math.abs
+import kotlin.math.sqrt
+import kotlin.math.atan2
 
 class ArView(
     context: Context,
@@ -281,16 +284,16 @@ class ArView(
                             )
                             
                             // Extract scale from transformation matrix
-                            val scaleX = kotlin.math.sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
-                            val scaleY = kotlin.math.sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
-                            val scaleZ = kotlin.math.sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
+                            val scaleX = sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
+                            val scaleY = sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
+                            val scaleZ = sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
                             val scale = SceneScale(x = scaleX, y = scaleY, z = scaleZ)
                             
                             // Extract rotation from transformation matrix
                             val rotation = SceneRotation(
-                                x = kotlin.math.atan2(matrix[6], matrix[10]),
-                                y = kotlin.math.atan2(-matrix[2], kotlin.math.sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10])),
-                                z = kotlin.math.atan2(matrix[1], matrix[0])
+                                x = atan2(matrix[6], matrix[10]),
+                                y = atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10])),
+                                z = atan2(matrix[1], matrix[0])
                             )
                             
                             // Apply the transformation to the node
@@ -327,9 +330,17 @@ class ArView(
                             if (pansEnabled && hasValidStart) {
                                 Log.d("ArView", "NEW onMove: Starting movement logic for node $name")
                                 
-                                // Get current touch coordinates from detector (more reliable)
-                                val currentX = detector.focusX
-                                val currentY = detector.focusY
+                                // Get current touch coordinates (calculate average for multi-touch)
+                                var currentX = 0f
+                                var currentY = 0f
+                                val pointerCount = e.pointerCount
+                                
+                                for (i in 0 until pointerCount) {
+                                    currentX += e.getX(i)
+                                    currentY += e.getY(i)
+                                }
+                                currentX /= pointerCount
+                                currentY /= pointerCount
                                 
                                 // Calculate delta from last position (frame-to-frame movement)
                                 val deltaX = currentX - lastTouchX
@@ -339,7 +350,7 @@ class ArView(
                                 Log.d("ArView", "NEW Touch delta: ($deltaX, $deltaY)")
                                 
                                 // Only apply movement if there's significant delta
-                                if (kotlin.math.abs(deltaX) > 0.5f || kotlin.math.abs(deltaY) > 0.5f) {
+                                if (abs(deltaX) > 0.5f || abs(deltaY) > 0.5f) {
                                     // Convert screen delta to world space delta
                                     val scaleFactor = 0.002f // Slightly increased sensitivity
                                     val worldDeltaX = deltaX * scaleFactor
@@ -389,8 +400,18 @@ class ArView(
                         if (handlePansEnabled) {
                             // Store the initial position and touch coordinates
                             panStartPosition = transform.position
-                            lastTouchX = detector.focusX
-                            lastTouchY = detector.focusY
+                            
+                            // Calculate average touch position for multi-touch
+                            var startX = 0f
+                            var startY = 0f
+                            val pointerCount = e.pointerCount
+                            
+                            for (i in 0 until pointerCount) {
+                                startX += e.getX(i)
+                                startY += e.getY(i)
+                            }
+                            lastTouchX = startX / pointerCount
+                            lastTouchY = startY / pointerCount
                             
                             Log.d("ArView", "Pan gesture BEGIN - Start pos: (${panStartPosition!!.x}, ${panStartPosition!!.y}, ${panStartPosition!!.z})")
                             Log.d("ArView", "Pan gesture BEGIN - Start touch: ($lastTouchX, $lastTouchY)")
@@ -944,16 +965,16 @@ class ArView(
                                 z = transform[14].toFloat()
                             ),
                             rotation = SceneRotation(
-                                x = kotlin.math.atan2(transform[6].toFloat(), transform[10].toFloat()),
-                                y = kotlin.math.atan2(-transform[2].toFloat(), 
-                                    kotlin.math.sqrt(transform[6].toFloat() * transform[6].toFloat() + 
+                                x = atan2(transform[6].toFloat(), transform[10].toFloat()),
+                                y = atan2(-transform[2].toFloat(), 
+                                    sqrt(transform[6].toFloat() * transform[6].toFloat() + 
                                     transform[10].toFloat() * transform[10].toFloat())),
-                                z = kotlin.math.atan2(transform[1].toFloat(), transform[0].toFloat())
+                                z = atan2(transform[1].toFloat(), transform[0].toFloat())
                             ),
                             scale = SceneScale(
-                                x = kotlin.math.sqrt((transform[0] * transform[0] + transform[1] * transform[1] + transform[2] * transform[2]).toFloat()),
-                                y = kotlin.math.sqrt((transform[4] * transform[4] + transform[5] * transform[5] + transform[6] * transform[6]).toFloat()),
-                                z = kotlin.math.sqrt((transform[8] * transform[8] + transform[9] * transform[9] + transform[10] * transform[10]).toFloat())
+                                x = sqrt((transform[0] * transform[0] + transform[1] * transform[1] + transform[2] * transform[2]).toFloat()),
+                                y = sqrt((transform[4] * transform[4] + transform[5] * transform[5] + transform[6] * transform[6]).toFloat()),
+                                z = sqrt((transform[8] * transform[8] + transform[9] * transform[9] + transform[10] * transform[10]).toFloat())
                             )
                         )
                     }
