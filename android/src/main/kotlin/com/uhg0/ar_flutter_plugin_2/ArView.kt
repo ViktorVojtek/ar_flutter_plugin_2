@@ -264,6 +264,10 @@ class ArView(
                     private var lastTouchX: Float = 0f
                     private var lastTouchY: Float = 0f
                     
+                    // CRITICAL: Capture handlePans value at creation time to avoid context issues
+                    private val handlePansEnabled = this@ArView.handlePans
+                    private val handleRotationEnabled = this@ArView.handleRotation
+                    
                     init {
                         // Apply the full transformation matrix to properly position the node
                         if (transformation.size >= 16) {
@@ -303,23 +307,22 @@ class ArView(
                         
                         // CRITICAL: Set gesture properties INSIDE init block before node is added to anchor
                         name = nodeData["name"] as? String
-                        isPositionEditable = this@ArView.handlePans
-                        isRotationEditable = this@ArView.handleRotation
+                        isPositionEditable = handlePansEnabled
+                        isRotationEditable = handleRotationEnabled
                         isTouchable = true
                         
-                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
+                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePansEnabled: $handlePansEnabled")
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         try {
                             Log.d("ArView", "=== onMove DEBUG START ===")
                             
-                            val handlePansValue = this@ArView.handlePans
                             val panStartPositionValue = panStartPosition
                             val hasValidPanStart = panStartPositionValue != null
-                            val conditionResult = handlePansValue && hasValidPanStart
+                            val conditionResult = handlePansEnabled && hasValidPanStart
                             
-                            Log.d("ArView", "handlePans: $handlePansValue")
+                            Log.d("ArView", "handlePansEnabled: $handlePansEnabled")
                             Log.d("ArView", "hasValidPanStart: $hasValidPanStart") 
                             Log.d("ArView", "conditionResult: $conditionResult")
                             
@@ -379,7 +382,7 @@ class ArView(
                                 return false
                             }
                         } else {
-                            Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: $handlePansValue, hasValidPanStart: $hasValidPanStart)")
+                            Log.d("ArView", "Pan gesture ignored for node: $name (handlePansEnabled: $handlePansEnabled, hasValidPanStart: $hasValidPanStart)")
                         }
                         return false
                         } catch (e: Exception) {
@@ -390,8 +393,8 @@ class ArView(
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}")
-                        if (this@ArView.handlePans) {
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePansEnabled: $handlePansEnabled")
+                        if (handlePansEnabled) {
                             // Store the initial position and touch coordinates
                             panStartPosition = transform.position
                             lastTouchX = e.x
@@ -403,12 +406,12 @@ class ArView(
                             objectChannel.invokeMethod("onPanStart", name)
                             return true
                         } 
-                        Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: ${this@ArView.handlePans}")
+                        Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePansEnabled: $handlePansEnabled")
                         return false
                     }
                     
                     override fun onMoveEnd(detector: MoveGestureDetector, e: MotionEvent) {
-                        if (this@ArView.handlePans) {
+                        if (handlePansEnabled) {
                             Log.d("ArView", "Pan gesture END for node: $name")
                             
                             // Clear pan state
@@ -424,7 +427,7 @@ class ArView(
                     }
 
                     override fun onRotateBegin(detector: RotateGestureDetector, e: MotionEvent): Boolean {
-                        if (this@ArView.handleRotation) {
+                        if (handleRotationEnabled) {
                             val defaultResult = super.onRotateBegin(detector, e)
                             objectChannel.invokeMethod("onRotationStart", name)
                             return defaultResult
@@ -433,7 +436,7 @@ class ArView(
                     }
 
                     override fun onRotate(detector: RotateGestureDetector, e: MotionEvent): Boolean {
-                        if (this@ArView.handleRotation) {
+                        if (handleRotationEnabled) {
                             Log.d("ArView", "ModelNode onRotate called for: $name")
                             // USE NATIVE SCENEVIEW BEHAVIOR - let the framework handle rotation
                             val defaultResult = super.onRotate(detector, e)
@@ -445,7 +448,7 @@ class ArView(
                     }
 
                     override fun onRotateEnd(detector: RotateGestureDetector, e: MotionEvent) {
-                        if (this@ArView.handleRotation) {
+                        if (handleRotationEnabled) {
                             super.onRotateEnd(detector, e)
                             val transformMap = mapOf(
                                 "name" to name,
