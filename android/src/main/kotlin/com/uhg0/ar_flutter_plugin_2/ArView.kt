@@ -315,25 +315,61 @@ class ArView(
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "=== onMove START ===")
-                        
                         try {
-                            Log.d("ArView", "Step 1: Before variable access")
-                            
                             val pansEnabled = handlePansEnabled
-                            Log.d("ArView", "Step 2: handlePansEnabled = $pansEnabled")
-                            
                             val panStart = panStartPosition
-                            Log.d("ArView", "Step 3: panStartPosition obtained")
-                            
                             val hasValidStart = panStart != null
-                            Log.d("ArView", "Step 4: hasValidStart = $hasValidStart")
                             
                             if (pansEnabled && hasValidStart) {
-                                Log.d("ArView", "Step 5: Condition passed - starting movement logic")
+                                Log.d("ArView", "onMove: Starting movement logic for node $name")
+                                
+                                // Get current touch coordinates
+                                val currentX = e.x
+                                val currentY = e.y
+                                
+                                // Calculate delta from last position (frame-to-frame movement)
+                                val deltaX = currentX - lastTouchX
+                                val deltaY = currentY - lastTouchY
+                                
+                                Log.d("ArView", "Touch delta: ($deltaX, $deltaY)")
+                                
+                                // Only apply movement if there's significant delta
+                                if (kotlin.math.abs(deltaX) > 1f || kotlin.math.abs(deltaY) > 1f) {
+                                    // Convert screen delta to world space delta
+                                    val scaleFactor = 0.001f // Adjust this for desired sensitivity
+                                    val worldDeltaX = deltaX * scaleFactor
+                                    val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
+                                    
+                                    // Get current position and apply delta
+                                    val currentPosition = transform.position
+                                    val newPosition = ScenePosition(
+                                        x = currentPosition.x + worldDeltaX,
+                                        y = currentPosition.y, // Keep Y constant for planar movement
+                                        z = currentPosition.z + worldDeltaZ
+                                    )
+                                    
+                                    // Update the node's transform
+                                    transform = Transform(
+                                        position = newPosition,
+                                        rotation = transform.rotation,
+                                        scale = transform.scale
+                                    )
+                                    
+                                    Log.d("ArView", "Applied movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                } else {
+                                    Log.d("ArView", "Small delta ignored: ($deltaX, $deltaY)")
+                                }
+                                
+                                // Update last touch coordinates for next frame
+                                lastTouchX = currentX
+                                lastTouchY = currentY
+                                
+                                // Notify Flutter about the movement
+                                objectChannel.invokeMethod("onPanChange", name)
+                                
                                 return true
                             } else {
-                                Log.d("ArView", "Step 5: Condition failed - ignoring gesture")
+                                Log.d("ArView", "Pan gesture ignored - pansEnabled: $pansEnabled, hasValidStart: $hasValidStart")
                                 return false
                             }
                         } catch (e: Exception) {
