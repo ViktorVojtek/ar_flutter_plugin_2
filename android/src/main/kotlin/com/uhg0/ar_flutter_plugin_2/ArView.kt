@@ -465,8 +465,26 @@ class ArView(
                 mainScope.launch {
                     try {
                         buildModelNode(dict_node)?.let { node ->
-                            anchorNode.addChildNode(node)
-                            sceneView.addChildNode(anchorNode)
+                            // For gesture-enabled nodes, don't add to anchor - add directly to scene
+                            if (this@ArView.handlePans || this@ArView.handleRotation) {
+                                Log.d("ArView", "Adding gesture-enabled node directly to scene (bypassing anchor)")
+                                sceneView.addChildNode(node)
+                                
+                                // Apply anchor's world position to the node instead of parenting it
+                                val anchorWorldPosition = anchorNode.worldPosition
+                                node.transform = Transform(
+                                    position = anchorWorldPosition,
+                                    rotation = node.transform.rotation,
+                                    scale = node.transform.scale
+                                )
+                                Log.d("ArView", "Applied anchor world position to node: (${anchorWorldPosition.x}, ${anchorWorldPosition.y}, ${anchorWorldPosition.z})")
+                            } else {
+                                // For non-gesture nodes, use normal anchor parenting
+                                Log.d("ArView", "Adding non-gesture node to anchor normally")
+                                anchorNode.addChildNode(node)
+                                sceneView.addChildNode(anchorNode)
+                            }
+                            
                             node.name?.let { nodeName ->
                                 nodesMap[nodeName] = node
                                 Log.d("ArView", "Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
