@@ -311,6 +311,12 @@ class ArView(
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
+                        Log.d("ArView", "=== onMove DEBUG START ===")
+                        Log.d("ArView", "handlePans: ${this@ArView.handlePans}")
+                        Log.d("ArView", "panStartPosition: $panStartPosition")
+                        Log.d("ArView", "panStartPosition != null: ${panStartPosition != null}")
+                        Log.d("ArView", "Condition result: ${this@ArView.handlePans && panStartPosition != null}")
+                        
                         if (this@ArView.handlePans && panStartPosition != null) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
                             
