@@ -327,20 +327,21 @@ class ArView(
                             if (pansEnabled && hasValidStart) {
                                 Log.d("ArView", "NEW onMove: Starting movement logic for node $name")
                                 
-                                // Get current touch coordinates
-                                val currentX = e.x
-                                val currentY = e.y
+                                // Get current touch coordinates from detector (more reliable)
+                                val currentX = detector.focusX
+                                val currentY = detector.focusY
                                 
                                 // Calculate delta from last position (frame-to-frame movement)
                                 val deltaX = currentX - lastTouchX
                                 val deltaY = currentY - lastTouchY
                                 
+                                Log.d("ArView", "NEW Touch coordinates - current: ($currentX, $currentY), last: ($lastTouchX, $lastTouchY)")
                                 Log.d("ArView", "NEW Touch delta: ($deltaX, $deltaY)")
                                 
                                 // Only apply movement if there's significant delta
-                                if (kotlin.math.abs(deltaX) > 1f || kotlin.math.abs(deltaY) > 1f) {
+                                if (kotlin.math.abs(deltaX) > 0.5f || kotlin.math.abs(deltaY) > 0.5f) {
                                     // Convert screen delta to world space delta
-                                    val scaleFactor = 0.001f // Adjust this for desired sensitivity
+                                    val scaleFactor = 0.002f // Slightly increased sensitivity
                                     val worldDeltaX = deltaX * scaleFactor
                                     val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
                                     
@@ -388,8 +389,8 @@ class ArView(
                         if (handlePansEnabled) {
                             // Store the initial position and touch coordinates
                             panStartPosition = transform.position
-                            lastTouchX = e.x
-                            lastTouchY = e.y
+                            lastTouchX = detector.focusX
+                            lastTouchY = detector.focusY
                             
                             Log.d("ArView", "Pan gesture BEGIN - Start pos: (${panStartPosition!!.x}, ${panStartPosition!!.y}, ${panStartPosition!!.z})")
                             Log.d("ArView", "Pan gesture BEGIN - Start touch: ($lastTouchX, $lastTouchY)")
