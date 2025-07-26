@@ -259,24 +259,32 @@ class ArView(
                     modelInstance = modelInstance,
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
+                    // Store previous touch position for delta calculation
+                    private var previousX: Float = 0f
+                    private var previousY: Float = 0f
+                    
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans) {
-                            Log.d("ArView", "ModelNode onMove called for: $name, deltaX: ${detector.focusDelta.x}, deltaY: ${detector.focusDelta.y}")
+                            Log.d("ArView", "ModelNode onMove called for: $name, motion: (${e.x}, ${e.y})")
                             
                             try {
-                                // PRIMARY: Use camera-relative movement for ultra-smooth, responsive movement
+                                // Calculate movement delta from MotionEvent
+                                val deltaX = (e.x - previousX) * -0.002f // Scale and invert X for natural movement
+                                val deltaY = (e.y - previousY) * 0.002f  // Scale Y for natural movement
+                                
+                                Log.d("ArView", "Pan gesture deltas - raw: (${e.x - previousX}, ${e.y - previousY}), scaled: ($deltaX, $deltaY)")
+                                
+                                // Update previous position for next delta calculation
+                                previousX = e.x
+                                previousY = e.y
+                                
+                                // Use camera-relative movement for ultra-smooth, responsive movement
                                 val camera = sceneView.cameraNode
                                 val cameraTransform = camera.transform
                                 
                                 // Get camera direction vectors (right and up relative to camera)
                                 val cameraRight = cameraTransform.right
                                 val cameraUp = cameraTransform.up
-                                
-                                // Get gesture delta (screen movement) - increased sensitivity for better responsiveness
-                                val deltaX = detector.focusDelta.x * -0.002f // Increased scale for more responsive movement
-                                val deltaY = detector.focusDelta.y * 0.002f  // Increased scale for more responsive movement
-                                
-                                Log.d("ArView", "Pan gesture deltas - raw: (${detector.focusDelta.x}, ${detector.focusDelta.y}), scaled: ($deltaX, $deltaY)")
                                 
                                 // Convert screen movement to world movement relative to camera orientation
                                 val worldMovement = ScenePosition(
@@ -320,6 +328,10 @@ class ArView(
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, touch: (${e.x}, ${e.y})")
                         if (this@ArView.handlePans) {
+                            // Initialize previous position for delta calculation
+                            previousX = e.x
+                            previousY = e.y
+                            
                             // Always accept pan gestures in all directions for smooth movement
                             Log.d("ArView", "Pan gesture BEGIN accepted for $name - enabling real-time movement")
                             objectChannel.invokeMethod("onPanStart", name)
@@ -655,7 +667,7 @@ class ArView(
                             if (modelNodeName != null && this@ArView.handleTaps) {
                                 Log.d("ArView", "Reporting ModelNode tap: $modelNodeName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(modelNodeName))
-                                return@setOnGestureListener true
+                                return@setOnGestureListener
                             }
                             
                             // Fallback: look for anchor names (for backward compatibility)
@@ -675,9 +687,7 @@ class ArView(
                             if (anchorName != null && this@ArView.handleTaps) {
                                 Log.d("ArView", "Reporting anchor tap: $anchorName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
-                                return@setOnGestureListener true
                             }
-                            return@setOnGestureListener true
                         } else {
                             Log.d("ArView", "Tap detected on empty space (no node hit)")
                             try {
@@ -711,7 +721,6 @@ class ArView(
                             } catch (e: Exception) {
                                 Log.e("ArView", "Error during hit testing: ${e.message}")
                             }
-                            return@setOnGestureListener true
                         }
                     }
                     // REMOVED: Custom pan gesture handling - let SceneView native system handle it
