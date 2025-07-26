@@ -265,18 +265,20 @@ class ArView(
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans) {
-                            Log.d("ArView", "ModelNode onMove called for: $name, motion: (${e.x}, ${e.y})")
+                            Log.d("ArView", "ModelNode onMove called for: $name, motion: (${e.x}, ${e.y}), rawX: ${e.rawX}, rawY: ${e.rawY}, previous: ($previousX, $previousY)")
                             
                             try {
-                                // Calculate movement delta from MotionEvent
-                                val deltaX = (e.x - previousX) * -0.002f // Scale and invert X for natural movement
-                                val deltaY = (e.y - previousY) * 0.002f  // Scale Y for natural movement
+                                // Try using rawX/rawY for absolute screen coordinates
+                                val rawDeltaX = e.rawX - previousX
+                                val rawDeltaY = e.rawY - previousY
+                                val deltaX = rawDeltaX * -0.002f // Scale and invert X for natural movement
+                                val deltaY = rawDeltaY * 0.002f  // Scale Y for natural movement
                                 
-                                Log.d("ArView", "Pan gesture deltas - raw: (${e.x - previousX}, ${e.y - previousY}), scaled: ($deltaX, $deltaY)")
+                                Log.d("ArView", "Pan gesture deltas - raw: ($rawDeltaX, $rawDeltaY), scaled: ($deltaX, $deltaY)")
                                 
-                                // Update previous position for next delta calculation
-                                previousX = e.x
-                                previousY = e.y
+                                // Update previous position for next delta calculation using rawX/rawY
+                                previousX = e.rawX
+                                previousY = e.rawY
                                 
                                 // Use camera-relative movement for ultra-smooth, responsive movement
                                 val camera = sceneView.cameraNode
@@ -326,11 +328,11 @@ class ArView(
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, touch: (${e.x}, ${e.y})")
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, touch: (${e.x}, ${e.y}), rawTouch: (${e.rawX}, ${e.rawY})")
                         if (this@ArView.handlePans) {
-                            // Initialize previous position for delta calculation
-                            previousX = e.x
-                            previousY = e.y
+                            // Initialize previous position for delta calculation using rawX/rawY
+                            previousX = e.rawX
+                            previousY = e.rawY
                             
                             // Always accept pan gestures in all directions for smooth movement
                             Log.d("ArView", "Pan gesture BEGIN accepted for $name - enabling real-time movement")
