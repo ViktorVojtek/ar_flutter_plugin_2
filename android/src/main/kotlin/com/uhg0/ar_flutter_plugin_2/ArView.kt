@@ -267,19 +267,24 @@ class ArView(
                                 // Get current AR frame
                                 val currentFrame = sceneView.session?.update()
                                 if (currentFrame != null) {
-                                    // Use AR hit testing to find world position like iOS does
+                                    // Use AR hit testing with both planes and feature points for smooth movement (like iOS)
                                     val hitResults = currentFrame.hitTest(e)
+                                    
+                                    // Try planes first (most accurate)
                                     val planeHit = hitResults.firstOrNull { hit ->
                                         val trackable = hit.trackable
                                         trackable is Plane && trackable.trackingState == TrackingState.TRACKING
                                     }
                                     
-                                    if (planeHit != null) {
-                                        // Update position based on AR world coordinates (like iOS raycast)
+                                    // If no plane, try any hit result for smooth movement (like iOS .estimatedPlane)
+                                    val smoothHit = planeHit ?: hitResults.firstOrNull()
+                                    
+                                    if (smoothHit != null) {
+                                        // Update position based on AR world coordinates (smooth like iOS raycast)
                                         val newPosition = ScenePosition(
-                                            x = planeHit.hitPose.tx(),
-                                            y = planeHit.hitPose.ty(),
-                                            z = planeHit.hitPose.tz()
+                                            x = smoothHit.hitPose.tx(),
+                                            y = smoothHit.hitPose.ty(),
+                                            z = smoothHit.hitPose.tz()
                                         )
                                         
                                         transform = Transform(
@@ -289,14 +294,43 @@ class ArView(
                                         )
                                         
                                         objectChannel.invokeMethod("onPanChange", name)
-                                        Log.d("ArView", "AR-based pan moved node ${name} to position: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                        Log.d("ArView", "Smooth pan moved node ${name} to position: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
                                         return true
                                     } else {
-                                        Log.d("ArView", "No plane hit found for pan gesture - falling back to native behavior")
-                                        // Fallback to native behavior if no plane hit
-                                        val defaultResult = super.onMove(detector, e)
+                                        // If no hit results, use camera-relative movement for ultra-smooth experience
+                                        val camera = sceneView.cameraNode
+                                        val cameraTransform = camera.transform
+                                        val cameraRight = cameraTransform.right
+                                        val cameraUp = cameraTransform.up
+                                        
+                                        // Get gesture delta (screen movement)
+                                        val deltaX = detector.focusDelta.x * -0.001f // Scale and invert X for natural movement
+                                        val deltaY = detector.focusDelta.y * 0.001f  // Scale Y for natural movement
+                                        
+                                        // Convert screen movement to world movement relative to camera
+                                        val worldMovement = ScenePosition(
+                                            x = cameraRight.x * deltaX + cameraUp.x * deltaY,
+                                            y = cameraRight.y * deltaX + cameraUp.y * deltaY,
+                                            z = cameraRight.z * deltaX + cameraUp.z * deltaY
+                                        )
+                                        
+                                        // Apply relative movement to current position
+                                        val currentPos = transform.position
+                                        val newPosition = ScenePosition(
+                                            x = currentPos.x + worldMovement.x,
+                                            y = currentPos.y + worldMovement.y,
+                                            z = currentPos.z + worldMovement.z
+                                        )
+                                        
+                                        transform = Transform(
+                                            position = newPosition,
+                                            rotation = transform.rotation,
+                                            scale = transform.scale
+                                        )
+                                        
                                         objectChannel.invokeMethod("onPanChange", name)
-                                        return defaultResult
+                                        Log.d("ArView", "Camera-relative pan moved node ${name} by delta: (${deltaX}, ${deltaY})")
+                                        return true
                                     }
                                 } else {
                                     Log.w("ArView", "No current AR frame available - using native gesture behavior")
@@ -306,7 +340,7 @@ class ArView(
                                     return defaultResult
                                 }
                             } catch (ex: Exception) {
-                                Log.e("ArView", "Error in AR-based pan gesture: ${ex.message}")
+                                Log.e("ArView", "Error in smooth pan gesture: ${ex.message}")
                                 // Fallback to native behavior on error
                                 val defaultResult = super.onMove(detector, e)
                                 objectChannel.invokeMethod("onPanChange", name)
