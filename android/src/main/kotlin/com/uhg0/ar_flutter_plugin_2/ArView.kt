@@ -300,6 +300,14 @@ class ArView(
                         } else {
                             Log.w("ArView", "Invalid transformation matrix size: ${transformation.size}, expected 16")
                         }
+                        
+                        // CRITICAL: Set gesture properties INSIDE init block before node is added to anchor
+                        name = nodeData["name"] as? String
+                        isPositionEditable = this@ArView.handlePans
+                        isRotationEditable = this@ArView.handleRotation
+                        isTouchable = true
+                        
+                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
@@ -428,14 +436,6 @@ class ArView(
                             objectChannel.invokeMethod("onRotationEnd", transformMap)
                         }
                     }
-                }.apply {
-                    name = nodeData["name"] as? String
-                    // CRITICAL FIX: Use the class instance variables, not local ones
-                    isPositionEditable = this@ArView.handlePans
-                    isRotationEditable = this@ArView.handleRotation
-                    // CRITICAL: Enable touch events for the node
-                    isTouchable = true
-                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
                 }
             } ?: run {
                 null
