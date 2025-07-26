@@ -311,13 +311,19 @@ class ArView(
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "=== onMove DEBUG START ===")
-                        Log.d("ArView", "handlePans: ${this@ArView.handlePans}")
-                        Log.d("ArView", "panStartPosition: $panStartPosition")
-                        Log.d("ArView", "panStartPosition != null: ${panStartPosition != null}")
-                        Log.d("ArView", "Condition result: ${this@ArView.handlePans && panStartPosition != null}")
-                        
-                        if (this@ArView.handlePans && panStartPosition != null) {
+                        try {
+                            Log.d("ArView", "=== onMove DEBUG START ===")
+                            
+                            val handlePansValue = this@ArView.handlePans
+                            val panStartPositionValue = panStartPosition
+                            val hasValidPanStart = panStartPositionValue != null
+                            val conditionResult = handlePansValue && hasValidPanStart
+                            
+                            Log.d("ArView", "handlePans: $handlePansValue")
+                            Log.d("ArView", "hasValidPanStart: $hasValidPanStart") 
+                            Log.d("ArView", "conditionResult: $conditionResult")
+                            
+                            if (conditionResult) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
                             
                             try {
@@ -372,9 +378,15 @@ class ArView(
                                 Log.e("ArView", "Error in pan gesture: ${ex.message}")
                                 return false
                             }
+                        } else {
+                            Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: $handlePansValue, hasValidPanStart: $hasValidPanStart)")
                         }
-                        Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: ${this@ArView.handlePans})")
                         return false
+                        } catch (e: Exception) {
+                            Log.e("ArView", "Critical error in onMove method: ${e.message}")
+                            e.printStackTrace()
+                            return false
+                        }
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
