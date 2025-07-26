@@ -87,6 +87,7 @@ class ArView(
     private var lastPointCloudTimestamp: Long? = null
     private var lastPointCloudFrame: Frame? = null
     private var pointCloudModelInstances = mutableListOf<ModelInstance>()
+    private var handleTaps = true
     private var handlePans = false  
     private var handleRotation = false
     private var isSessionPaused = false
@@ -256,10 +257,12 @@ class ArView(
                 ) {
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (handlePans) {
+                            Log.d("ArView", "ModelNode onMove called for: $name")
                             try {
-                                // Use raycasting to find the world position like iOS implementation
-                                sceneView.session?.update()?.let { frame ->
-                                    val hitResults = frame.hitTest(e)
+                                // Get current frame - use latest available frame to avoid "old frame" errors
+                                val currentFrame = sceneView.session?.update()
+                                if (currentFrame != null) {
+                                    val hitResults = currentFrame.hitTest(e)
                                     val planeHit = hitResults.firstOrNull { hit ->
                                         val trackable = hit.trackable
                                         trackable is Plane && trackable.trackingState == TrackingState.TRACKING
@@ -281,15 +284,22 @@ class ArView(
                                             scale = currentTransform.scale
                                         )
                                         
-                                        Log.d("ArView", "Pan moved node ${name} to position: ($newPosition)")
+                                        Log.d("ArView", "Pan moved node ${name} to position: $newPosition")
                                         objectChannel.invokeMethod("onPanChange", name)
                                         return true
                                     } else {
-                                        // Fallback to default behavior if no plane hit
+                                        Log.d("ArView", "No plane hit found for pan gesture")
+                                        // Still allow some movement using default behavior
                                         val defaultResult = super.onMove(detector, e)
                                         objectChannel.invokeMethod("onPanChange", name)
                                         return defaultResult
                                     }
+                                } else {
+                                    Log.w("ArView", "No current frame available for pan gesture")
+                                    // Fallback to default behavior
+                                    val defaultResult = super.onMove(detector, e)
+                                    objectChannel.invokeMethod("onPanChange", name)
+                                    return defaultResult
                                 }
                             } catch (e: Exception) {
                                 Log.w("ArView", "Pan gesture handling error: ${e.message}")
@@ -299,16 +309,17 @@ class ArView(
                                 return defaultResult
                             }
                         }
+                        Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: $handlePans)")
                         return false
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: $handlePans")
                         if (handlePans) {
-                            Log.d("ArView", "Pan gesture BEGIN for node: $name, handlePans: $handlePans")
                             val defaultResult = super.onMoveBegin(detector, e)
-                            Log.d("ArView", "Pan gesture BEGIN result: $defaultResult")
+                            Log.d("ArView", "Pan gesture BEGIN result for $name: $defaultResult")
                             objectChannel.invokeMethod("onPanStart", name)
-                            return defaultResult  // FIX: Actually return the defaultResult instead of always false
+                            return defaultResult  // This was the critical bug - return the actual result
                         } 
                         Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: $handlePans")
                         return false
@@ -355,12 +366,14 @@ class ArView(
                         }
                     }
                 }.apply {
+                    name = nodeData["name"] as? String
                     isPositionEditable = handlePans
                     isRotationEditable = handleRotation
-                    name = nodeData["name"] as? String
                     // Ensure the node is clickable/selectable
                     isSelectable = true
-                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, handlePans: $handlePans")
+                    // CRITICAL: Enable touch events for the node
+                    isTouchable = true
+                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, isTouchable: $isTouchable, handlePans: $handlePans")
                 }
             } ?: run {
                 null
@@ -396,14 +409,18 @@ class ArView(
                                 nodesMap[nodeName] = node
                                 Log.d("ArView", "Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
                                 Log.d("ArView", "All nodes in map: ${nodesMap.keys}")
+                                Log.d("ArView", "Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                                debugGestureConfiguration() // Debug after adding node
                                 result.success(nodeName) // Return node name instead of boolean
                             } ?: result.success(null) // Return null if no node name
                         } ?: result.success(null) // Return null instead of false
                     } catch (e: Exception) {
+                        Log.e("ArView", "Error building node: ${e.message}")
                         result.success(null) // Return null instead of false
                     }
                 }
             } else {
+                Log.e("ArView", "Anchor node not found: $anchorName")
                 result.success(null) // Return null instead of false
             }
         } catch (e: Exception) {
@@ -449,6 +466,20 @@ class ArView(
         } catch (e: Exception) {
             result.error("ADD_NODE_TO_SCREEN_ERROR", e.message, null)
         }
+    }
+
+    private fun debugGestureConfiguration() {
+        Log.d("ArView", "=== GESTURE CONFIGURATION DEBUG ===")
+        Log.d("ArView", "handleTaps: $handleTaps")
+        Log.d("ArView", "handlePans: $handlePans") 
+        Log.d("ArView", "handleRotation: $handleRotation")
+        Log.d("ArView", "Total nodes in map: ${nodesMap.size}")
+        Log.d("ArView", "Node names: ${nodesMap.keys}")
+        nodesMap.forEach { (name, node) ->
+            Log.d("ArView", "Node $name - isPositionEditable: ${node.isPositionEditable}, isSelectable: ${node.isSelectable}, isTouchable: ${node.isTouchable}")
+        }
+        Log.d("ArView", "SceneView isGestureEnabled: ${sceneView.isGestureEnabled}")
+        Log.d("ArView", "=== END GESTURE DEBUG ===")
     }
 
     private fun handleInit(
@@ -583,6 +614,7 @@ class ArView(
 
                 setOnGestureListener(
                     onSingleTapConfirmed = { motionEvent: MotionEvent, node: Node? ->
+                        Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: $handleTaps, node: ${node?.name}")
                         if (node != null) {
                             Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
                             
@@ -631,34 +663,42 @@ class ArView(
                             true
                         } else {
                             Log.d("ArView", "Tap detected on empty space (no node hit)")
-                            session?.update()?.let { frame ->
-                                val hitResults = frame.hitTest(motionEvent)
+                            try {
+                                // Get current frame to avoid "old frame" errors
+                                val currentFrame = sceneView.session?.update()
+                                if (currentFrame != null) {
+                                    val hitResults = currentFrame.hitTest(motionEvent)
+                                    Log.d("ArView", "Hit Results count: ${hitResults.size}")
 
-                                Log.d("ArView", "Hit Results count: ${hitResults.size}")
-
-                                val planeHits =
-                                    hitResults
-                                        .filter { hit ->
-                                            val trackable = hit.trackable
-                                            trackable is Plane && trackable.trackingState == TrackingState.TRACKING
-                                        }.map { hit ->
-                                            mapOf(
-                                                "type" to 1,
-                                                "distance" to hit.distance.toDouble(),
-                                                "position" to
-                                                    mapOf(
-                                                        "x" to hit.hitPose.tx().toDouble(),
-                                                        "y" to hit.hitPose.ty().toDouble(),
-                                                        "z" to hit.hitPose.tz().toDouble(),
-                                                    ),
-                                            )
-                                        }
-                                notifyPlaneOrPointTap(planeHits)
+                                    val planeHits =
+                                        hitResults
+                                            .filter { hit ->
+                                                val trackable = hit.trackable
+                                                trackable is Plane && trackable.trackingState == TrackingState.TRACKING
+                                            }.map { hit ->
+                                                mapOf(
+                                                    "type" to 1,
+                                                    "distance" to hit.distance.toDouble(),
+                                                    "position" to
+                                                        mapOf(
+                                                            "x" to hit.hitPose.tx().toDouble(),
+                                                            "y" to hit.hitPose.ty().toDouble(),
+                                                            "z" to hit.hitPose.tz().toDouble(),
+                                                        ),
+                                                )
+                                            }
+                                    notifyPlaneOrPointTap(planeHits)
+                                } else {
+                                    Log.w("ArView", "No current frame available for hit testing")
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ArView", "Error during hit testing: ${e.message}")
                             }
                             true
                         }
                     },
                     onMove = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
+                        Log.d("ArView", "SceneView onMove - handlePans: $handlePans, node: ${node?.name}")
                         if (handlePans && node != null) {
                             // Find the model node that was hit
                             var modelNode: ModelNode? = null
@@ -674,10 +714,10 @@ class ArView(
                             if (modelNode != null) {
                                 Log.d("ArView", "SceneView pan detected for node: ${modelNode.name}")
                                 // Let the individual node handle the movement
-                                modelNode.onMove(detector, motionEvent)
+                                return@setOnGestureListener modelNode.onMove(detector, motionEvent)
                             }
-                            true
-                        } else false
+                        }
+                        false
                     },
                     onMoveBegin = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
                         Log.d("ArView", "SceneView onMoveBegin called - handlePans: $handlePans, node: ${node?.name}")
@@ -698,20 +738,19 @@ class ArView(
                                 selectedNode = modelNode
                                 // Let the individual node handle the movement
                                 val result = modelNode.onMoveBegin(detector, motionEvent)
-                                Log.d("ArView", "ModelNode onMoveBegin returned: $result")
-                                result
+                                Log.d("ArView", "ModelNode onMoveBegin returned: $result for ${modelNode.name}")
+                                return@setOnGestureListener result
                             } else {
                                 Log.d("ArView", "No ModelNode found for pan gesture")
-                                false
                             }
                         } else {
                             Log.d("ArView", "Pan gesture blocked - handlePans: $handlePans, node: $node")
-                            false
                         }
+                        false
                     },
                     onMoveEnd = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
+                        Log.d("ArView", "SceneView onMoveEnd called for node: ${selectedNode?.name}")
                         if (handlePans && selectedNode != null) {
-                            Log.d("ArView", "SceneView pan end for node: ${selectedNode?.name}")
                             if (selectedNode is ModelNode) {
                                 (selectedNode as ModelNode).onMoveEnd(detector, motionEvent)
                             }
@@ -751,6 +790,10 @@ class ArView(
                     Log.i(TAG, "ℹ️ Utilisation de la texture par défaut")
                 }
             }
+            
+            // Debug gesture configuration
+            debugGestureConfiguration()
+            
             result.success(null)
         } catch (e: Exception) {
             result.error("AR_VIEW_ERROR", e.message, null)
@@ -762,6 +805,9 @@ class ArView(
         result: MethodChannel.Result,
     ) {
         try {
+            Log.d("ArView", "=== ADDING NODE ===")
+            Log.d("ArView", "Current gesture settings - handlePans: $handlePans, handleTaps: $handleTaps")
+            
             mainScope.launch {
                 val node = buildModelNode(nodeData)
                 if (node != null) {
@@ -769,13 +815,17 @@ class ArView(
                     node.name?.let { nodeName ->
                         nodesMap[nodeName] = node
                         Log.d("ArView", "Added ModelNode to nodesMap (direct): $nodeName, total nodes: ${nodesMap.size}")
+                        Log.d("ArView", "Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                        debugGestureConfiguration() // Debug after adding node
                         result.success(nodeName) // Return node name instead of boolean
                     } ?: result.success(null) // Return null if no node name
                 } else {
+                    Log.e("ArView", "Failed to build ModelNode")
                     result.success(null) // Return null instead of false
                 }
             }
         } catch (e: Exception) {
+            Log.e("ArView", "Error in handleAddNode: ${e.message}")
             result.success(null) // Return null instead of false
         }
     }
