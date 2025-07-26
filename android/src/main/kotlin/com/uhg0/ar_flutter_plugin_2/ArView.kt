@@ -264,12 +264,47 @@ class ArView(
                             Log.d("ArView", "ModelNode onMove called for: $name")
                             
                             try {
+                                // Get position before native movement
+                                val positionBefore = transform.position
+                                Log.d("ArView", "Position BEFORE native move: (${positionBefore.x}, ${positionBefore.y}, ${positionBefore.z})")
+                                
                                 // Use native SceneView behavior for movement - it handles all the complex calculations
                                 val nativeResult = super.onMove(detector, e)
+                                Log.d("ArView", "Native onMove returned: $nativeResult")
                                 
                                 // Get the updated position after native movement
                                 val currentPosition = transform.position
-                                Log.d("ArView", "Native pan moved node $name to: (${currentPosition.x}, ${currentPosition.y}, ${currentPosition.z})")
+                                Log.d("ArView", "Position AFTER native move: (${currentPosition.x}, ${currentPosition.y}, ${currentPosition.z})")
+                                
+                                // Check if position actually changed
+                                val positionChanged = positionBefore.x != currentPosition.x || 
+                                                    positionBefore.y != currentPosition.y || 
+                                                    positionBefore.z != currentPosition.z
+                                Log.d("ArView", "Position changed: $positionChanged")
+                                
+                                // If native movement didn't work, try a simple manual approach
+                                if (!positionChanged) {
+                                    Log.d("ArView", "Native movement failed, trying manual movement")
+                                    // Simple manual movement based on touch delta
+                                    val deltaX = (e.x - (e.historySize.takeIf { it > 0 }?.let { e.getHistoricalX(it - 1) } ?: e.x)) * 0.001f
+                                    val deltaZ = (e.y - (e.historySize.takeIf { it > 0 }?.let { e.getHistoricalY(it - 1) } ?: e.y)) * 0.001f
+                                    
+                                    if (deltaX != 0f || deltaZ != 0f) {
+                                        val newPosition = ScenePosition(
+                                            x = currentPosition.x + deltaX,
+                                            y = currentPosition.y,
+                                            z = currentPosition.z + deltaZ
+                                        )
+                                        
+                                        transform = Transform(
+                                            position = newPosition,
+                                            rotation = transform.rotation,
+                                            scale = transform.scale
+                                        )
+                                        
+                                        Log.d("ArView", "Manual movement applied - new position: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                    }
+                                }
                                 
                                 // Notify Flutter about the movement
                                 objectChannel.invokeMethod("onPanChange", name)
