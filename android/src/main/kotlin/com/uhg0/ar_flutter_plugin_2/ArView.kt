@@ -184,9 +184,9 @@ class ArView(
                 }
             }
         ).apply {
-            // CRITICAL: Enable native gesture handling on SceneView
-            isGestureEnabled = true
-            Log.d("ArView", "SceneView created with gesture handling enabled: $isGestureEnabled")
+            // Note: ARSceneView doesn't have isGestureEnabled property
+            // Gesture handling is configured through setOnGestureListener
+            Log.d("ArView", "SceneView created with gesture handling via setOnGestureListener")
         }
         
         rootLayout.addView(sceneView)
@@ -305,8 +305,8 @@ class ArView(
                                     objectChannel.invokeMethod("onPanChange", name)
                                     return defaultResult
                                 }
-                            } catch (e: Exception) {
-                                Log.e("ArView", "Error in AR-based pan gesture: ${e.message}")
+                            } catch (ex: Exception) {
+                                Log.e("ArView", "Error in AR-based pan gesture: ${ex.message}")
                                 // Fallback to native behavior on error
                                 val defaultResult = super.onMove(detector, e)
                                 objectChannel.invokeMethod("onPanChange", name)
@@ -377,11 +377,9 @@ class ArView(
                     // CRITICAL FIX: Use the class instance variables, not local ones
                     isPositionEditable = this@ArView.handlePans
                     isRotationEditable = this@ArView.handleRotation
-                    // Ensure the node is clickable/selectable
-                    isSelectable = true
                     // CRITICAL: Enable touch events for the node
                     isTouchable = true
-                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
+                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
                 }
             } ?: run {
                 null
@@ -484,9 +482,9 @@ class ArView(
         Log.d("ArView", "Total nodes in map: ${nodesMap.size}")
         Log.d("ArView", "Node names: ${nodesMap.keys}")
         nodesMap.forEach { (name, node) ->
-            Log.d("ArView", "Node $name - isPositionEditable: ${node.isPositionEditable}, isSelectable: ${node.isSelectable}, isTouchable: ${node.isTouchable}")
+            Log.d("ArView", "Node $name - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
         }
-        Log.d("ArView", "SceneView isGestureEnabled: ${sceneView.isGestureEnabled}")
+        Log.d("ArView", "SceneView gesture handling configured via setOnGestureListener")
         Log.d("ArView", "=== END GESTURE DEBUG ===")
     }
 
@@ -677,8 +675,9 @@ class ArView(
                             if (anchorName != null && this@ArView.handleTaps) {
                                 Log.d("ArView", "Reporting anchor tap: $anchorName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
+                                return@setOnGestureListener true
                             }
-                            true
+                            return@setOnGestureListener true
                         } else {
                             Log.d("ArView", "Tap detected on empty space (no node hit)")
                             try {
@@ -712,7 +711,7 @@ class ArView(
                             } catch (e: Exception) {
                                 Log.e("ArView", "Error during hit testing: ${e.message}")
                             }
-                            true
+                            return@setOnGestureListener true
                         }
                     }
                     // REMOVED: Custom pan gesture handling - let SceneView native system handle it
