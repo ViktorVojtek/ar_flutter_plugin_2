@@ -315,13 +315,17 @@ class ArView(
                     }
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
+                        Log.d("ArView", "NEW onMove called for node: $name")
+                        
                         try {
                             val pansEnabled = handlePansEnabled
                             val panStart = panStartPosition
                             val hasValidStart = panStart != null
                             
+                            Log.d("ArView", "NEW onMove conditions - pansEnabled: $pansEnabled, hasValidStart: $hasValidStart")
+                            
                             if (pansEnabled && hasValidStart) {
-                                Log.d("ArView", "onMove: Starting movement logic for node $name")
+                                Log.d("ArView", "NEW onMove: Starting movement logic for node $name")
                                 
                                 // Get current touch coordinates
                                 val currentX = e.x
@@ -331,7 +335,7 @@ class ArView(
                                 val deltaX = currentX - lastTouchX
                                 val deltaY = currentY - lastTouchY
                                 
-                                Log.d("ArView", "Touch delta: ($deltaX, $deltaY)")
+                                Log.d("ArView", "NEW Touch delta: ($deltaX, $deltaY)")
                                 
                                 // Only apply movement if there's significant delta
                                 if (kotlin.math.abs(deltaX) > 1f || kotlin.math.abs(deltaY) > 1f) {
@@ -355,9 +359,9 @@ class ArView(
                                         scale = transform.scale
                                     )
                                     
-                                    Log.d("ArView", "Applied movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                    Log.d("ArView", "NEW Applied movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
                                 } else {
-                                    Log.d("ArView", "Small delta ignored: ($deltaX, $deltaY)")
+                                    Log.d("ArView", "NEW Small delta ignored: ($deltaX, $deltaY)")
                                 }
                                 
                                 // Update last touch coordinates for next frame
@@ -369,11 +373,11 @@ class ArView(
                                 
                                 return true
                             } else {
-                                Log.d("ArView", "Pan gesture ignored - pansEnabled: $pansEnabled, hasValidStart: $hasValidStart")
+                                Log.d("ArView", "NEW Pan gesture ignored - pansEnabled: $pansEnabled, hasValidStart: $hasValidStart")
                                 return false
                             }
                         } catch (e: Exception) {
-                            Log.e("ArView", "Exception in onMove: ${e.message}")
+                            Log.e("ArView", "NEW Exception in onMove: ${e.message}")
                             e.printStackTrace()
                             return false
                         }
