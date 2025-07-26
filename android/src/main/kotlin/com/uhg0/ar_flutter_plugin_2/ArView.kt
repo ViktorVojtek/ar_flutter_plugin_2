@@ -205,20 +205,44 @@ class ArView(
                     fileLocation = fileLocation
                 }
                 2 -> { // fileSystemAppFolderGLB
-                    fileLocation = fileLocation
-                }
-                 3 -> { //fileSystemAppFolderGLTF2
+                    // Fix: Add proper path resolution for GLB files from app documents directory
                     val documentsPath = viewContext.getApplicationInfo().dataDir
-                    val fileLocation = documentsPath + "/app_flutter/" + nodeData["uri"] as String
-                 }
+                    fileLocation = documentsPath + "/app_flutter/" + nodeData["uri"] as String
+                    Log.d(TAG, "Loading GLB from filesystem: $fileLocation")
+                }
+                3 -> { //fileSystemAppFolderGLTF2
+                    val documentsPath = viewContext.getApplicationInfo().dataDir
+                    fileLocation = documentsPath + "/app_flutter/" + nodeData["uri"] as String
+                    Log.d(TAG, "Loading GLTF2 from filesystem: $fileLocation")
+                }
                 else -> {
                     return null
                 }
         }
         
         if (fileLocation == null) {
+            Log.e(TAG, "File location is null for node type: ${nodeData["type"]}")
             return null
         }
+        
+        // Check if file exists for filesystem types
+        val nodeType = nodeData["type"] as Int
+        if (nodeType == 2 || nodeType == 3) {
+            val file = java.io.File(fileLocation)
+            if (!file.exists()) {
+                Log.e(TAG, "File does not exist: $fileLocation")
+                Log.d(TAG, "File absolute path: ${file.absolutePath}")
+                Log.d(TAG, "File parent directory: ${file.parentFile?.absolutePath}")
+                Log.d(TAG, "Parent directory exists: ${file.parentFile?.exists()}")
+                if (file.parentFile?.exists() == true) {
+                    Log.d(TAG, "Files in parent directory: ${file.parentFile?.listFiles()?.joinToString { it.name }}")
+                }
+                return null
+            } else {
+                Log.d(TAG, "File exists: $fileLocation (${file.length()} bytes)")
+            }
+        }
+        
         val transformation = nodeData["transformation"] as? ArrayList<Double>
         if (transformation == null) {
             return null
