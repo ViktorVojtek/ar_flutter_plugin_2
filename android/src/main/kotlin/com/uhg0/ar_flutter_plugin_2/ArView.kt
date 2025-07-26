@@ -265,20 +265,29 @@ class ArView(
                     
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans) {
-                            Log.d("ArView", "ModelNode onMove called for: $name, motion: (${e.x}, ${e.y}), rawX: ${e.rawX}, rawY: ${e.rawY}, previous: ($previousX, $previousY)")
+                            Log.d("ArView", "ModelNode onMove called for: $name, focus: (${detector.focusX}, ${detector.focusY}), previous: ($previousX, $previousY)")
                             
                             try {
-                                // Try using rawX/rawY for absolute screen coordinates
-                                val rawDeltaX = e.rawX - previousX
-                                val rawDeltaY = e.rawY - previousY
+                                // Use MoveGestureDetector's focus point which should provide proper movement tracking
+                                val rawDeltaX = detector.focusX - previousX
+                                val rawDeltaY = detector.focusY - previousY
                                 val deltaX = rawDeltaX * -0.002f // Scale and invert X for natural movement
                                 val deltaY = rawDeltaY * 0.002f  // Scale Y for natural movement
                                 
                                 Log.d("ArView", "Pan gesture deltas - raw: ($rawDeltaX, $rawDeltaY), scaled: ($deltaX, $deltaY)")
                                 
-                                // Update previous position for next delta calculation using rawX/rawY
-                                previousX = e.rawX
-                                previousY = e.rawY
+                                // If deltas are still zero, fall back to native SceneView behavior
+                                if (rawDeltaX == 0f && rawDeltaY == 0f) {
+                                    Log.d("ArView", "Delta calculation failed, using native SceneView behavior")
+                                    val nativeResult = super.onMove(detector, e)
+                                    objectChannel.invokeMethod("onPanChange", name)
+                                    Log.d("ArView", "Native move result: $nativeResult, new position: ${transform.position}")
+                                    return nativeResult
+                                }
+                                
+                                // Update previous position for next delta calculation using focus point
+                                previousX = detector.focusX
+                                previousY = detector.focusY
                                 
                                 // Use camera-relative movement for ultra-smooth, responsive movement
                                 val camera = sceneView.cameraNode
@@ -328,11 +337,11 @@ class ArView(
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, touch: (${e.x}, ${e.y}), rawTouch: (${e.rawX}, ${e.rawY})")
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, focus: (${detector.focusX}, ${detector.focusY})")
                         if (this@ArView.handlePans) {
-                            // Initialize previous position for delta calculation using rawX/rawY
-                            previousX = e.rawX
-                            previousY = e.rawY
+                            // Initialize previous position for delta calculation using focus point
+                            previousX = detector.focusX
+                            previousY = detector.focusY
                             
                             // Always accept pan gestures in all directions for smooth movement
                             Log.d("ArView", "Pan gesture BEGIN accepted for $name - enabling real-time movement")
