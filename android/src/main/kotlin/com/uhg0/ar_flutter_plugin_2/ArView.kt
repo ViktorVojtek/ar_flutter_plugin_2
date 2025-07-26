@@ -183,7 +183,11 @@ class ArView(
                     planeFindingMode = Config.PlaneFindingMode.DISABLED
                 }
             }
-        )
+        ).apply {
+            // CRITICAL: Enable native gesture handling on SceneView
+            isGestureEnabled = true
+            Log.d("ArView", "SceneView created with gesture handling enabled: $isGestureEnabled")
+        }
         
         rootLayout.addView(sceneView)
 
@@ -256,12 +260,14 @@ class ArView(
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        if (handlePans) {
+                        if (this@ArView.handlePans) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
+                            
                             try {
-                                // Get current frame - use latest available frame to avoid "old frame" errors
+                                // Get current AR frame
                                 val currentFrame = sceneView.session?.update()
                                 if (currentFrame != null) {
+                                    // Use AR hit testing to find world position like iOS does
                                     val hitResults = currentFrame.hitTest(e)
                                     val planeHit = hitResults.firstOrNull { hit ->
                                         val trackable = hit.trackable
@@ -269,64 +275,62 @@ class ArView(
                                     }
                                     
                                     if (planeHit != null) {
-                                        // Update position based on hit test
+                                        // Update position based on AR world coordinates (like iOS raycast)
                                         val newPosition = ScenePosition(
                                             x = planeHit.hitPose.tx(),
                                             y = planeHit.hitPose.ty(),
                                             z = planeHit.hitPose.tz()
                                         )
                                         
-                                        // Preserve current rotation and scale
-                                        val currentTransform = transform
-                                        transform(
+                                        transform = Transform(
                                             position = newPosition,
-                                            rotation = currentTransform.rotation,
-                                            scale = currentTransform.scale
+                                            rotation = transform.rotation,
+                                            scale = transform.scale
                                         )
                                         
-                                        Log.d("ArView", "Pan moved node ${name} to position: $newPosition")
                                         objectChannel.invokeMethod("onPanChange", name)
+                                        Log.d("ArView", "AR-based pan moved node ${name} to position: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
                                         return true
                                     } else {
-                                        Log.d("ArView", "No plane hit found for pan gesture")
-                                        // Still allow some movement using default behavior
+                                        Log.d("ArView", "No plane hit found for pan gesture - falling back to native behavior")
+                                        // Fallback to native behavior if no plane hit
                                         val defaultResult = super.onMove(detector, e)
                                         objectChannel.invokeMethod("onPanChange", name)
                                         return defaultResult
                                     }
                                 } else {
-                                    Log.w("ArView", "No current frame available for pan gesture")
-                                    // Fallback to default behavior
+                                    Log.w("ArView", "No current AR frame available - using native gesture behavior")
+                                    // Fallback to native behavior
                                     val defaultResult = super.onMove(detector, e)
                                     objectChannel.invokeMethod("onPanChange", name)
                                     return defaultResult
                                 }
                             } catch (e: Exception) {
-                                Log.w("ArView", "Pan gesture handling error: ${e.message}")
-                                // Fallback to default behavior
+                                Log.e("ArView", "Error in AR-based pan gesture: ${e.message}")
+                                // Fallback to native behavior on error
                                 val defaultResult = super.onMove(detector, e)
                                 objectChannel.invokeMethod("onPanChange", name)
                                 return defaultResult
                             }
                         }
-                        Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: $handlePans)")
+                        Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: ${this@ArView.handlePans})")
                         return false
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: $handlePans")
-                        if (handlePans) {
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}")
+                        if (this@ArView.handlePans) {
                             val defaultResult = super.onMoveBegin(detector, e)
                             Log.d("ArView", "Pan gesture BEGIN result for $name: $defaultResult")
                             objectChannel.invokeMethod("onPanStart", name)
                             return defaultResult  // This was the critical bug - return the actual result
                         } 
-                        Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: $handlePans")
+                        Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: ${this@ArView.handlePans}")
                         return false
                     }
                     
                     override fun onMoveEnd(detector: MoveGestureDetector, e: MotionEvent) {
-                        if (handlePans) {
+                        if (this@ArView.handlePans) {
                             Log.d("ArView", "Pan gesture END for node: $name")
                             super.onMoveEnd(detector, e)
                             val transformMap = mapOf(
@@ -338,7 +342,7 @@ class ArView(
                     }
 
                     override fun onRotateBegin(detector: RotateGestureDetector, e: MotionEvent): Boolean {
-                        if (handleRotation) {
+                        if (this@ArView.handleRotation) {
                             val defaultResult = super.onRotateBegin(detector, e)
                             objectChannel.invokeMethod("onRotationStart", name)
                             return defaultResult
@@ -347,16 +351,19 @@ class ArView(
                     }
 
                     override fun onRotate(detector: RotateGestureDetector, e: MotionEvent): Boolean {
-                        if (handleRotation) {
+                        if (this@ArView.handleRotation) {
+                            Log.d("ArView", "ModelNode onRotate called for: $name")
+                            // USE NATIVE SCENEVIEW BEHAVIOR - let the framework handle rotation
                             val defaultResult = super.onRotate(detector, e)
                             objectChannel.invokeMethod("onRotationChange", name)
+                            Log.d("ArView", "Native rotation for node ${name}, result: $defaultResult")
                             return defaultResult
                         }
                         return false
                     }
 
                     override fun onRotateEnd(detector: RotateGestureDetector, e: MotionEvent) {
-                        if (handleRotation) {
+                        if (this@ArView.handleRotation) {
                             super.onRotateEnd(detector, e)
                             val transformMap = mapOf(
                                 "name" to name,
@@ -367,13 +374,14 @@ class ArView(
                     }
                 }.apply {
                     name = nodeData["name"] as? String
-                    isPositionEditable = handlePans
-                    isRotationEditable = handleRotation
+                    // CRITICAL FIX: Use the class instance variables, not local ones
+                    isPositionEditable = this@ArView.handlePans
+                    isRotationEditable = this@ArView.handleRotation
                     // Ensure the node is clickable/selectable
                     isSelectable = true
                     // CRITICAL: Enable touch events for the node
                     isTouchable = true
-                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, isTouchable: $isTouchable, handlePans: $handlePans")
+                    Log.d("ArView", "ModelNode created - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isSelectable: $isSelectable, isTouchable: $isTouchable, handlePans: ${this@ArView.handlePans}")
                 }
             } ?: run {
                 null
@@ -487,17 +495,25 @@ class ArView(
         result: MethodChannel.Result,
     ) {
         try {
+            Log.d("ArView", "=== FLUTTER ARGUMENTS DEBUG ===")
+            Log.d("ArView", "Raw handleTaps argument: ${call.argument<Boolean>("handleTaps")}")
+            Log.d("ArView", "Raw handlePans argument: ${call.argument<Boolean>("handlePans")}")
+            Log.d("ArView", "Raw handleRotation argument: ${call.argument<Boolean>("handleRotation")}")
+            Log.d("ArView", "Raw planeDetectionConfig argument: ${call.argument<Int>("planeDetectionConfig")}")
+            Log.d("ArView", "=== END FLUTTER ARGUMENTS DEBUG ===")
+            
             val argShowAnimatedGuide = call.argument<Boolean>("showAnimatedGuide") ?: true
             val argShowFeaturePoints = call.argument<Boolean>("showFeaturePoints") ?: false
             val argPlaneDetectionConfig: Int? = call.argument<Int>("planeDetectionConfig")
             val argShowPlanes = call.argument<Boolean>("showPlanes") ?: true
             val customPlaneTexturePath = call.argument<String>("customPlaneTexturePath")
             val showWorldOrigin = call.argument<Boolean>("showWorldOrigin") ?: false
-            val handleTaps = call.argument<Boolean>("handleTaps") ?: true
-            handlePans = call.argument<Boolean>("handlePans") ?: false
-            handleRotation = call.argument<Boolean>("handleRotation") ?: false
+            // CRITICAL FIX: Properly set the instance variables, don't create local variables
+            this.handleTaps = call.argument<Boolean>("handleTaps") ?: true
+            this.handlePans = call.argument<Boolean>("handlePans") ?: false
+            this.handleRotation = call.argument<Boolean>("handleRotation") ?: false
             
-            Log.d("ArView", "Session initialized with gesture settings - handleTaps: $handleTaps, handlePans: $handlePans, handleRotation: $handleRotation")
+            Log.d("ArView", "Session initialized with gesture settings - handleTaps: ${this.handleTaps}, handlePans: ${this.handlePans}, handleRotation: ${this.handleRotation}")
 
             sceneView.session?.let { session ->
                 session.configure(session.config.apply {
@@ -511,6 +527,8 @@ class ArView(
                         3 -> Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                         else -> Config.PlaneFindingMode.DISABLED
                     }
+                    Log.d("ArView", "AR Session configured - planeFindingMode: $planeFindingMode, depthMode: $depthMode")
+                    Log.d("ArView", "argPlaneDetectionConfig received: $argPlaneDetectionConfig")
                 })
             }
 
@@ -614,7 +632,7 @@ class ArView(
 
                 setOnGestureListener(
                     onSingleTapConfirmed = { motionEvent: MotionEvent, node: Node? ->
-                        Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: $handleTaps, node: ${node?.name}")
+                        Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: ${this@ArView.handleTaps}, node: ${node?.name}")
                         if (node != null) {
                             Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
                             
@@ -636,7 +654,7 @@ class ArView(
                             }
                             
                             // If we found a ModelNode, report it as tapped
-                            if (modelNodeName != null && handleTaps) {
+                            if (modelNodeName != null && this@ArView.handleTaps) {
                                 Log.d("ArView", "Reporting ModelNode tap: $modelNodeName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(modelNodeName))
                                 return@setOnGestureListener true
@@ -656,7 +674,7 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             
-                            if (anchorName != null && handleTaps) {
+                            if (anchorName != null && this@ArView.handleTaps) {
                                 Log.d("ArView", "Reporting anchor tap: $anchorName")
                                 objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
                             }
@@ -696,67 +714,8 @@ class ArView(
                             }
                             true
                         }
-                    },
-                    onMove = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
-                        Log.d("ArView", "SceneView onMove - handlePans: $handlePans, node: ${node?.name}")
-                        if (handlePans && node != null) {
-                            // Find the model node that was hit
-                            var modelNode: ModelNode? = null
-                            var currentNode: Node? = node
-                            while (currentNode != null) {
-                                if (currentNode is ModelNode) {
-                                    modelNode = currentNode
-                                    break
-                                }
-                                currentNode = currentNode.parent
-                            }
-                            
-                            if (modelNode != null) {
-                                Log.d("ArView", "SceneView pan detected for node: ${modelNode.name}")
-                                // Let the individual node handle the movement
-                                return@setOnGestureListener modelNode.onMove(detector, motionEvent)
-                            }
-                        }
-                        false
-                    },
-                    onMoveBegin = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
-                        Log.d("ArView", "SceneView onMoveBegin called - handlePans: $handlePans, node: ${node?.name}")
-                        if (handlePans && node != null) {
-                            // Find the model node that was hit
-                            var modelNode: ModelNode? = null
-                            var currentNode: Node? = node
-                            while (currentNode != null) {
-                                if (currentNode is ModelNode) {
-                                    modelNode = currentNode
-                                    break
-                                }
-                                currentNode = currentNode.parent
-                            }
-                            
-                            if (modelNode != null) {
-                                Log.d("ArView", "SceneView pan begin for ModelNode: ${modelNode.name}")
-                                selectedNode = modelNode
-                                // Let the individual node handle the movement
-                                val result = modelNode.onMoveBegin(detector, motionEvent)
-                                Log.d("ArView", "ModelNode onMoveBegin returned: $result for ${modelNode.name}")
-                                return@setOnGestureListener result
-                            } else {
-                                Log.d("ArView", "No ModelNode found for pan gesture")
-                            }
-                        } else {
-                            Log.d("ArView", "Pan gesture blocked - handlePans: $handlePans, node: $node")
-                        }
-                        false
-                    },
-                    onMoveEnd = { detector: MoveGestureDetector, motionEvent: MotionEvent, node: Node? ->
-                        Log.d("ArView", "SceneView onMoveEnd called for node: ${selectedNode?.name}")
-                        if (handlePans && selectedNode != null) {
-                            if (selectedNode is ModelNode) {
-                                (selectedNode as ModelNode).onMoveEnd(detector, motionEvent)
-                            }
-                            selectedNode = null
-                        }
                     }
+                    // REMOVED: Custom pan gesture handling - let SceneView native system handle it
                 )
 
                 if (argShowAnimatedGuide == true && showAnimatedGuide == true) {
@@ -791,7 +750,13 @@ class ArView(
                 }
             }
             
-            // Debug gesture configuration
+            // Debug gesture configuration IMMEDIATELY after setting values
+            Log.d("ArView", "=== IMMEDIATE GESTURE CONFIGURATION ===")
+            Log.d("ArView", "handleTaps: ${this.handleTaps}")
+            Log.d("ArView", "handlePans: ${this.handlePans}") 
+            Log.d("ArView", "handleRotation: ${this.handleRotation}")
+            Log.d("ArView", "=== END IMMEDIATE DEBUG ===")
+            
             debugGestureConfiguration()
             
             result.success(null)
@@ -873,7 +838,7 @@ class ArView(
     result: MethodChannel.Result,
 ) {
     try {
-        if (handlePans || handleRotation) {
+        if (this.handlePans || this.handleRotation) {
             val name = call.argument<String>("name")
             val newTransformation: ArrayList<Double>? = call.argument<ArrayList<Double>>("transformation")
 
