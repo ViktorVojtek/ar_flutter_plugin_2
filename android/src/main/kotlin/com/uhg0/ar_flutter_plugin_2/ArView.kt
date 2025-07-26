@@ -264,6 +264,44 @@ class ArView(
                     private var lastTouchX: Float = 0f
                     private var lastTouchY: Float = 0f
                     
+                    init {
+                        // Apply the full transformation matrix to properly position the node
+                        if (transformation.size >= 16) {
+                            val matrix = transformation.map { it.toFloat() }.toFloatArray()
+                            
+                            // Extract position from transformation matrix (column 4: indices 12, 13, 14)
+                            val position = ScenePosition(
+                                x = matrix[12],
+                                y = matrix[13], 
+                                z = matrix[14]
+                            )
+                            
+                            // Extract scale from transformation matrix
+                            val scaleX = kotlin.math.sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
+                            val scaleY = kotlin.math.sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
+                            val scaleZ = kotlin.math.sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
+                            val scale = SceneScale(x = scaleX, y = scaleY, z = scaleZ)
+                            
+                            // Extract rotation from transformation matrix
+                            val rotation = SceneRotation(
+                                x = kotlin.math.atan2(matrix[6], matrix[10]),
+                                y = kotlin.math.atan2(-matrix[2], kotlin.math.sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10])),
+                                z = kotlin.math.atan2(matrix[1], matrix[0])
+                            )
+                            
+                            // Apply the transformation to the node
+                            transform = Transform(
+                                position = position,
+                                rotation = rotation,
+                                scale = scale
+                            )
+                            
+                            Log.d("ArView", "Applied transformation to node $name - Position: (${position.x}, ${position.y}, ${position.z})")
+                        } else {
+                            Log.w("ArView", "Invalid transformation matrix size: ${transformation.size}, expected 16")
+                        }
+                    }
+                    
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans && panStartPosition != null) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
