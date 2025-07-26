@@ -132,6 +132,10 @@ class ArView(
     private val onObjectMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
             when (call.method) {
+                "init" -> {
+                    // Initialize the AR object manager
+                    result.success(null)
+                }
                 "addNode" -> {
                     val nodeData = call.arguments as? Map<String, Any>
                     nodeData?.let {
