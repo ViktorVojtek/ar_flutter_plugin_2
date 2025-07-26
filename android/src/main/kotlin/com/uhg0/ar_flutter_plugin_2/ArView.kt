@@ -259,77 +259,26 @@ class ArView(
                     modelInstance = modelInstance,
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
-                    // Store previous touch position for delta calculation
-                    private var previousX: Float = 0f
-                    private var previousY: Float = 0f
-                    
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         if (this@ArView.handlePans) {
-                            Log.d("ArView", "ModelNode onMove called for: $name, focus: (${detector.focusX}, ${detector.focusY}), previous: ($previousX, $previousY)")
+                            Log.d("ArView", "ModelNode onMove called for: $name")
                             
                             try {
-                                // Use MoveGestureDetector's focus point which should provide proper movement tracking
-                                val rawDeltaX = detector.focusX - previousX
-                                val rawDeltaY = detector.focusY - previousY
-                                val deltaX = rawDeltaX * -0.002f // Scale and invert X for natural movement
-                                val deltaY = rawDeltaY * 0.002f  // Scale Y for natural movement
+                                // Use native SceneView behavior for movement - it handles all the complex calculations
+                                val nativeResult = super.onMove(detector, e)
                                 
-                                Log.d("ArView", "Pan gesture deltas - raw: ($rawDeltaX, $rawDeltaY), scaled: ($deltaX, $deltaY)")
+                                // Get the updated position after native movement
+                                val currentPosition = transform.position
+                                Log.d("ArView", "Native pan moved node $name to: (${currentPosition.x}, ${currentPosition.y}, ${currentPosition.z})")
                                 
-                                // If deltas are still zero, fall back to native SceneView behavior
-                                if (rawDeltaX == 0f && rawDeltaY == 0f) {
-                                    Log.d("ArView", "Delta calculation failed, using native SceneView behavior")
-                                    val nativeResult = super.onMove(detector, e)
-                                    objectChannel.invokeMethod("onPanChange", name)
-                                    Log.d("ArView", "Native move result: $nativeResult, new position: ${transform.position}")
-                                    return nativeResult
-                                }
-                                
-                                // Update previous position for next delta calculation using focus point
-                                previousX = detector.focusX
-                                previousY = detector.focusY
-                                
-                                // Use camera-relative movement for ultra-smooth, responsive movement
-                                val camera = sceneView.cameraNode
-                                val cameraTransform = camera.transform
-                                
-                                // Get camera direction vectors (right and up relative to camera)
-                                val cameraRight = cameraTransform.right
-                                val cameraUp = cameraTransform.up
-                                
-                                // Convert screen movement to world movement relative to camera orientation
-                                val worldMovement = ScenePosition(
-                                    x = cameraRight.x * deltaX + cameraUp.x * deltaY,
-                                    y = cameraRight.y * deltaX + cameraUp.y * deltaY,
-                                    z = cameraRight.z * deltaX + cameraUp.z * deltaY
-                                )
-                                
-                                // Apply relative movement to current position (IMMEDIATE UPDATE)
-                                val currentPos = transform.position
-                                val newPosition = ScenePosition(
-                                    x = currentPos.x + worldMovement.x,
-                                    y = currentPos.y + worldMovement.y,
-                                    z = currentPos.z + worldMovement.z
-                                )
-                                
-                                // Update transform immediately for real-time movement
-                                transform = Transform(
-                                    position = newPosition,
-                                    rotation = transform.rotation,
-                                    scale = transform.scale
-                                )
-                                
-                                // Notify Flutter immediately for real-time updates
+                                // Notify Flutter about the movement
                                 objectChannel.invokeMethod("onPanChange", name)
-                                Log.d("ArView", "Real-time pan moved node ${name} to: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
-                                return true
+                                
+                                return nativeResult
                                 
                             } catch (ex: Exception) {
-                                Log.e("ArView", "Error in real-time pan gesture: ${ex.message}")
-                                // Simple fallback: just use the native behavior
-                                val defaultResult = super.onMove(detector, e)
-                                objectChannel.invokeMethod("onPanChange", name)
-                                return defaultResult
+                                Log.e("ArView", "Error in pan gesture: ${ex.message}")
+                                return false
                             }
                         }
                         Log.d("ArView", "Pan gesture ignored for node: $name (handlePans: ${this@ArView.handlePans})")
@@ -337,16 +286,14 @@ class ArView(
                     }
                     
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}, focus: (${detector.focusX}, ${detector.focusY})")
+                        Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}")
                         if (this@ArView.handlePans) {
-                            // Initialize previous position for delta calculation using focus point
-                            previousX = detector.focusX
-                            previousY = detector.focusY
+                            // Let native SceneView handle the gesture start
+                            val nativeResult = super.onMoveBegin(detector, e)
                             
-                            // Always accept pan gestures in all directions for smooth movement
-                            Log.d("ArView", "Pan gesture BEGIN accepted for $name - enabling real-time movement")
+                            Log.d("ArView", "Pan gesture BEGIN accepted for $name - using native movement")
                             objectChannel.invokeMethod("onPanStart", name)
-                            return true  // Always return true to ensure gesture is accepted in all directions
+                            return nativeResult
                         } 
                         Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: ${this@ArView.handlePans}")
                         return false
