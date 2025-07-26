@@ -259,57 +259,46 @@ class ArView(
                     modelInstance = modelInstance,
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
+                    // Variables to track pan gesture state
+                    private var panStartPosition: ScenePosition? = null
+                    private var panStartTouchX: Float = 0f
+                    private var panStartTouchY: Float = 0f
+                    
                     override fun onMove(detector: MoveGestureDetector, e: MotionEvent): Boolean {
-                        if (this@ArView.handlePans) {
+                        if (this@ArView.handlePans && panStartPosition != null) {
                             Log.d("ArView", "ModelNode onMove called for: $name")
                             
                             try {
-                                // Get position before native movement
-                                val positionBefore = transform.position
-                                Log.d("ArView", "Position BEFORE native move: (${positionBefore.x}, ${positionBefore.y}, ${positionBefore.z})")
+                                // Calculate the touch delta from the start position
+                                val deltaX = e.x - panStartTouchX
+                                val deltaY = e.y - panStartTouchY
                                 
-                                // Use native SceneView behavior for movement - it handles all the complex calculations
-                                val nativeResult = super.onMove(detector, e)
-                                Log.d("ArView", "Native onMove returned: $nativeResult")
+                                // Convert screen delta to world space delta
+                                // Use a scaling factor to control movement sensitivity
+                                val scaleFactor = 0.001f // Adjust this for desired sensitivity
+                                val worldDeltaX = deltaX * scaleFactor
+                                val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
                                 
-                                // Get the updated position after native movement
-                                val currentPosition = transform.position
-                                Log.d("ArView", "Position AFTER native move: (${currentPosition.x}, ${currentPosition.y}, ${currentPosition.z})")
+                                // Calculate new position from the original start position
+                                val newPosition = ScenePosition(
+                                    x = panStartPosition!!.x + worldDeltaX,
+                                    y = panStartPosition!!.y, // Keep Y constant for planar movement
+                                    z = panStartPosition!!.z + worldDeltaZ
+                                )
                                 
-                                // Check if position actually changed
-                                val positionChanged = positionBefore.x != currentPosition.x || 
-                                                    positionBefore.y != currentPosition.y || 
-                                                    positionBefore.z != currentPosition.z
-                                Log.d("ArView", "Position changed: $positionChanged")
+                                // Update the node's transform
+                                transform = Transform(
+                                    position = newPosition,
+                                    rotation = transform.rotation,
+                                    scale = transform.scale
+                                )
                                 
-                                // If native movement didn't work, try a simple manual approach
-                                if (!positionChanged) {
-                                    Log.d("ArView", "Native movement failed, trying manual movement")
-                                    // Simple manual movement based on touch delta
-                                    val deltaX = (e.x - (e.historySize.takeIf { it > 0 }?.let { e.getHistoricalX(it - 1) } ?: e.x)) * 0.001f
-                                    val deltaZ = (e.y - (e.historySize.takeIf { it > 0 }?.let { e.getHistoricalY(it - 1) } ?: e.y)) * 0.001f
-                                    
-                                    if (deltaX != 0f || deltaZ != 0f) {
-                                        val newPosition = ScenePosition(
-                                            x = currentPosition.x + deltaX,
-                                            y = currentPosition.y,
-                                            z = currentPosition.z + deltaZ
-                                        )
-                                        
-                                        transform = Transform(
-                                            position = newPosition,
-                                            rotation = transform.rotation,
-                                            scale = transform.scale
-                                        )
-                                        
-                                        Log.d("ArView", "Manual movement applied - new position: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
-                                    }
-                                }
+                                Log.d("ArView", "Manual pan movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
                                 
                                 // Notify Flutter about the movement
                                 objectChannel.invokeMethod("onPanChange", name)
                                 
-                                return nativeResult
+                                return true
                                 
                             } catch (ex: Exception) {
                                 Log.e("ArView", "Error in pan gesture: ${ex.message}")
@@ -323,12 +312,16 @@ class ArView(
                     override fun onMoveBegin(detector: MoveGestureDetector, e: MotionEvent): Boolean {
                         Log.d("ArView", "ModelNode onMoveBegin called for: $name, handlePans: ${this@ArView.handlePans}")
                         if (this@ArView.handlePans) {
-                            // Let native SceneView handle the gesture start
-                            val nativeResult = super.onMoveBegin(detector, e)
+                            // Store the initial position and touch coordinates
+                            panStartPosition = transform.position
+                            panStartTouchX = e.x
+                            panStartTouchY = e.y
                             
-                            Log.d("ArView", "Pan gesture BEGIN accepted for $name - using native movement")
+                            Log.d("ArView", "Pan gesture BEGIN - Start pos: (${panStartPosition!!.x}, ${panStartPosition!!.y}, ${panStartPosition!!.z})")
+                            Log.d("ArView", "Pan gesture BEGIN - Start touch: ($panStartTouchX, $panStartTouchY)")
+                            
                             objectChannel.invokeMethod("onPanStart", name)
-                            return nativeResult
+                            return true
                         } 
                         Log.d("ArView", "Pan gesture BEGIN BLOCKED for node: $name, handlePans: ${this@ArView.handlePans}")
                         return false
@@ -337,7 +330,11 @@ class ArView(
                     override fun onMoveEnd(detector: MoveGestureDetector, e: MotionEvent) {
                         if (this@ArView.handlePans) {
                             Log.d("ArView", "Pan gesture END for node: $name")
-                            super.onMoveEnd(detector, e)
+                            
+                            // Clear pan state
+                            panStartPosition = null
+                            panStartTouchX = 0f
+                            panStartTouchY = 0f
                             val transformMap = mapOf(
                                 "name" to name,
                                 "transform" to transform.toFloatArray().toList()
