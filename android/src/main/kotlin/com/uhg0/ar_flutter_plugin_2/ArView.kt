@@ -60,6 +60,8 @@ import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
 import kotlin.math.sqrt
 import kotlin.math.atan2
+import org.joml.Quaternionf
+import org.joml.Vector3f
 
 class ArView(
     context: Context,
@@ -95,6 +97,7 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
+    private var lastRotationAngle: Float = 0f // Track last rotation angle for delta calculation
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -743,7 +746,7 @@ class ArView(
                     onRotate = { detector, e, node ->
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         
-                        // Handle rotation gestures for nodes using quaternion Y-axis rotation
+                        // Handle rotation gestures for nodes using JOML quaternion Y-axis rotation
                         if (node != null && this@ArView.handleRotation) {
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
@@ -765,23 +768,57 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Use SceneView's rotation value with Y-axis only rotation
-                                val currentRotation = detector.rotation
-                                Log.d("ArView", "🔄 Rotation angle: ${Math.toDegrees(currentRotation.toDouble())}°")
+                                // Get rotation angle from detector
+                                val currentRotationAngle = detector.rotation
+                                Log.d("ArView", "🔄 Current rotation angle: ${Math.toDegrees(currentRotationAngle.toDouble())}°")
                                 
-                                // Apply Y-axis rotation directly to the model's rotation
-                                val currentModelRotation = modelNode.rotation
-                                val newRotation = Rotation(
-                                    currentModelRotation.x,
-                                    currentRotation, // Apply rotation around Y-axis
-                                    currentModelRotation.z
-                                )
-                                modelNode.rotation = newRotation
+                                // Calculate rotation delta for incremental rotation
+                                val rotationDelta = if (e.action == MotionEvent.ACTION_DOWN) {
+                                    // Reset on gesture start
+                                    lastRotationAngle = currentRotationAngle
+                                    0f
+                                } else {
+                                    // Calculate delta from last frame
+                                    var delta = currentRotationAngle - lastRotationAngle
+                                    // Handle 360° wraparound
+                                    if (delta > Math.PI) delta -= (2 * Math.PI).toFloat()
+                                    else if (delta < -Math.PI) delta += (2 * Math.PI).toFloat()
+                                    lastRotationAngle = currentRotationAngle
+                                    delta
+                                }
                                 
-                                Log.d("ArView", "✅ APPLIED Y-AXIS ROTATION - angle: ${Math.toDegrees(currentRotation.toDouble())}°")
+                                Log.d("ArView", "🔄 Rotation delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
                                 
-                                // Notify Flutter
-                                objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
+                                if (rotationDelta != 0f) {
+                                    // Create Y-axis quaternion using JOML
+                                    val yAxis = Vector3f(0f, 1f, 0f)
+                                    val deltaQuat = Quaternionf().rotateAxis(rotationDelta, yAxis)
+                                    
+                                    // Get current rotation as quaternion (convert from SceneView Rotation to JOML)
+                                    val currentRotation = modelNode.rotation
+                                    val currentQuat = Quaternionf()
+                                        .rotateXYZ(currentRotation.x, currentRotation.y, currentRotation.z)
+                                    
+                                    // Apply incremental rotation: newQuat = currentQuat * deltaQuat
+                                    val newQuat = Quaternionf(currentQuat).mul(deltaQuat)
+                                    
+                                    // Convert back to Euler angles for SceneView
+                                    val eulerAngles = Vector3f()
+                                    newQuat.getEulerAnglesXYZ(eulerAngles)
+                                    
+                                    val newRotation = Rotation(
+                                        eulerAngles.x,
+                                        eulerAngles.y,
+                                        eulerAngles.z
+                                    )
+                                    modelNode.rotation = newRotation
+                                    
+                                    Log.d("ArView", "✅ APPLIED QUATERNION Y-AXIS ROTATION - delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
+                                    Log.d("ArView", "📐 New rotation: x=${Math.toDegrees(eulerAngles.x.toDouble())}°, y=${Math.toDegrees(eulerAngles.y.toDouble())}°, z=${Math.toDegrees(eulerAngles.z.toDouble())}°")
+                                    
+                                    // Notify Flutter
+                                    objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
+                                }
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
