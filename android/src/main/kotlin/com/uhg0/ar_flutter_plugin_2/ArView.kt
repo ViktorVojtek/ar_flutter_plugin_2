@@ -702,7 +702,17 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             
-                            Log.d("ArView", "ModelNode found: ${modelNode?.name}, isPositionEditable: ${modelNode?.isPositionEditable}")
+                            if (modelNode != null) {
+                                // CRITICAL FIX: Force enable position editing immediately when gesture is detected
+                                if (!modelNode.isPositionEditable) {
+                                    Log.d("ArView", "FORCING isPositionEditable to true for node ${modelNode.name}")
+                                    modelNode.isPositionEditable = true
+                                    modelNode.isTouchable = true
+                                }
+                                
+                                Log.d("ArView", "ModelNode found: ${modelNode.name}, isPositionEditable: ${modelNode.isPositionEditable}")
+                            }
+                            
                             if (modelNode != null && modelNode.isPositionEditable) {
                                 // Apply the pan movement using Float2 distance
                                 val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
@@ -753,7 +763,17 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             
-                            Log.d("ArView", "ModelNode found for rotation: ${modelNode?.name}, isRotationEditable: ${modelNode?.isRotationEditable}")
+                            if (modelNode != null) {
+                                // CRITICAL FIX: Force enable rotation editing immediately when gesture is detected
+                                if (!modelNode.isRotationEditable) {
+                                    Log.d("ArView", "FORCING isRotationEditable to true for node ${modelNode.name}")
+                                    modelNode.isRotationEditable = true
+                                    modelNode.isTouchable = true
+                                }
+                                
+                                Log.d("ArView", "ModelNode found for rotation: ${modelNode.name}, isRotationEditable: ${modelNode.isRotationEditable}")
+                            }
+                            
                             if (modelNode != null && modelNode.isRotationEditable) {
                                 // Apply rotation using RotateGestureDetector's rotation property
                                 val rotationRadians = detector.rotation
