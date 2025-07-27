@@ -737,13 +737,8 @@ class ArView(
                                 
                                 Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
                                 
-                                // Notify Flutter with properly formatted transform data
-                                val transformArray = modelNode.transform.toFloatArray()
-                                val transformMap = mapOf(
-                                    "name" to (modelNode.name ?: ""),
-                                    "transform" to transformArray.map { it.toDouble() }
-                                )
-                                objectChannel.invokeMethod("onPanChange", transformMap)
+                                // Notify Flutter with just the node name (Flutter expects String, not Map)
+                                objectChannel.invokeMethod("onPanChange", modelNode.name ?: "")
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for gesture")
                             }
@@ -830,13 +825,8 @@ class ArView(
                                 
                                 Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation} (delta: ${scaledDeltaRotation}°)")
                                 
-                                // Notify Flutter with properly formatted transform data
-                                val transformArray = modelNode.transform.toFloatArray()
-                                val transformMap = mapOf(
-                                    "name" to (modelNode.name ?: ""),
-                                    "transform" to transformArray.map { it.toDouble() }
-                                )
-                                objectChannel.invokeMethod("onRotationChange", transformMap)
+                                // Notify Flutter with just the node name (Flutter expects String, not Map)
+                                objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
