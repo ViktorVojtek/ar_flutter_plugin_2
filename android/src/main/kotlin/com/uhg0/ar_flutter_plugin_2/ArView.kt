@@ -95,6 +95,7 @@ class ArView(
     private var handlePans = false  
     private var handleRotation = false
     private var isSessionPaused = false
+    private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -581,6 +582,14 @@ class ArView(
                                         !detectedPlanes.contains(plane)
                                     ) {
                                         detectedPlanes.add(plane)
+                                        
+                                        // Capture the first plane's Y coordinate for constraining object movement
+                                        if (detectedPlaneY == null) {
+                                            val centerPose = plane.centerPose
+                                            detectedPlaneY = centerPose.translation[1] // Y coordinate
+                                            Log.d("ArView", "🎯 Captured plane Y coordinate: $detectedPlaneY for movement constraint")
+                                        }
+                                        
                                         mainScope.launch {
                                             sessionChannel.invokeMethod("onPlaneDetected", detectedPlanes.size)
                                         }
@@ -718,7 +727,7 @@ class ArView(
                                 val currentPosition = modelNode.position
                                 val newPosition = Position(
                                     currentPosition.x + deltaX,
-                                    currentPosition.y + deltaY,
+                                    detectedPlaneY ?: (currentPosition.y + deltaY), // Lock to plane Y or allow movement if no plane detected
                                     currentPosition.z
                                 )
                                 modelNode.position = newPosition
