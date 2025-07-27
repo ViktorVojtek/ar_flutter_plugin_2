@@ -99,6 +99,7 @@ class ArView(
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
     private var lastRotationValue: Float = 0f // Track last rotation value in radians for relative rotation calculation
     private var isRotationGestureActive: Boolean = false // Track if rotation gesture is active
+    private var lastRotationUpdateTime: Long = 0L // Track timing for gesture timeout
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -749,8 +750,17 @@ class ArView(
                         if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
                             isRotationGestureActive = false
                             lastRotationValue = 0f
+                            lastRotationUpdateTime = 0L
                             Log.d("ArView", "🔄 Rotation gesture ended, reset state")
                             return@setOnGestureListener
+                        }
+                        
+                        // Timeout check: reset if no updates for more than 100ms
+                        val currentTime = System.currentTimeMillis()
+                        if (isRotationGestureActive && currentTime - lastRotationUpdateTime > 100) {
+                            Log.d("ArView", "🔄 Rotation gesture timeout, resetting state")
+                            isRotationGestureActive = false
+                            lastRotationValue = 0f
                         }
                         
                         // Handle rotation gestures for nodes
@@ -785,11 +795,15 @@ class ArView(
                                 if (!isRotationGestureActive) {
                                     isRotationGestureActive = true
                                     lastRotationValue = detector.rotation // Store in radians for better precision
-                                    Log.d("ArView", "🔄 Started new rotation gesture, reset tracking")
+                                    lastRotationUpdateTime = System.currentTimeMillis()
+                                    Log.d("ArView", "🔄 Started new rotation gesture, reset tracking - initial rotation: ${detector.rotation}")
                                     return@setOnGestureListener // Don't apply rotation on first detection
                                 }
                                 
-                                // Immediately apply rotation using RotateGestureDetector's rotation property
+                                // Update timing
+                                lastRotationUpdateTime = System.currentTimeMillis()
+                                
+                                // Get current rotation from detector
                                 val currentRotationRadians = detector.rotation
                                 
                                 // Calculate relative rotation change with proper angle wrapping
@@ -803,18 +817,20 @@ class ArView(
                                     deltaRotationRadians += (2 * PI).toFloat()
                                 }
                                 
+                                // Update last rotation value
                                 lastRotationValue = currentRotationRadians
                                 
-                                // Convert to degrees and scale for natural feel
+                                // Convert to degrees and apply sensitivity scaling
                                 val deltaRotationDegrees = deltaRotationRadians * 57.2958f
-                                val scaledDeltaRotation = -deltaRotationDegrees * 0.5f // Inverted and scaled
+                                val scaledDeltaRotation = deltaRotationDegrees * 1.0f // Removed inversion and kept natural direction
                                 
-                                // Safety check: ignore very large deltas (potential glitches)
-                                if (abs(scaledDeltaRotation) > 45f) {
-                                    Log.w("ArView", "🚫 Ignoring large rotation delta: ${scaledDeltaRotation}°")
+                                // Enhanced safety check with better thresholds
+                                if (abs(scaledDeltaRotation) > 15f) {
+                                    Log.w("ArView", "🚫 Ignoring large rotation delta: ${scaledDeltaRotation}° (raw: ${deltaRotationDegrees}°)")
                                     return@setOnGestureListener
                                 }
                                 
+                                // Apply rotation only around Y-axis to avoid gimbal lock
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
                                     currentRotation.x,
@@ -823,7 +839,11 @@ class ArView(
                                 )
                                 modelNode.rotation = newRotation
                                 
-                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation} (delta: ${scaledDeltaRotation}°)")
+                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation")
+                                Log.d("ArView", "   FROM: ${currentRotation} TO: ${newRotation}")
+                                Log.d("ArView", "   Raw detector rotation: ${currentRotationRadians} rad (${currentRotationRadians * 57.2958f}°)")
+                                Log.d("ArView", "   Delta: ${deltaRotationRadians} rad (${deltaRotationDegrees}°)")
+                                Log.d("ArView", "   Applied delta: ${scaledDeltaRotation}°")
                                 
                                 // Notify Flutter with just the node name (Flutter expects String, not Map)
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
