@@ -96,12 +96,29 @@ class ArView(
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
     private var lastRotationAngle: Float = 0f // Track last rotation angle for delta calculation
+    
+    // Rotation gesture tracking variables
+    private var gestureStartRotation: Float? = null
+    private var lastDetectorRotation: Float? = null
+    private var lastAppliedRotation: Float = 0f
+    private var accumulatedRotationDelta: Float = 0f
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
         var id: Int,
         var confidence: Float,
     ) : ModelNode(modelInstance)
+
+    /**
+     * Calculate incremental rotation delta handling 360° wraparound
+     */
+    private fun calculateIncrementalRotationDelta(currentRotation: Float, lastRotation: Float): Float {
+        var delta = currentRotation - lastRotation
+        // Handle 360° wraparound
+        if (delta > Math.PI) delta -= (2 * Math.PI).toFloat()
+        else if (delta < -Math.PI) delta += (2 * Math.PI).toFloat()
+        return delta
+    }
 
     private val onSessionMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
