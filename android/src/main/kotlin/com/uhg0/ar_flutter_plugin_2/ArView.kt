@@ -95,43 +95,6 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
-    private var gestureStartRotation: Float? = null // Starting rotation value for the current gesture
-    private var lastAppliedRotation: Float = 0f // Track the cumulative rotation applied to avoid resets
-    private var lastDetectorRotation: Float? = null // Track the last detector rotation for continuous motion
-    private var accumulatedRotationDelta: Float = 0f // Accumulate rotation changes to avoid wraparound issues
-
-    // Helper function to calculate incremental rotation change (avoids wraparound issues)
-    private fun calculateIncrementalRotationDelta(currentDetectorRotation: Float, lastDetectorRotation: Float): Float {
-        var delta = currentDetectorRotation - lastDetectorRotation
-        
-        // Handle 360° wraparound for incremental changes
-        if (delta > 180f) {
-            delta -= 360f
-        } else if (delta < -180f) {
-            delta += 360f
-        }
-        
-        return delta
-    }
-
-    // Helper function to calculate circular angle difference (shortest path between two angles)
-    private fun calculateCircularAngleDifference(targetAngle: Float, sourceAngle: Float): Float {
-        // Normalize both angles to [0, 360) range
-        val normalizedTarget = ((targetAngle % 360f) + 360f) % 360f
-        val normalizedSource = ((sourceAngle % 360f) + 360f) % 360f
-        
-        // Calculate the raw difference
-        var delta = normalizedTarget - normalizedSource
-        
-        // Find the shortest path around the circle
-        if (delta > 180f) {
-            delta -= 360f
-        } else if (delta < -180f) {
-            delta += 360f
-        }
-        
-        return delta
-    }
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -727,8 +690,8 @@ class ArView(
                         }
                     },
                     onScroll = { e1, e2, node, distance ->
-                        // Handle pan gestures for nodes - but only if rotation gesture is not in progress
-                        if (node != null && this@ArView.handlePans && gestureStartRotation == null) {
+                        // Handle pan gestures for nodes
+                        if (node != null && this@ArView.handlePans) {
                             Log.d("ArView", "Scroll detected on node: ${node.name} - handlePans: ${this@ArView.handlePans}")
                             
                             // Find the managed ModelNode
@@ -775,18 +738,13 @@ class ArView(
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for gesture")
                             }
-                        } else if (gestureStartRotation != null) {
-                            Log.d("ArView", "🔄 Ignoring pan gesture - rotation gesture in progress")
                         }
                     },
                     onRotate = { detector, e, node ->
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         
-                        // Handle rotation gestures for nodes - SIMPLE WORKING VERSION WITH RESET FIX
+                        // Handle rotation gestures for nodes using quaternion Y-axis rotation
                         if (node != null && this@ArView.handleRotation) {
-                            val currentDetectorRotation = detector.rotation
-                            Log.d("ArView", "🔄 SceneView detector rotation: ${currentDetectorRotation}°, isGestureInProgress: ${detector.isGestureInProgress}")
-                            
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
                             var currentNode: Node? = node
@@ -807,60 +765,21 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Initialize rotation tracking if this is the first rotation event or gesture start
-                                if (gestureStartRotation == null) {
-                                    gestureStartRotation = currentDetectorRotation
-                                    lastDetectorRotation = currentDetectorRotation
-                                    lastAppliedRotation = modelNode.rotation.y
-                                    accumulatedRotationDelta = 0f
-                                    Log.d("ArView", "🔄 NEW GESTURE - gestureStart: ${gestureStartRotation}°, current model: ${lastAppliedRotation}°")
-                                } else {
-                                    // Calculate incremental change from last detector reading
-                                    val incrementalDelta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
-                                    accumulatedRotationDelta += incrementalDelta
-                                    
-                                    Log.d("ArView", "🔄 INCREMENTAL - last: ${lastDetectorRotation}°, current: ${currentDetectorRotation}°, increment: ${incrementalDelta}°")
-                                    Log.d("ArView", "🔄 ACCUMULATED - total delta: ${accumulatedRotationDelta}°")
-                                    
-                                    // Update last detector rotation for next calculation
-                                    lastDetectorRotation = currentDetectorRotation
-                                }
+                                // Use ARCore's rotation delta with quaternion Y-axis rotation
+                                val rotationDelta = detector.rotationDelta
+                                Log.d("ArView", "🔄 Rotation delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
                                 
-                                // Use accumulated delta instead of total circular difference
-                                val deltaRotation = accumulatedRotationDelta
+                                // Create Y-axis rotation quaternion from the delta
+                                val yAxis = io.github.sceneview.math.Direction(0f, 1f, 0f)
+                                val yawDeltaQuat = io.github.sceneview.math.Quaternion.fromAxisAngle(yAxis, rotationDelta)
                                 
-                                // Scale the rotation for responsive movement
-                                val scaledDelta = deltaRotation * 1.5f
+                                // Apply the quaternion rotation to the model
+                                modelNode.quaternion = modelNode.quaternion * yawDeltaQuat
                                 
-                                // Apply rotation: base rotation + current gesture delta
-                                val newRotationY = lastAppliedRotation + scaledDelta
-                                
-                                Log.d("ArView", "🔄 ROTATION - gestureStart: ${gestureStartRotation}°, current: ${currentDetectorRotation}°, delta: ${deltaRotation}°, scaled: ${scaledDelta}°")
-                                Log.d("ArView", "🔄 APPLYING - base: ${lastAppliedRotation}° + scaled: ${scaledDelta}° = newY: ${newRotationY}°")
-                                
-                                // Apply the rotation
-                                val currentRotation = modelNode.rotation
-                                val newRotation = Rotation(
-                                    currentRotation.x,
-                                    newRotationY,
-                                    currentRotation.z
-                                )
-                                modelNode.rotation = newRotation
-                                
-                                Log.d("ArView", "✅ APPLIED ROTATION - newY: ${newRotationY}°")
+                                Log.d("ArView", "✅ APPLIED QUATERNION ROTATION - delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
                                 
                                 // Notify Flutter
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
-                                
-                                // Check if gesture has ended (this is tricky with SceneView, we use MotionEvent actions)
-                                if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
-                                    // Save the final rotation as the new base for next gesture
-                                    lastAppliedRotation = newRotationY
-                                    gestureStartRotation = null
-                                    lastDetectorRotation = null
-                                    accumulatedRotationDelta = 0f
-                                    Log.d("ArView", "🔄 GESTURE ENDED - saved final rotation: ${lastAppliedRotation}°, reset tracking")
-                                }
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
