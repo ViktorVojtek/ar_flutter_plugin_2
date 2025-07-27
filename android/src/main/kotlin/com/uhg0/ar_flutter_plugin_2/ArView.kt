@@ -263,10 +263,6 @@ class ArView(
                     modelInstance = modelInstance,
                     scaleToUnits = transformation.first().toFloat(),
                 ) {
-                    // CRITICAL: Capture handlePans value at creation time to avoid context issues
-                    private val handlePansEnabled = this@ArView.handlePans
-                    private val handleRotationEnabled = this@ArView.handleRotation
-                    
                     init {
                         // Apply the full transformation matrix to properly position the node
                         if (transformation.size >= 16) {
@@ -304,13 +300,16 @@ class ArView(
                             Log.w("ArView", "Invalid transformation matrix size: ${transformation.size}, expected 16")
                         }
                         
-                        // CRITICAL: Set gesture properties INSIDE init block before node is added to anchor
+                        // Set node properties
                         name = nodeData["name"] as? String
-                        isPositionEditable = handlePansEnabled
-                        isRotationEditable = handleRotationEnabled
+                        
+                        // CRITICAL FIX: Set gesture properties based on current gesture settings
+                        isPositionEditable = this@ArView.handlePans
+                        isRotationEditable = this@ArView.handleRotation
                         isTouchable = true
                         
-                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable, handlePansEnabled: $handlePansEnabled")
+                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
+                        Log.d("ArView", "Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
                     }
                 }
             } ?: run {
@@ -366,7 +365,11 @@ class ArView(
                                 Log.d("ArView", "Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
                                 Log.d("ArView", "All nodes in map: ${nodesMap.keys}")
                                 Log.d("ArView", "Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                                
+                                // Update gesture properties after adding node
+                                updateNodeGestureProperties()
                                 debugGestureConfiguration() // Debug after adding node
+                                
                                 result.success(nodeName) // Return node name instead of boolean
                             } ?: result.success(null) // Return null if no node name
                         } ?: result.success(null) // Return null instead of false
@@ -416,6 +419,10 @@ class ArView(
                 node.name?.let { nodeName ->
                     nodesMap[nodeName] = node
                     Log.d("ArView", "Added ModelNode to nodesMap (screen position): $nodeName, total nodes: ${nodesMap.size}")
+                    
+                    // Update gesture properties after adding node
+                    updateNodeGestureProperties()
+                    
                     result.success(nodeName)
                 } ?: result.success(null)
             }
@@ -436,6 +443,23 @@ class ArView(
         }
         Log.d("ArView", "SceneView gesture handling configured via setOnGestureListener")
         Log.d("ArView", "=== END GESTURE DEBUG ===")
+    }
+
+    private fun updateNodeGestureProperties() {
+        Log.d("ArView", "=== UPDATING NODE GESTURE PROPERTIES ===")
+        Log.d("ArView", "Current gesture settings - handlePans: $handlePans, handleRotation: $handleRotation")
+        
+        nodesMap.forEach { (name, node) ->
+            val oldPositionEditable = node.isPositionEditable
+            val oldRotationEditable = node.isRotationEditable
+            
+            node.isPositionEditable = handlePans
+            node.isRotationEditable = handleRotation
+            node.isTouchable = true
+            
+            Log.d("ArView", "Updated node $name - isPositionEditable: $oldPositionEditable -> ${node.isPositionEditable}, isRotationEditable: $oldRotationEditable -> ${node.isRotationEditable}")
+        }
+        Log.d("ArView", "=== FINISHED UPDATING NODE PROPERTIES ===")
     }
 
     private fun handleInit(
@@ -799,6 +823,9 @@ class ArView(
             Log.d("ArView", "handleRotation: ${this.handleRotation}")
             Log.d("ArView", "=== END IMMEDIATE DEBUG ===")
             
+            // Update all existing nodes with current gesture settings
+            updateNodeGestureProperties()
+            
             debugGestureConfiguration()
             
             result.success(null)
@@ -823,7 +850,11 @@ class ArView(
                         nodesMap[nodeName] = node
                         Log.d("ArView", "Added ModelNode to nodesMap (direct): $nodeName, total nodes: ${nodesMap.size}")
                         Log.d("ArView", "Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                        
+                        // Update gesture properties after adding node
+                        updateNodeGestureProperties()
                         debugGestureConfiguration() // Debug after adding node
+                        
                         result.success(nodeName) // Return node name instead of boolean
                     } ?: result.success(null) // Return null if no node name
                 } else {
