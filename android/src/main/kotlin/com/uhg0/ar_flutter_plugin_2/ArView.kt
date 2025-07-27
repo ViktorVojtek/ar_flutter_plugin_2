@@ -97,6 +97,22 @@ class ArView(
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
     private var gestureStartRotation: Float? = null // Starting rotation value for the current gesture
     private var lastAppliedRotation: Float = 0f // Track the cumulative rotation applied to avoid resets
+    private var lastDetectorRotation: Float? = null // Track the last detector rotation for continuous motion
+    private var accumulatedRotationDelta: Float = 0f // Accumulate rotation changes to avoid wraparound issues
+
+    // Helper function to calculate incremental rotation change (avoids wraparound issues)
+    private fun calculateIncrementalRotationDelta(currentDetectorRotation: Float, lastDetectorRotation: Float): Float {
+        var delta = currentDetectorRotation - lastDetectorRotation
+        
+        // Handle 360° wraparound for incremental changes
+        if (delta > 180f) {
+            delta -= 360f
+        } else if (delta < -180f) {
+            delta += 360f
+        }
+        
+        return delta
+    }
 
     // Helper function to calculate circular angle difference (shortest path between two angles)
     private fun calculateCircularAngleDifference(targetAngle: Float, sourceAngle: Float): Float {
@@ -791,22 +807,27 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Initialize lastRotationValue if this is the first rotation event or gesture start
+                                // Initialize rotation tracking if this is the first rotation event or gesture start
                                 if (gestureStartRotation == null) {
                                     gestureStartRotation = currentDetectorRotation
+                                    lastDetectorRotation = currentDetectorRotation
                                     lastAppliedRotation = modelNode.rotation.y
+                                    accumulatedRotationDelta = 0f
                                     Log.d("ArView", "🔄 NEW GESTURE - gestureStart: ${gestureStartRotation}°, current model: ${lastAppliedRotation}°")
+                                } else {
+                                    // Calculate incremental change from last detector reading
+                                    val incrementalDelta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
+                                    accumulatedRotationDelta += incrementalDelta
+                                    
+                                    Log.d("ArView", "🔄 INCREMENTAL - last: ${lastDetectorRotation}°, current: ${currentDetectorRotation}°, increment: ${incrementalDelta}°")
+                                    Log.d("ArView", "🔄 ACCUMULATED - total delta: ${accumulatedRotationDelta}°")
+                                    
+                                    // Update last detector rotation for next calculation
+                                    lastDetectorRotation = currentDetectorRotation
                                 }
                                 
-                                // Calculate delta using robust circular angle difference
-                                val deltaRotation = calculateCircularAngleDifference(currentDetectorRotation, gestureStartRotation!!)
-                                
-                                // Normalize current detector rotation for logging
-                                val normalizedCurrent = ((currentDetectorRotation % 360f) + 360f) % 360f
-                                val normalizedStart = ((gestureStartRotation!! % 360f) + 360f) % 360f
-                                
-                                Log.d("ArView", "🔄 RAW VALUES - start: ${gestureStartRotation}°, current: ${currentDetectorRotation}°")
-                                Log.d("ArView", "🔄 NORMALIZED - start: ${normalizedStart}°, current: ${normalizedCurrent}°, circular delta: ${deltaRotation}°")
+                                // Use accumulated delta instead of total circular difference
+                                val deltaRotation = accumulatedRotationDelta
                                 
                                 // Scale the rotation for responsive movement
                                 val scaledDelta = deltaRotation * 1.5f
@@ -836,7 +857,9 @@ class ArView(
                                     // Save the final rotation as the new base for next gesture
                                     lastAppliedRotation = newRotationY
                                     gestureStartRotation = null
-                                    Log.d("ArView", "🔄 GESTURE ENDED - saved final rotation: ${lastAppliedRotation}°")
+                                    lastDetectorRotation = null
+                                    accumulatedRotationDelta = 0f
+                                    Log.d("ArView", "🔄 GESTURE ENDED - saved final rotation: ${lastAppliedRotation}°, reset tracking")
                                 }
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
