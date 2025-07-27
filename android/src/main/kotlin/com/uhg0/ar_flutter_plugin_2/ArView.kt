@@ -60,8 +60,6 @@ import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
 import kotlin.math.sqrt
 import kotlin.math.atan2
-import org.joml.Quaternionf
-import org.joml.Vector3f
 
 class ArView(
     context: Context,
@@ -313,6 +311,22 @@ class ArView(
                         
                         Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
                         Log.d("ArView", "Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
+                    }
+
+                    override fun onRotate(
+                        detector: RotateGestureDetector,
+                        e: MotionEvent,
+                        rotationDelta: Quaternion
+                    ): Boolean {
+                        val current = transform
+                        val newQuat = current.quaternion * rotationDelta
+                        transform = Transform(
+                            position   = current.position,
+                            quaternion = newQuat,
+                            scale      = current.scale
+                        )
+                        objectChannel.invokeMethod("onRotationChange", name ?: "")
+                        return true
                     }
                 }
             } ?: run {
@@ -743,8 +757,9 @@ class ArView(
                             }
                         }
                     },
-                    onRotate = { detector, e, node ->
-                        Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
+                    onRotate = { _, -, _ ->
+                        false // Disable default rotation handling
+                        /* Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         
                         // Handle rotation gestures for nodes using JOML quaternion Y-axis rotation
                         if (node != null && this@ArView.handleRotation) {
@@ -824,7 +839,7 @@ class ArView(
                             }
                         } else {
                             Log.d("ArView", "🔄 Rotation gesture ignored - node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
-                        }
+                        }*/
                     }
                 )
 
