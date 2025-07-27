@@ -58,10 +58,8 @@ import io.github.sceneview.math.Scale
 import io.github.sceneview.math.colorOf
 import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
-import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.math.atan2
-import kotlin.math.PI
 
 class ArView(
     context: Context,
@@ -97,18 +95,7 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
-    private var lastRotationValue: Float = 0f // Track last rotation value in radians for relative rotation calculation
-    private var isRotationGestureActive: Boolean = false // Track if rotation gesture is active
-    private var lastRotationUpdateTime: Long = 0L // Track timing for gesture timeout
-    private var rotationSmoothingBuffer = mutableListOf<Float>() // Buffer for smoothing erratic detector values
-    
-    // New angular velocity-based rotation tracking
-    private var lastFingerAngle: Float = 0f // Track the angle of finger movement
-    private var rotationVelocityBuffer = mutableListOf<Float>() // Buffer for angular velocity
-    private var lastTouchX1: Float = 0f
-    private var lastTouchY1: Float = 0f
-    private var lastTouchX2: Float = 0f
-    private var lastTouchY2: Float = 0f
+
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -757,112 +744,9 @@ class ArView(
                     onRotate = { detector, e, node ->
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         
-                        // Handle rotation gestures for nodes using angular velocity approach
-                        if (node != null && this@ArView.handleRotation && e.pointerCount >= 2) {
-                            
-                            // Get current finger positions
-                            val x1 = e.getX(0)
-                            val y1 = e.getY(0)
-                            val x2 = e.getX(1)
-                            val y2 = e.getY(1)
-                            
-                            // Calculate center point
-                            val centerX = (x1 + x2) / 2f
-                            val centerY = (y1 + y2) / 2f
-                            
-                            val currentTime = System.currentTimeMillis()
-                            
-                            when {
-                                // Start of rotation gesture
-                                !isRotationGestureActive -> {
-                                    isRotationGestureActive = true
-                                    lastRotationUpdateTime = currentTime
-                                    rotationVelocityBuffer.clear()
-                                    
-                                    // Store initial finger positions
-                                    lastTouchX1 = x1
-                                    lastTouchY1 = y1
-                                    lastTouchX2 = x2
-                                    lastTouchY2 = y2
-                                    
-                                    // Calculate initial finger angle relative to center
-                                    lastFingerAngle = atan2(y1 - centerY, x1 - centerX)
-                                    
-                                    Log.d("ArView", "🔄 Rotation gesture STARTED at center: ($centerX, $centerY)")
-                                    return@setOnGestureListener
-                                }
-                                
-                                // End of rotation gesture
-                                e.action == MotionEvent.ACTION_UP || 
-                                e.action == MotionEvent.ACTION_CANCEL ||
-                                e.action == MotionEvent.ACTION_POINTER_UP -> {
-                                    isRotationGestureActive = false
-                                    rotationVelocityBuffer.clear()
-                                    Log.d("ArView", "🔄 Rotation gesture ENDED")
-                                    return@setOnGestureListener
-                                }
-                                
-                                // Timeout protection
-                                currentTime - lastRotationUpdateTime > 100 -> {
-                                    lastTouchX1 = x1
-                                    lastTouchY1 = y1
-                                    lastTouchX2 = x2
-                                    lastTouchY2 = y2
-                                    lastFingerAngle = atan2(y1 - centerY, x1 - centerX)
-                                    lastRotationUpdateTime = currentTime
-                                    rotationVelocityBuffer.clear()
-                                    Log.d("ArView", "🔄 Rotation gesture TIMEOUT RESET")
-                                    return@setOnGestureListener
-                                }
-                            }
-                            
-                            // Calculate angular velocity based on finger movement
-                            val currentFingerAngle = atan2(y1 - centerY, x1 - centerX)
-                            var angularDelta = currentFingerAngle - lastFingerAngle
-                            
-                            // Normalize angle to -π to π range
-                            while (angularDelta > PI) angularDelta -= 2 * PI.toFloat()
-                            while (angularDelta < -PI) angularDelta += 2 * PI.toFloat()
-                            
-                            lastFingerAngle = currentFingerAngle
-                            lastRotationUpdateTime = currentTime
-                            
-                            // Store finger positions for next frame
-                            lastTouchX1 = x1
-                            lastTouchY1 = y1
-                            lastTouchX2 = x2
-                            lastTouchY2 = y2
-                            
-                            // Apply velocity smoothing
-                            rotationVelocityBuffer.add(angularDelta)
-                            if (rotationVelocityBuffer.size > 3) {
-                                rotationVelocityBuffer.removeAt(0)
-                            }
-                            
-                            // Calculate smoothed angular velocity
-                            val smoothedVelocity = rotationVelocityBuffer.average().toFloat()
-                            
-                            // Skip very small movements to reduce noise
-                            val minVelocityThreshold = 0.01f // ~0.57 degrees
-                            if (abs(smoothedVelocity) < minVelocityThreshold) {
-                                return@setOnGestureListener
-                            }
-                            
-                            // Clamp velocity to prevent wild spins
-                            val maxVelocity = 0.3f // ~17 degrees per frame
-                            val clampedVelocity = when {
-                                smoothedVelocity > maxVelocity -> {
-                                    Log.d("ArView", "⚠️ Clamping high velocity: ${smoothedVelocity * 57.2958f}°/frame")
-                                    maxVelocity
-                                }
-                                smoothedVelocity < -maxVelocity -> {
-                                    Log.d("ArView", "⚠️ Clamping high velocity: ${smoothedVelocity * 57.2958f}°/frame")
-                                    -maxVelocity
-                                }
-                                else -> smoothedVelocity
-                            }
-                            
-                            Log.d("ArView", "🔄 Angular velocity: ${clampedVelocity * 57.2958f}°/frame")
+                        // Handle rotation gestures for nodes using SceneView's built-in rotation approach
+                        if (node != null && this@ArView.handleRotation) {
+                            Log.d("ArView", "🔄 SceneView detector rotation: ${detector.rotation}°, isGestureInProgress: ${detector.isGestureInProgress}")
                             
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
@@ -883,17 +767,21 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Apply rotation with reasonable sensitivity
-                                val rotationDegrees = clampedVelocity * 57.2958f * 2.0f // Increased sensitivity for responsiveness
+                                // Use SceneView's built-in rotation delta - this is the key!
+                                // The detector.rotation already contains the rotation delta in degrees
+                                val rotationDeltaDegrees = detector.rotation
+                                
+                                // Apply rotation around Y-axis (vertical axis for typical object rotation)
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
                                     currentRotation.x,
-                                    currentRotation.y + rotationDegrees,
+                                    currentRotation.y + rotationDeltaDegrees, // Apply the SceneView calculated rotation
                                     currentRotation.z
                                 )
                                 modelNode.rotation = newRotation
                                 
-                                Log.d("ArView", "✅ Applied velocity-based rotation ${rotationDegrees}° to node ${modelNode.name}")
+                                Log.d("ArView", "✅ Applied SceneView rotation ${rotationDeltaDegrees}° to node ${modelNode.name}")
+                                Log.d("ArView", "Previous rotation: ${currentRotation.y}°, New rotation: ${newRotation.y}°")
                                 
                                 // Notify Flutter
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
