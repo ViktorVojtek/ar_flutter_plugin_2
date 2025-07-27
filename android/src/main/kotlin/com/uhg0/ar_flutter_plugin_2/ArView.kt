@@ -721,14 +721,14 @@ class ArView(
                                 
                                 // Immediately apply the pan movement - don't wait or check properties again
                                 val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
-                                val deltaY = distance.y * 0.001f
+                                val deltaZ = -distance.y * 0.001f // Forward/backward movement (Y gesture maps to Z world coordinate)
                                 
                                 // Move in camera space
                                 val currentPosition = modelNode.position
                                 val newPosition = Position(
                                     currentPosition.x + deltaX,
-                                    detectedPlaneY ?: (currentPosition.y + deltaY), // Lock to plane Y or allow movement if no plane detected
-                                    currentPosition.z
+                                    detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
+                                    currentPosition.z + deltaZ // Allow forward/backward movement
                                 )
                                 modelNode.position = newPosition
                                 
