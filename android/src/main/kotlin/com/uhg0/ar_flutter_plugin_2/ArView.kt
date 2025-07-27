@@ -651,7 +651,7 @@ class ArView(
                             }
                         }
                     },
-                    onScroll = { e1, e2, node, distanceX, distanceY ->
+                    onScroll = { e1, e2, node, distance ->
                         // Handle pan gestures for nodes
                         if (node != null && this@ArView.handlePans) {
                             Log.d("ArView", "Scroll detected on node: ${node.name}")
@@ -671,9 +671,9 @@ class ArView(
                             }
                             
                             if (modelNode != null && modelNode.isPositionEditable) {
-                                // Apply the pan movement
-                                val deltaX = -distanceX * 0.001f // Scale and invert for natural movement
-                                val deltaY = distanceY * 0.001f
+                                // Apply the pan movement using Float2 distance
+                                val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
+                                val deltaY = distance.y * 0.001f
                                 
                                 // Move in camera space
                                 val currentPosition = modelNode.position
