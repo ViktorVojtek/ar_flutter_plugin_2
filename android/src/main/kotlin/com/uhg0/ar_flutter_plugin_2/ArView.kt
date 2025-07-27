@@ -833,7 +833,15 @@ class ArView(
                                 val scaledDelta = deltaRotation * 1.5f
                                 
                                 // Apply rotation: base rotation + current gesture delta
-                                val newRotationY = lastAppliedRotation + scaledDelta
+                                var newRotationY = lastAppliedRotation + scaledDelta
+                                
+                                // Normalize rotation to [-180, 180] range to prevent large values
+                                while (newRotationY > 180f) {
+                                    newRotationY -= 360f
+                                }
+                                while (newRotationY < -180f) {
+                                    newRotationY += 360f
+                                }
                                 
                                 Log.d("ArView", "🔄 ROTATION - gestureStart: ${gestureStartRotation}°, current: ${currentDetectorRotation}°, delta: ${deltaRotation}°, scaled: ${scaledDelta}°")
                                 Log.d("ArView", "🔄 APPLYING - base: ${lastAppliedRotation}° + scaled: ${scaledDelta}° = newY: ${newRotationY}°")
