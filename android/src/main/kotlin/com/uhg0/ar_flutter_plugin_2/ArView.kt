@@ -703,30 +703,27 @@ class ArView(
                             }
                             
                             if (modelNode != null) {
-                                // CRITICAL FIX: Force enable position editing immediately when gesture is detected
-                                if (!modelNode.isPositionEditable) {
-                                    Log.d("ArView", "FORCING isPositionEditable to true for node ${modelNode.name}")
-                                    modelNode.isPositionEditable = true
-                                    modelNode.isTouchable = true
-                                }
+                                // CRITICAL FIX: Force properties and proceed with movement regardless of property check
+                                Log.d("ArView", "Gesture detected on node ${modelNode.name}, original isPositionEditable: ${modelNode.isPositionEditable}")
                                 
-                                Log.d("ArView", "ModelNode found: ${modelNode.name}, isPositionEditable: ${modelNode.isPositionEditable}")
-                            }
-                            
-                            if (modelNode != null && modelNode.isPositionEditable) {
-                                // Apply the pan movement using Float2 distance
+                                // Force enable properties
+                                modelNode.isPositionEditable = true
+                                modelNode.isTouchable = true
+                                
+                                // Immediately apply the pan movement - don't wait or check properties again
                                 val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
                                 val deltaY = distance.y * 0.001f
                                 
                                 // Move in camera space
                                 val currentPosition = modelNode.position
-                                modelNode.position = Position(
+                                val newPosition = Position(
                                     currentPosition.x + deltaX,
                                     currentPosition.y + deltaY,
                                     currentPosition.z
                                 )
+                                modelNode.position = newPosition
                                 
-                                Log.d("ArView", "Updated node ${modelNode.name} position to: ${modelNode.position}")
+                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
                                 
                                 // Notify Flutter
                                 val transformMap = mapOf(
@@ -736,6 +733,7 @@ class ArView(
                                 objectChannel.invokeMethod("onPanChange", transformMap)
                                 true
                             } else {
+                                Log.w("ArView", "❌ No ModelNode found for gesture")
                                 false
                             }
                         } else {
@@ -764,29 +762,25 @@ class ArView(
                             }
                             
                             if (modelNode != null) {
-                                // CRITICAL FIX: Force enable rotation editing immediately when gesture is detected
-                                if (!modelNode.isRotationEditable) {
-                                    Log.d("ArView", "FORCING isRotationEditable to true for node ${modelNode.name}")
-                                    modelNode.isRotationEditable = true
-                                    modelNode.isTouchable = true
-                                }
+                                // CRITICAL FIX: Force properties and proceed with rotation regardless of property check
+                                Log.d("ArView", "Rotation gesture detected on node ${modelNode.name}, original isRotationEditable: ${modelNode.isRotationEditable}")
                                 
-                                Log.d("ArView", "ModelNode found for rotation: ${modelNode.name}, isRotationEditable: ${modelNode.isRotationEditable}")
-                            }
-                            
-                            if (modelNode != null && modelNode.isRotationEditable) {
-                                // Apply rotation using RotateGestureDetector's rotation property
+                                // Force enable properties
+                                modelNode.isRotationEditable = true
+                                modelNode.isTouchable = true
+                                
+                                // Immediately apply rotation using RotateGestureDetector's rotation property
                                 val rotationRadians = detector.rotation
                                 val rotationDegrees = rotationRadians * 57.2958f // Convert radians to degrees
                                 val currentRotation = modelNode.rotation
-                                
-                                modelNode.rotation = Rotation(
+                                val newRotation = Rotation(
                                     currentRotation.x,
                                     currentRotation.y + rotationDegrees,
                                     currentRotation.z
                                 )
+                                modelNode.rotation = newRotation
                                 
-                                Log.d("ArView", "Updated node ${modelNode.name} rotation to: ${modelNode.rotation}")
+                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation}")
                                 
                                 // Notify Flutter
                                 val transformMap = mapOf(
@@ -796,6 +790,7 @@ class ArView(
                                 objectChannel.invokeMethod("onRotationChange", transformMap)
                                 true
                             } else {
+                                Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                                 false
                             }
                         } else {
