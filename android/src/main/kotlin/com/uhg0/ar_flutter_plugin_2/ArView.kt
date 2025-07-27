@@ -747,6 +747,9 @@ class ArView(
                         }
                     },
                     onRotate = { detector, e, node ->
+                        Log.d("ArView", "🔄 onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
+                        Log.d("ArView", "🔄 Raw detector rotation: ${detector.rotation} rad (${detector.rotation * 57.2958f}°)")
+                        
                         // Reset gesture state when gesture ends
                         if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
                             isRotationGestureActive = false
@@ -834,11 +837,15 @@ class ArView(
                                 // Convert to degrees for checking and logging
                                 val deltaRotationDegrees = deltaRotationRadians * 57.2958f
                                 
-                                // More aggressive safety check - detector values are very unstable
-                                if (abs(deltaRotationDegrees) > 5f) {
-                                    Log.w("ArView", "🚫 Ignoring unstable rotation delta: ${deltaRotationDegrees}° (raw detector: ${currentRotationRadians})")
+                                Log.d("ArView", "🔄 Rotation calculation - deltaRadians: ${deltaRotationRadians}, deltaDegrees: ${deltaRotationDegrees}")
+                                
+                                // Temporarily very permissive safety check for debugging
+                                if (abs(deltaRotationDegrees) > 90f) {
+                                    Log.w("ArView", "🚫 Ignoring extremely large rotation delta: ${deltaRotationDegrees}° (raw detector: ${currentRotationRadians})")
                                     // Don't update lastRotationValue for bad readings
                                     return@setOnGestureListener
+                                } else {
+                                    Log.d("ArView", "✅ Accepting rotation delta: ${deltaRotationDegrees}°")
                                 }
                                 
                                 // Update last rotation value only for good readings
