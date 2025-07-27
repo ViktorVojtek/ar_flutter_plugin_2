@@ -693,8 +693,8 @@ class ArView(
                         }
                     },
                     onScroll = { e1, e2, node, distance ->
-                        // Handle pan gestures for nodes
-                        if (node != null && this@ArView.handlePans) {
+                        // Handle pan gestures for nodes - but only if rotation gesture is not in progress
+                        if (node != null && this@ArView.handlePans && gestureStartRotation == null) {
                             Log.d("ArView", "Scroll detected on node: ${node.name} - handlePans: ${this@ArView.handlePans}")
                             
                             // Find the managed ModelNode
@@ -741,6 +741,8 @@ class ArView(
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for gesture")
                             }
+                        } else if (gestureStartRotation != null) {
+                            Log.d("ArView", "🔄 Ignoring pan gesture - rotation gesture in progress")
                         }
                     },
                     onRotate = { detector, e, node ->
@@ -759,6 +761,7 @@ class ArView(
                                 if (currentNode is ModelNode && currentNode.name != null) {
                                     if (nodesMap.containsKey(currentNode.name)) {
                                         modelNode = currentNode
+                                        Log.d("ArView", "🔄 Found ModelNode for rotation: ${currentNode.name}")
                                         break
                                     }
                                 }
@@ -793,22 +796,23 @@ class ArView(
                                             // Apply rotation: base rotation + current gesture rotation
                                             val newRotationY = lastAppliedRotation + scaledRotation
                                             
-                                            // Only apply if change is significant
-                                            if (kotlin.math.abs(scaledRotation) > 0.05f) {
-                                                val currentRotation = modelNode.rotation
-                                                val newRotation = Rotation(
-                                                    currentRotation.x,
-                                                    newRotationY,
-                                                    currentRotation.z
-                                                )
-                                                modelNode.rotation = newRotation
-                                                
-                                                Log.d("ArView", "✅ Applied total rotation ${scaledRotation}° (base: ${lastAppliedRotation}°, gesture: ${totalGestureRotation}° -> scaled: ${scaledRotation}°)")
-                                                Log.d("ArView", "New model rotation: ${newRotationY}°")
-                                                
-                                                // Notify Flutter
-                                                objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
-                                            }
+                                            Log.d("ArView", "🔄 ROTATION CALCULATION - totalGesture: ${totalGestureRotation}°, scaled: ${scaledRotation}°, newRotationY: ${newRotationY}°")
+                                            
+                                            // Apply rotation even for small changes to see if rotation is working
+                                            val currentRotation = modelNode.rotation
+                                            val newRotation = Rotation(
+                                                currentRotation.x,
+                                                newRotationY,
+                                                currentRotation.z
+                                            )
+                                            modelNode.rotation = newRotation
+                                            
+                                            Log.d("ArView", "✅ APPLIED ROTATION - from: ${currentRotation.y}° to: ${newRotationY}°")
+                                            
+                                            // Notify Flutter
+                                            objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
+                                        } else {
+                                            Log.w("ArView", "❌ gestureStartRotation is null during ACTION_MOVE")
                                         }
                                     }
                                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -823,6 +827,8 @@ class ArView(
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
+                        } else {
+                            Log.d("ArView", "🔄 Rotation gesture ignored - node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         }
                     }
                 )
