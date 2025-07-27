@@ -61,6 +61,7 @@ import com.google.ar.core.exceptions.SessionPausedException
 import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.math.atan2
+import kotlin.math.PI
 
 class ArView(
     context: Context,
@@ -96,7 +97,7 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
-    private var lastRotationValue: Float = 0f // Track last rotation value for relative rotation calculation
+    private var lastRotationValue: Float = 0f // Track last rotation value in radians for relative rotation calculation
     private var isRotationGestureActive: Boolean = false // Track if rotation gesture is active
 
     private class PointCloudNode(
@@ -788,21 +789,36 @@ class ArView(
                                 // Reset rotation tracking at the start of a new gesture
                                 if (!isRotationGestureActive) {
                                     isRotationGestureActive = true
-                                    lastRotationValue = detector.rotation * 57.2958f // Initialize with current rotation in degrees
+                                    lastRotationValue = detector.rotation // Store in radians for better precision
                                     Log.d("ArView", "🔄 Started new rotation gesture, reset tracking")
                                     return@setOnGestureListener // Don't apply rotation on first detection
                                 }
                                 
                                 // Immediately apply rotation using RotateGestureDetector's rotation property
                                 val currentRotationRadians = detector.rotation
-                                val currentRotationDegrees = currentRotationRadians * 57.2958f // Convert radians to degrees
                                 
-                                // Calculate relative rotation change since last gesture event
-                                val deltaRotationDegrees = currentRotationDegrees - lastRotationValue
-                                lastRotationValue = currentRotationDegrees
+                                // Calculate relative rotation change with proper angle wrapping
+                                var deltaRotationRadians = currentRotationRadians - lastRotationValue
                                 
-                                // Scale down rotation sensitivity and invert direction for natural feel
-                                val scaledDeltaRotation = -deltaRotationDegrees * 0.3f // Inverted and scaled
+                                // Handle angle wrapping: if delta is > π, we went the long way around
+                                while (deltaRotationRadians > PI.toFloat()) {
+                                    deltaRotationRadians -= (2 * PI).toFloat()
+                                }
+                                while (deltaRotationRadians < -PI.toFloat()) {
+                                    deltaRotationRadians += (2 * PI).toFloat()
+                                }
+                                
+                                lastRotationValue = currentRotationRadians
+                                
+                                // Convert to degrees and scale for natural feel
+                                val deltaRotationDegrees = deltaRotationRadians * 57.2958f
+                                val scaledDeltaRotation = -deltaRotationDegrees * 0.5f // Inverted and scaled
+                                
+                                // Safety check: ignore very large deltas (potential glitches)
+                                if (abs(scaledDeltaRotation) > 45f) {
+                                    Log.w("ArView", "🚫 Ignoring large rotation delta: ${scaledDeltaRotation}°")
+                                    return@setOnGestureListener
+                                }
                                 
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
@@ -812,7 +828,7 @@ class ArView(
                                 )
                                 modelNode.rotation = newRotation
                                 
-                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation}")
+                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation} (delta: ${scaledDeltaRotation}°)")
                                 
                                 // Notify Flutter with properly formatted transform data
                                 val transformArray = modelNode.transform.toFloatArray()
