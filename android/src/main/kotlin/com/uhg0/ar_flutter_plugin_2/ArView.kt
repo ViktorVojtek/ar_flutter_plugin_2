@@ -743,13 +743,9 @@ class ArView(
                                     "transform" to transformArray.map { it.toDouble() }
                                 )
                                 objectChannel.invokeMethod("onPanChange", transformMap)
-                                true
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for gesture")
-                                false
                             }
-                        } else {
-                            false
                         }
                     },
                     onRotate = { detector, e, node ->
@@ -758,7 +754,7 @@ class ArView(
                             isRotationGestureActive = false
                             lastRotationValue = 0f
                             Log.d("ArView", "🔄 Rotation gesture ended, reset state")
-                            return@setOnGestureListener false
+                            return@setOnGestureListener
                         }
                         
                         // Handle rotation gestures for nodes
@@ -794,7 +790,7 @@ class ArView(
                                     isRotationGestureActive = true
                                     lastRotationValue = detector.rotation * 57.2958f // Initialize with current rotation in degrees
                                     Log.d("ArView", "🔄 Started new rotation gesture, reset tracking")
-                                    return@setOnGestureListener true // Don't apply rotation on first detection
+                                    return@setOnGestureListener // Don't apply rotation on first detection
                                 }
                                 
                                 // Immediately apply rotation using RotateGestureDetector's rotation property
@@ -825,13 +821,9 @@ class ArView(
                                     "transform" to transformArray.map { it.toDouble() }
                                 )
                                 objectChannel.invokeMethod("onRotationChange", transformMap)
-                                true
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
-                                false
                             }
-                        } else {
-                            false
                         }
                     }
                 )
