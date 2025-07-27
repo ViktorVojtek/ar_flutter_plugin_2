@@ -100,6 +100,7 @@ class ArView(
     private var lastRotationValue: Float = 0f // Track last rotation value in radians for relative rotation calculation
     private var isRotationGestureActive: Boolean = false // Track if rotation gesture is active
     private var lastRotationUpdateTime: Long = 0L // Track timing for gesture timeout
+    private var rotationSmoothingBuffer = mutableListOf<Float>() // Buffer for smoothing erratic detector values
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -751,6 +752,7 @@ class ArView(
                             isRotationGestureActive = false
                             lastRotationValue = 0f
                             lastRotationUpdateTime = 0L
+                            rotationSmoothingBuffer.clear()
                             Log.d("ArView", "🔄 Rotation gesture ended, reset state")
                             return@setOnGestureListener
                         }
@@ -761,6 +763,7 @@ class ArView(
                             Log.d("ArView", "🔄 Rotation gesture timeout, resetting state")
                             isRotationGestureActive = false
                             lastRotationValue = 0f
+                            rotationSmoothingBuffer.clear()
                         }
                         
                         // Handle rotation gestures for nodes
@@ -796,6 +799,8 @@ class ArView(
                                     isRotationGestureActive = true
                                     lastRotationValue = detector.rotation // Store in radians for better precision
                                     lastRotationUpdateTime = System.currentTimeMillis()
+                                    rotationSmoothingBuffer.clear()
+                                    rotationSmoothingBuffer.add(detector.rotation)
                                     Log.d("ArView", "🔄 Started new rotation gesture, reset tracking - initial rotation: ${detector.rotation}")
                                     return@setOnGestureListener // Don't apply rotation on first detection
                                 }
@@ -806,8 +811,17 @@ class ArView(
                                 // Get current rotation from detector
                                 val currentRotationRadians = detector.rotation
                                 
+                                // Add to smoothing buffer and keep only last 3 values
+                                rotationSmoothingBuffer.add(currentRotationRadians)
+                                if (rotationSmoothingBuffer.size > 3) {
+                                    rotationSmoothingBuffer.removeAt(0)
+                                }
+                                
+                                // Use smoothed value for more stable rotation
+                                val smoothedRotation = rotationSmoothingBuffer.average().toFloat()
+                                
                                 // Calculate relative rotation change with proper angle wrapping
-                                var deltaRotationRadians = currentRotationRadians - lastRotationValue
+                                var deltaRotationRadians = smoothedRotation - lastRotationValue
                                 
                                 // Handle angle wrapping: if delta is > π, we went the long way around
                                 while (deltaRotationRadians > PI.toFloat()) {
@@ -817,18 +831,21 @@ class ArView(
                                     deltaRotationRadians += (2 * PI).toFloat()
                                 }
                                 
-                                // Update last rotation value
-                                lastRotationValue = currentRotationRadians
-                                
-                                // Convert to degrees and apply sensitivity scaling
+                                // Convert to degrees for checking and logging
                                 val deltaRotationDegrees = deltaRotationRadians * 57.2958f
-                                val scaledDeltaRotation = deltaRotationDegrees * 1.0f // Removed inversion and kept natural direction
                                 
-                                // Enhanced safety check with better thresholds
-                                if (abs(scaledDeltaRotation) > 15f) {
-                                    Log.w("ArView", "🚫 Ignoring large rotation delta: ${scaledDeltaRotation}° (raw: ${deltaRotationDegrees}°)")
+                                // More aggressive safety check - detector values are very unstable
+                                if (abs(deltaRotationDegrees) > 5f) {
+                                    Log.w("ArView", "🚫 Ignoring unstable rotation delta: ${deltaRotationDegrees}° (raw detector: ${currentRotationRadians})")
+                                    // Don't update lastRotationValue for bad readings
                                     return@setOnGestureListener
                                 }
+                                
+                                // Update last rotation value only for good readings
+                                lastRotationValue = smoothedRotation
+                                
+                                // Apply sensitivity scaling - use smaller movements for stability
+                                val scaledDeltaRotation = deltaRotationDegrees * 2.0f // Amplify small movements
                                 
                                 // Apply rotation only around Y-axis to avoid gimbal lock
                                 val currentRotation = modelNode.rotation
@@ -842,6 +859,7 @@ class ArView(
                                 Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation")
                                 Log.d("ArView", "   FROM: ${currentRotation} TO: ${newRotation}")
                                 Log.d("ArView", "   Raw detector rotation: ${currentRotationRadians} rad (${currentRotationRadians * 57.2958f}°)")
+                                Log.d("ArView", "   Smoothed rotation: ${smoothedRotation} rad (${smoothedRotation * 57.2958f}°)")
                                 Log.d("ArView", "   Delta: ${deltaRotationRadians} rad (${deltaRotationDegrees}°)")
                                 Log.d("ArView", "   Applied delta: ${scaledDeltaRotation}°")
                                 
