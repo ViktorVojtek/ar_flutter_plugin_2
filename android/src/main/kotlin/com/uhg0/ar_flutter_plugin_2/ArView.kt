@@ -748,6 +748,7 @@ class ArView(
                     },
                     onRotate = { detector, e, node ->
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
+                        Log.d("ArView", "🔄 Detector rotation: ${detector.rotation} rad (${detector.rotation * 57.2958f}°)")
                         
                         // Handle rotation gestures for nodes using SceneView's native implementation
                         if (node != null && this@ArView.handleRotation) {
@@ -772,7 +773,19 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                Log.d("ArView", "✅ Native rotation applied to node ${modelNode.name}")
+                                // Apply the rotation from the detector to the node
+                                // Convert detector rotation to degrees and apply to Y-axis
+                                val rotationDegrees = detector.rotation * 57.2958f * 0.1f // Scale down for reasonable speed
+                                val currentRotation = modelNode.rotation
+                                val newRotation = Rotation(
+                                    currentRotation.x,
+                                    currentRotation.y + rotationDegrees,
+                                    currentRotation.z
+                                )
+                                modelNode.rotation = newRotation
+                                
+                                Log.d("ArView", "✅ Applied rotation ${rotationDegrees}° to node ${modelNode.name}")
+                                Log.d("ArView", "   FROM: ${currentRotation} TO: ${newRotation}")
                                 
                                 // Notify Flutter with just the node name
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
