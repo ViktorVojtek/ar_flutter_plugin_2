@@ -780,12 +780,15 @@ class ArView(
                                     Log.d("ArView", "🔄 NEW GESTURE - gestureStart: ${gestureStartRotation}°, current model: ${lastAppliedRotation}°")
                                 }
                                 
-                                // Calculate delta from the gesture start point
+                                // Calculate delta from the gesture start point using proper circular angle difference
                                 var deltaRotation = currentDetectorRotation - gestureStartRotation!!
                                 
-                                // Handle angle wrapping (crossing 0°/360° boundary)
-                                while (deltaRotation > 180f) deltaRotation -= 360f
-                                while (deltaRotation < -180f) deltaRotation += 360f
+                                // Handle angle wrapping correctly - find shortest angular distance
+                                if (deltaRotation > 180f) {
+                                    deltaRotation -= 360f
+                                } else if (deltaRotation < -180f) {
+                                    deltaRotation += 360f
+                                }
                                 
                                 // Scale the rotation for responsive movement
                                 val scaledDelta = deltaRotation * 1.5f
