@@ -330,17 +330,9 @@ class ArView(
                             if (pansEnabled && hasValidStart) {
                                 Log.d("ArView", "NEW onMove: Starting movement logic for node $name")
                                 
-                                // Get current touch coordinates (calculate average for multi-touch)
-                                var currentX = 0f
-                                var currentY = 0f
-                                val pointerCount = e.pointerCount
-                                
-                                for (i in 0 until pointerCount) {
-                                    currentX += e.getX(i)
-                                    currentY += e.getY(i)
-                                }
-                                currentX /= pointerCount
-                                currentY /= pointerCount
+                                // Use raw MotionEvent coordinates directly (first pointer)
+                                val currentX = e.rawX
+                                val currentY = e.rawY
                                 
                                 // Calculate delta from last position (frame-to-frame movement)
                                 val deltaX = currentX - lastTouchX
@@ -348,11 +340,16 @@ class ArView(
                                 
                                 Log.d("ArView", "NEW Touch coordinates - current: ($currentX, $currentY), last: ($lastTouchX, $lastTouchY)")
                                 Log.d("ArView", "NEW Touch delta: ($deltaX, $deltaY)")
+                                Log.d("ArView", "NEW Pointer count: ${e.pointerCount}, Action: ${e.action}")
+                                
+                                // Always update coordinates, regardless of movement threshold
+                                lastTouchX = currentX
+                                lastTouchY = currentY
                                 
                                 // Only apply movement if there's significant delta
-                                if (abs(deltaX) > 0.5f || abs(deltaY) > 0.5f) {
+                                if (abs(deltaX) > 1.0f || abs(deltaY) > 1.0f) {
                                     // Convert screen delta to world space delta
-                                    val scaleFactor = 0.002f // Slightly increased sensitivity
+                                    val scaleFactor = 0.001f // Reduced sensitivity for testing
                                     val worldDeltaX = deltaX * scaleFactor
                                     val worldDeltaZ = deltaY * scaleFactor // Y screen movement affects Z world movement
                                     
@@ -371,14 +368,10 @@ class ArView(
                                         scale = transform.scale
                                     )
                                     
-                                    Log.d("ArView", "NEW Applied movement - Delta: ($deltaX, $deltaY), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
+                                    Log.d("ArView", "NEW Applied movement - Delta: ($deltaX, $deltaY), World Delta: ($worldDeltaX, $worldDeltaZ), New pos: (${newPosition.x}, ${newPosition.y}, ${newPosition.z})")
                                 } else {
                                     Log.d("ArView", "NEW Small delta ignored: ($deltaX, $deltaY)")
                                 }
-                                
-                                // Update last touch coordinates for next frame
-                                lastTouchX = currentX
-                                lastTouchY = currentY
                                 
                                 // Notify Flutter about the movement
                                 objectChannel.invokeMethod("onPanChange", name)
@@ -401,20 +394,13 @@ class ArView(
                             // Store the initial position and touch coordinates
                             panStartPosition = transform.position
                             
-                            // Calculate average touch position for multi-touch
-                            var startX = 0f
-                            var startY = 0f
-                            val pointerCount = e.pointerCount
-                            
-                            for (i in 0 until pointerCount) {
-                                startX += e.getX(i)
-                                startY += e.getY(i)
-                            }
-                            lastTouchX = startX / pointerCount
-                            lastTouchY = startY / pointerCount
+                            // Use raw coordinates for initial touch position
+                            lastTouchX = e.rawX
+                            lastTouchY = e.rawY
                             
                             Log.d("ArView", "Pan gesture BEGIN - Start pos: (${panStartPosition!!.x}, ${panStartPosition!!.y}, ${panStartPosition!!.z})")
                             Log.d("ArView", "Pan gesture BEGIN - Start touch: ($lastTouchX, $lastTouchY)")
+                            Log.d("ArView", "Pan gesture BEGIN - Pointer count: ${e.pointerCount}, Action: ${e.action}")
                             
                             objectChannel.invokeMethod("onPanStart", name)
                             return true

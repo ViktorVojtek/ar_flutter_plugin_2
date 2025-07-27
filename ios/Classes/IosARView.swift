@@ -395,7 +395,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         }
     }
 
-    func addNode(dict_node: Dictionary<String, Any>, dict_anchor: Dictionary<String, Any>? = nil) -> Future<Bool, Never> {
+    func addNode(dict_node: Dictionary<String, Any>, dict_anchor: Dictionary<String, Any>? = nil) -> Future<String?, Never> {
 
         return Future {promise in
             
@@ -405,29 +405,29 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromGltf(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                        let nodeName = dict_node["name"] as? String
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
+                                        promise(.success(nodeName))
                                     } else {
-                                        promise(.success(false))
+                                        promise(.success(nil))
                                     }
                                 default:
-                                    promise(.success(false))
+                                    promise(.success(nil))
                                 }
                             
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
+                            promise(.success(nodeName))
                         }
-                        promise(.success(false))
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
-                        promise(.success(false))
+                        promise(.success(nil))
                     }
                     break
                 case 1: // GLB Model from the web
@@ -437,29 +437,29 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                     completion in print("Async Model Downloading Task completed: ", completion)
                     }, receiveValue: { val in
                         if let node: SCNNode = val {
+                            let nodeName = dict_node["name"] as? String
                             if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                                 switch anchorType{
                                     case 0: //PlaneAnchor
                                         if let anchor = self.anchorCollection[anchorName]{
                                             // Attach node to the top-level node of the specified anchor
                                             self.sceneView.node(for: anchor)?.addChildNode(node)
-                                            promise(.success(true))
+                                            promise(.success(nodeName))
                                         } else {
-                                            promise(.success(false))
+                                            promise(.success(nil))
                                         }
                                     default:
-                                        promise(.success(false))
+                                        promise(.success(nil))
                                     }
                                 
                             } else {
                                 // Attach to top-level node of the scene
                                 self.sceneView.scene.rootNode.addChildNode(node)
-                                promise(.success(true))
+                                promise(.success(nodeName))
                             }
-                            promise(.success(false))
                         } else {
                             DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["name"] as! String)"])}
-                            promise(.success(false))
+                            promise(.success(nil))
                         }
                     }).store(in: &self.cancellableCollection)
                     break
@@ -471,29 +471,29 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
  
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGLB(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                        let nodeName = dict_node["name"] as? String
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
+                                        promise(.success(nodeName))
                                     } else {
-                                        promise(.success(false))
+                                        promise(.success(nil))
                                     }
                                 default:
-                                    promise(.success(false))
+                                    promise(.success(nil))
                                 }
                             
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
+                            promise(.success(nodeName))
                         }
-                        promise(.success(false))
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
-                        promise(.success(false))
+                        promise(.success(nil))
                     }
                     break
                 case 3: //fileSystemAppFolderGLTF2
@@ -504,33 +504,33 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGltf(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                        let nodeName = dict_node["name"] as? String
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
+                                        promise(.success(nodeName))
                                     } else {
-                                        promise(.success(false))
+                                        promise(.success(nil))
                                     }
                                 default:
-                                    promise(.success(false))
+                                    promise(.success(nil))
                                 }
                             
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
+                            promise(.success(nodeName))
                         }
-                        promise(.success(false))
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
-                        promise(.success(false))
+                        promise(.success(nil))
                     }
                     break
                 default:
-                    promise(.success(false))
+                    promise(.success(nil))
             }
             
         }
