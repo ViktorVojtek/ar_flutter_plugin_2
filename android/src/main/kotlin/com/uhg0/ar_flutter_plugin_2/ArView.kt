@@ -95,7 +95,8 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
-    private var lastRotationValue: Float? = null // Track last rotation value for delta calculation
+    private var gestureStartRotation: Float? = null // Starting rotation value for the current gesture
+    private var lastAppliedRotation: Float = 0f // Track the cumulative rotation applied to avoid resets
 
 
     private class PointCloudNode(
@@ -769,46 +770,55 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Calculate the rotation delta properly
-                                val rotationDeltaDegrees = if (lastRotationValue != null) {
-                                    // Calculate the delta between current and previous rotation
-                                    var delta = currentDetectorRotation - lastRotationValue!!
-                                    
-                                    // Handle angle wrapping (crossing 0°/360° boundary)
-                                    while (delta > 180f) delta -= 360f
-                                    while (delta < -180f) delta += 360f
-                                    
-                                    // Scale the rotation for more responsive movement
-                                    delta * 1.5f  // Increased from 0.5f to 1.5f for better responsiveness
-                                } else {
-                                    // First rotation event, no delta to apply
-                                    0f
-                                }
-                                
-                                // Update the last rotation value for next delta calculation
-                                lastRotationValue = currentDetectorRotation
-                                
-                                // Apply rotation around Y-axis (vertical axis for typical object rotation)
-                                if (kotlin.math.abs(rotationDeltaDegrees) > 0.05f) { // Reduced threshold from 0.1f to 0.05f for smoother rotation
-                                    val currentRotation = modelNode.rotation
-                                    val newRotation = Rotation(
-                                        currentRotation.x,
-                                        currentRotation.y + rotationDeltaDegrees,
-                                        currentRotation.z
-                                    )
-                                    modelNode.rotation = newRotation
-                                    
-                                    Log.d("ArView", "✅ Applied delta rotation ${rotationDeltaDegrees}° to node ${modelNode.name}")
-                                    Log.d("ArView", "Previous rotation: ${currentRotation.y}°, New rotation: ${newRotation.y}°")
-                                    
-                                    // Notify Flutter
-                                    objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
-                                }
-                                
-                                // Reset tracking when gesture ends
-                                if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
-                                    lastRotationValue = null
-                                    Log.d("ArView", "🔄 Rotation gesture ended, reset tracking")
+                                // Handle gesture start and delta calculation
+                                when (e.action) {
+                                    MotionEvent.ACTION_DOWN -> {
+                                        // New gesture started - establish baseline
+                                        gestureStartRotation = currentDetectorRotation
+                                        lastAppliedRotation = modelNode.rotation.y
+                                        Log.d("ArView", "🔄 Rotation gesture started - baseline: ${gestureStartRotation}°, current model rotation: ${lastAppliedRotation}°")
+                                    }
+                                    MotionEvent.ACTION_MOVE -> {
+                                        // Calculate rotation delta from gesture start
+                                        if (gestureStartRotation != null) {
+                                            var totalGestureRotation = currentDetectorRotation - gestureStartRotation!!
+                                            
+                                            // Handle angle wrapping (crossing 0°/360° boundary)
+                                            while (totalGestureRotation > 180f) totalGestureRotation -= 360f
+                                            while (totalGestureRotation < -180f) totalGestureRotation += 360f
+                                            
+                                            // Scale the rotation for responsive movement
+                                            val scaledRotation = totalGestureRotation * 1.5f
+                                            
+                                            // Apply rotation: base rotation + current gesture rotation
+                                            val newRotationY = lastAppliedRotation + scaledRotation
+                                            
+                                            // Only apply if change is significant
+                                            if (kotlin.math.abs(scaledRotation) > 0.05f) {
+                                                val currentRotation = modelNode.rotation
+                                                val newRotation = Rotation(
+                                                    currentRotation.x,
+                                                    newRotationY,
+                                                    currentRotation.z
+                                                )
+                                                modelNode.rotation = newRotation
+                                                
+                                                Log.d("ArView", "✅ Applied total rotation ${scaledRotation}° (base: ${lastAppliedRotation}°, gesture: ${totalGestureRotation}° -> scaled: ${scaledRotation}°)")
+                                                Log.d("ArView", "New model rotation: ${newRotationY}°")
+                                                
+                                                // Notify Flutter
+                                                objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
+                                            }
+                                        }
+                                    }
+                                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                        // Gesture ended - save final rotation as new base
+                                        if (gestureStartRotation != null) {
+                                            lastAppliedRotation = modelNode.rotation.y
+                                            Log.d("ArView", "🔄 Rotation gesture ended - final rotation: ${lastAppliedRotation}°")
+                                        }
+                                        gestureStartRotation = null
+                                    }
                                 }
                             } else {
                                 Log.w("ArView", "❌ No ModelNode found for rotation gesture")
