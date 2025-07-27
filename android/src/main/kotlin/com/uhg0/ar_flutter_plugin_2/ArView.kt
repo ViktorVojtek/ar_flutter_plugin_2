@@ -734,10 +734,11 @@ class ArView(
                                 
                                 Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
                                 
-                                // Notify Flutter
+                                // Notify Flutter with properly formatted transform data
+                                val transformArray = modelNode.transform.toFloatArray()
                                 val transformMap = mapOf(
-                                    "name" to modelNode.name,
-                                    "transform" to modelNode.transform.toFloatArray().toList()
+                                    "name" to (modelNode.name ?: ""),
+                                    "transform" to transformArray.map { it.toDouble() }
                                 )
                                 objectChannel.invokeMethod("onPanChange", transformMap)
                                 true
@@ -781,20 +782,22 @@ class ArView(
                                 // Immediately apply rotation using RotateGestureDetector's rotation property
                                 val rotationRadians = detector.rotation
                                 val rotationDegrees = rotationRadians * 57.2958f // Convert radians to degrees
+                                val scaledRotationDegrees = rotationDegrees * 0.1f // Scale down rotation sensitivity by 90%
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
                                     currentRotation.x,
-                                    currentRotation.y + rotationDegrees,
+                                    currentRotation.y + scaledRotationDegrees,
                                     currentRotation.z
                                 )
                                 modelNode.rotation = newRotation
                                 
                                 Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} rotation from ${currentRotation} to: ${newRotation}")
                                 
-                                // Notify Flutter
+                                // Notify Flutter with properly formatted transform data
+                                val transformArray = modelNode.transform.toFloatArray()
                                 val transformMap = mapOf(
-                                    "name" to modelNode.name,
-                                    "transform" to modelNode.transform.toFloatArray().toList()
+                                    "name" to (modelNode.name ?: ""),
+                                    "transform" to transformArray.map { it.toDouble() }
                                 )
                                 objectChannel.invokeMethod("onRotationChange", transformMap)
                                 true
