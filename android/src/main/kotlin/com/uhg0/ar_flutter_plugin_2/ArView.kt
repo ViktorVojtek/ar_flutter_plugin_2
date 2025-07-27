@@ -839,9 +839,9 @@ class ArView(
                                 
                                 Log.d("ArView", "🔄 Rotation calculation - deltaRadians: ${deltaRotationRadians}, deltaDegrees: ${deltaRotationDegrees}")
                                 
-                                // Temporarily very permissive safety check for debugging
-                                if (abs(deltaRotationDegrees) > 90f) {
-                                    Log.w("ArView", "🚫 Ignoring extremely large rotation delta: ${deltaRotationDegrees}° (raw detector: ${currentRotationRadians})")
+                                // More reasonable safety check for stable rotation
+                                if (abs(deltaRotationDegrees) > 45f) {
+                                    Log.w("ArView", "🚫 Ignoring large rotation delta: ${deltaRotationDegrees}° (raw detector: ${currentRotationRadians})")
                                     // Don't update lastRotationValue for bad readings
                                     return@setOnGestureListener
                                 } else {
@@ -851,8 +851,8 @@ class ArView(
                                 // Update last rotation value only for good readings
                                 lastRotationValue = smoothedRotation
                                 
-                                // Apply sensitivity scaling - use smaller movements for stability
-                                val scaledDeltaRotation = deltaRotationDegrees * 2.0f // Amplify small movements
+                                // Apply sensitivity scaling - much more conservative now
+                                val scaledDeltaRotation = deltaRotationDegrees * 0.1f // Scale down for natural rotation speed
                                 
                                 // Apply rotation only around Y-axis to avoid gimbal lock
                                 val currentRotation = modelNode.rotation
