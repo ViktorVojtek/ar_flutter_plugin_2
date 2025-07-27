@@ -778,8 +778,8 @@ class ArView(
                                     while (delta > 180f) delta -= 360f
                                     while (delta < -180f) delta += 360f
                                     
-                                    // Scale down the rotation for smoother movement
-                                    delta * 0.5f
+                                    // Scale the rotation for more responsive movement
+                                    delta * 1.5f  // Increased from 0.5f to 1.5f for better responsiveness
                                 } else {
                                     // First rotation event, no delta to apply
                                     0f
@@ -789,7 +789,7 @@ class ArView(
                                 lastRotationValue = currentDetectorRotation
                                 
                                 // Apply rotation around Y-axis (vertical axis for typical object rotation)
-                                if (kotlin.math.abs(rotationDeltaDegrees) > 0.1f) { // Only apply if delta is significant
+                                if (kotlin.math.abs(rotationDeltaDegrees) > 0.05f) { // Reduced threshold from 0.1f to 0.05f for smoother rotation
                                     val currentRotation = modelNode.rotation
                                     val newRotation = Rotation(
                                         currentRotation.x,
