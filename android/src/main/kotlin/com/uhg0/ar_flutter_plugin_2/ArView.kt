@@ -748,11 +748,79 @@ class ArView(
                     },
                     onRotate = { detector, e, node ->
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
-                        Log.d("ArView", "🔄 Detector rotation: ${detector.rotation} rad (${detector.rotation * 57.2958f}°)")
                         
                         // Handle rotation gestures for nodes using SceneView's native implementation
                         if (node != null && this@ArView.handleRotation) {
-                            Log.d("ArView", "Native rotation detected on node: ${node.name}")
+                            
+                            // Handle gesture lifecycle properly for rotation gestures
+                            val currentTime = System.currentTimeMillis()
+                            when {
+                                // Start of rotation gesture (first touch or new gesture)
+                                !isRotationGestureActive -> {
+                                    lastRotationValue = detector.rotation
+                                    isRotationGestureActive = true
+                                    lastRotationUpdateTime = currentTime
+                                    rotationSmoothingBuffer.clear()
+                                    Log.d("ArView", "🔄 Rotation gesture STARTED - baseline: ${detector.rotation} rad")
+                                    return@setOnGestureListener
+                                }
+                                
+                                // End of rotation gesture
+                                e.action == MotionEvent.ACTION_UP || 
+                                e.action == MotionEvent.ACTION_CANCEL ||
+                                e.action == MotionEvent.ACTION_POINTER_UP -> {
+                                    isRotationGestureActive = false
+                                    rotationSmoothingBuffer.clear()
+                                    Log.d("ArView", "🔄 Rotation gesture ENDED")
+                                    return@setOnGestureListener
+                                }
+                                
+                                // Timeout protection - reset if too much time has passed
+                                currentTime - lastRotationUpdateTime > 100 -> {
+                                    lastRotationValue = detector.rotation
+                                    lastRotationUpdateTime = currentTime
+                                    rotationSmoothingBuffer.clear()
+                                    Log.d("ArView", "🔄 Rotation gesture TIMEOUT RESET")
+                                    return@setOnGestureListener
+                                }
+                            }
+                            
+                            // Calculate incremental rotation (difference from last frame)
+                            val currentRotationRad = detector.rotation
+                            var deltaRotationRad = currentRotationRad - lastRotationValue
+                            lastRotationValue = currentRotationRad
+                            lastRotationUpdateTime = currentTime
+                            
+                            // Clamp delta to prevent sudden jumps (max 30 degrees per frame)
+                            val maxDeltaRad = 30.0f * PI.toFloat() / 180.0f
+                            deltaRotationRad = when {
+                                deltaRotationRad > maxDeltaRad -> {
+                                    Log.w("ArView", "⚠️ Clamping large positive delta: ${deltaRotationRad * 57.2958f}° -> ${maxDeltaRad * 57.2958f}°")
+                                    maxDeltaRad
+                                }
+                                deltaRotationRad < -maxDeltaRad -> {
+                                    Log.w("ArView", "⚠️ Clamping large negative delta: ${deltaRotationRad * 57.2958f}° -> ${-maxDeltaRad * 57.2958f}°")
+                                    -maxDeltaRad
+                                }
+                                else -> deltaRotationRad
+                            }
+                            
+                            // Apply smoothing buffer to reduce jitter
+                            rotationSmoothingBuffer.add(deltaRotationRad)
+                            if (rotationSmoothingBuffer.size > 3) {
+                                rotationSmoothingBuffer.removeAt(0)
+                            }
+                            
+                            // Use smoothed delta (average of last few frames)
+                            val smoothedDelta = rotationSmoothingBuffer.average().toFloat()
+                            
+                            // Skip very small movements to reduce noise
+                            val minDeltaThreshold = 0.005f // ~0.3 degrees
+                            if (abs(smoothedDelta) < minDeltaThreshold) {
+                                return@setOnGestureListener
+                            }
+                            
+                            Log.d("ArView", "🔄 Raw delta: ${deltaRotationRad * 57.2958f}°, Smoothed: ${smoothedDelta * 57.2958f}°")
                             
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
@@ -773,9 +841,9 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Apply the rotation from the detector to the node
-                                // Convert detector rotation to degrees and apply to Y-axis
-                                val rotationDegrees = detector.rotation * 57.2958f * 0.1f // Scale down for reasonable speed
+                                // Apply the smoothed incremental rotation
+                                // Use moderate scaling for natural feel
+                                val rotationDegrees = smoothedDelta * 57.2958f * 1.5f // Balanced sensitivity
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
                                     currentRotation.x,
@@ -784,13 +852,12 @@ class ArView(
                                 )
                                 modelNode.rotation = newRotation
                                 
-                                Log.d("ArView", "✅ Applied rotation ${rotationDegrees}° to node ${modelNode.name}")
-                                Log.d("ArView", "   FROM: ${currentRotation} TO: ${newRotation}")
+                                Log.d("ArView", "✅ Applied smooth rotation ${rotationDegrees}° to node ${modelNode.name}")
                                 
                                 // Notify Flutter with just the node name
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
                             } else {
-                                Log.w("ArView", "❌ No ModelNode found for native rotation gesture")
+                                Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
                         }
                     }
