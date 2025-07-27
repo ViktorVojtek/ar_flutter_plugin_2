@@ -765,18 +765,20 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
-                                // Use ARCore's rotation delta with quaternion Y-axis rotation
-                                val rotationDelta = detector.rotationDelta
-                                Log.d("ArView", "🔄 Rotation delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
+                                // Use SceneView's rotation value with Y-axis only rotation
+                                val currentRotation = detector.rotation
+                                Log.d("ArView", "🔄 Rotation angle: ${Math.toDegrees(currentRotation.toDouble())}°")
                                 
-                                // Create Y-axis rotation quaternion from the delta
-                                val yAxis = io.github.sceneview.math.Direction(0f, 1f, 0f)
-                                val yawDeltaQuat = io.github.sceneview.math.Quaternion.fromAxisAngle(yAxis, rotationDelta)
+                                // Apply Y-axis rotation directly to the model's rotation
+                                val currentModelRotation = modelNode.rotation
+                                val newRotation = Rotation(
+                                    currentModelRotation.x,
+                                    currentRotation, // Apply rotation around Y-axis
+                                    currentModelRotation.z
+                                )
+                                modelNode.rotation = newRotation
                                 
-                                // Apply the quaternion rotation to the model
-                                modelNode.quaternion = modelNode.quaternion * yawDeltaQuat
-                                
-                                Log.d("ArView", "✅ APPLIED QUATERNION ROTATION - delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
+                                Log.d("ArView", "✅ APPLIED Y-AXIS ROTATION - angle: ${Math.toDegrees(currentRotation.toDouble())}°")
                                 
                                 // Notify Flutter
                                 objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
