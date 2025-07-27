@@ -96,6 +96,8 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
+    private var lastRotationValue: Float = 0f // Track last rotation value for relative rotation calculation
+    private var isRotationGestureActive: Boolean = false // Track if rotation gesture is active
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -751,6 +753,14 @@ class ArView(
                         }
                     },
                     onRotate = { detector, e, node ->
+                        // Reset gesture state when gesture ends
+                        if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
+                            isRotationGestureActive = false
+                            lastRotationValue = 0f
+                            Log.d("ArView", "🔄 Rotation gesture ended, reset state")
+                            return@setOnGestureListener false
+                        }
+                        
                         // Handle rotation gestures for nodes
                         if (node != null && this@ArView.handleRotation) {
                             Log.d("ArView", "Rotation detected on node: ${node.name} - handleRotation: ${this@ArView.handleRotation}")
@@ -779,14 +789,29 @@ class ArView(
                                 modelNode.isRotationEditable = true
                                 modelNode.isTouchable = true
                                 
+                                // Reset rotation tracking at the start of a new gesture
+                                if (!isRotationGestureActive) {
+                                    isRotationGestureActive = true
+                                    lastRotationValue = detector.rotation * 57.2958f // Initialize with current rotation in degrees
+                                    Log.d("ArView", "🔄 Started new rotation gesture, reset tracking")
+                                    return@setOnGestureListener true // Don't apply rotation on first detection
+                                }
+                                
                                 // Immediately apply rotation using RotateGestureDetector's rotation property
-                                val rotationRadians = detector.rotation
-                                val rotationDegrees = rotationRadians * 57.2958f // Convert radians to degrees
-                                val scaledRotationDegrees = rotationDegrees * 0.1f // Scale down rotation sensitivity by 90%
+                                val currentRotationRadians = detector.rotation
+                                val currentRotationDegrees = currentRotationRadians * 57.2958f // Convert radians to degrees
+                                
+                                // Calculate relative rotation change since last gesture event
+                                val deltaRotationDegrees = currentRotationDegrees - lastRotationValue
+                                lastRotationValue = currentRotationDegrees
+                                
+                                // Scale down rotation sensitivity and invert direction for natural feel
+                                val scaledDeltaRotation = -deltaRotationDegrees * 0.3f // Inverted and scaled
+                                
                                 val currentRotation = modelNode.rotation
                                 val newRotation = Rotation(
                                     currentRotation.x,
-                                    currentRotation.y + scaledRotationDegrees,
+                                    currentRotation.y + scaledDeltaRotation,
                                     currentRotation.z
                                 )
                                 modelNode.rotation = newRotation
