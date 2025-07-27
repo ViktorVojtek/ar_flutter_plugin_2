@@ -526,6 +526,16 @@ class ArView(
             
             sceneView.apply {
                 // No HDR environment loaded
+                lightEstimationEnabled = false
+
+                environment.intensity = 2.5f // Set a default intensity for the environment light
+
+                addChildNode(
+                    AmbientLight(
+                    color     = colorOf(1f, 1f, 1f, 1f),
+                    intensity = 5_000f
+                    )
+                )
 
                 planeRenderer.isEnabled = argShowPlanes
                 planeRenderer.isVisible = argShowPlanes
