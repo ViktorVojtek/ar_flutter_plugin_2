@@ -22,6 +22,7 @@ import com.google.ar.core.Pose
 import com.google.ar.core.TrackingState
 import com.uhg0.ar_flutter_plugin_2.Serialization.deserializeMatrix4
 import com.uhg0.ar_flutter_plugin_2.Serialization.serializeHitResult
+import com.uhg0.ar_flutter_plugin_2.Serialization.serializeARCoreHitResult
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -579,7 +580,7 @@ class ArView(
 
                 // Set up gesture handling - Use the current SceneView 2.2.1 API
                 setOnGestureListener(
-                    onSingleTapConfirmed = { motionEvent: MotionEvent, node: Node? ->
+                    onSingleTapConfirmed = { motionEvent, node ->
                         Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: ${this@ArView.handleTaps}, node: ${node?.name}")
                         if (node != null) {
                             Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
@@ -636,7 +637,7 @@ class ArView(
                                     Log.d("ArView", "Hit Results count: ${hitResults.size}")
 
                                     val serializedResults = hitResults.map { hitResult ->
-                                        serializeHitResult(hitResult)
+                                        serializeARCoreHitResult(hitResult)
                                     }
                                     
                                     if (this@ArView.handleTaps) {
@@ -650,7 +651,7 @@ class ArView(
                             }
                         }
                     },
-                    onScroll = { e1: MotionEvent?, e2: MotionEvent, node: Node?, distanceX: Float, distanceY: Float ->
+                    onScroll = { e1, e2, node, distanceX, distanceY ->
                         // Handle pan gestures for nodes
                         if (node != null && this@ArView.handlePans) {
                             Log.d("ArView", "Scroll detected on node: ${node.name}")
@@ -698,7 +699,7 @@ class ArView(
                             false
                         }
                     },
-                    onRotate = { detector: RotateGestureDetector, e: MotionEvent, node: Node? ->
+                    onRotate = { detector, e, node ->
                         // Handle rotation gestures for nodes
                         if (node != null && this@ArView.handleRotation) {
                             Log.d("ArView", "Rotation detected on node: ${node.name}")
@@ -718,13 +719,14 @@ class ArView(
                             }
                             
                             if (modelNode != null && modelNode.isRotationEditable) {
-                                // Apply rotation
-                                val rotationDelta = detector.rotationDelta
+                                // Apply rotation using RotateGestureDetector's rotation property
+                                val rotationRadians = detector.rotation
+                                val rotationDegrees = rotationRadians * 57.2958f // Convert radians to degrees
                                 val currentRotation = modelNode.rotation
                                 
                                 modelNode.rotation = Rotation(
                                     currentRotation.x,
-                                    currentRotation.y + rotationDelta * 57.2958f, // Convert radians to degrees
+                                    currentRotation.y + rotationDegrees,
                                     currentRotation.z
                                 )
                                 

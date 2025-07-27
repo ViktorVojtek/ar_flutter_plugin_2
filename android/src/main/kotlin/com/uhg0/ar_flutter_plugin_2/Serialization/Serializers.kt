@@ -7,6 +7,31 @@ import io.github.sceneview.math.Position as ScenePosition
 import io.github.sceneview.math.Rotation as SceneRotation
 import kotlin.math.sqrt
 
+fun serializeARCoreHitResult(hitResult: HitResult): HashMap<String, Any> {
+    val serializedHit = HashMap<String, Any>()
+    
+    // Determine type based on trackable
+    when (hitResult.trackable) {
+        is Plane -> serializedHit["type"] = 1 // Type plane
+        else -> serializedHit["type"] = 2 // Type point (feature points, depth points)
+    }
+    
+    // Calculate distance from camera
+    val pose = hitResult.hitPose
+    val translation = pose.translation
+    val distance = sqrt(
+        translation[0] * translation[0] +
+        translation[1] * translation[1] +
+        translation[2] * translation[2]
+    ).toDouble()
+    serializedHit["distance"] = distance
+    
+    // Serialize the world transform matrix
+    serializedHit["worldTransform"] = serializePose(pose)
+    
+    return serializedHit
+}
+
 fun serializeHitResult(hit: Map<String, Any>): HashMap<String, Any> {
     val serializedHit = HashMap<String, Any>()
     
