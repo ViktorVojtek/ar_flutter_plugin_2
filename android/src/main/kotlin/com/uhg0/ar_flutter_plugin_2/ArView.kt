@@ -432,7 +432,7 @@ class ArView(
         Log.d("ArView", "Total nodes in map: ${nodesMap.size}")
         Log.d("ArView", "Node names: ${nodesMap.keys}")
         nodesMap.forEach { (name, node) ->
-            Log.d("ArView", "Node $name - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+            Log.d("ArView", "Node $name - isPositionEditable: ${node.isPositionEditable}, isRotationEditable: ${node.isRotationEditable}, isTouchable: ${node.isTouchable}")
         }
         Log.d("ArView", "SceneView gesture handling configured via setOnGestureListener")
         Log.d("ArView", "=== END GESTURE DEBUG ===")
@@ -582,6 +582,12 @@ class ArView(
                 setOnGestureListener(
                     onSingleTapConfirmed = { motionEvent, node ->
                         Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: ${this@ArView.handleTaps}, node: ${node?.name}")
+                        
+                        // Debug gesture configuration when a node is tapped
+                        if (node != null) {
+                            debugGestureConfiguration()
+                        }
+                        
                         if (node != null) {
                             Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
                             
@@ -654,14 +660,16 @@ class ArView(
                     onScroll = { e1, e2, node, distance ->
                         // Handle pan gestures for nodes
                         if (node != null && this@ArView.handlePans) {
-                            Log.d("ArView", "Scroll detected on node: ${node.name}")
+                            Log.d("ArView", "Scroll detected on node: ${node.name} - handlePans: ${this@ArView.handlePans}")
                             
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
                             var currentNode: Node? = node
                             
                             while (currentNode != null) {
+                                Log.d("ArView", "Checking node: ${currentNode.name}, type: ${currentNode.javaClass.simpleName}")
                                 if (currentNode is ModelNode && currentNode.name != null) {
+                                    Log.d("ArView", "Found ModelNode: ${currentNode.name}, in nodesMap: ${nodesMap.containsKey(currentNode.name)}")
                                     if (nodesMap.containsKey(currentNode.name)) {
                                         modelNode = currentNode
                                         break
@@ -670,6 +678,7 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             
+                            Log.d("ArView", "ModelNode found: ${modelNode?.name}, isPositionEditable: ${modelNode?.isPositionEditable}")
                             if (modelNode != null && modelNode.isPositionEditable) {
                                 // Apply the pan movement using Float2 distance
                                 val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
@@ -702,14 +711,16 @@ class ArView(
                     onRotate = { detector, e, node ->
                         // Handle rotation gestures for nodes
                         if (node != null && this@ArView.handleRotation) {
-                            Log.d("ArView", "Rotation detected on node: ${node.name}")
+                            Log.d("ArView", "Rotation detected on node: ${node.name} - handleRotation: ${this@ArView.handleRotation}")
                             
                             // Find the managed ModelNode
                             var modelNode: ModelNode? = null
                             var currentNode: Node? = node
                             
                             while (currentNode != null) {
+                                Log.d("ArView", "Checking rotation node: ${currentNode.name}, type: ${currentNode.javaClass.simpleName}")
                                 if (currentNode is ModelNode && currentNode.name != null) {
+                                    Log.d("ArView", "Found ModelNode for rotation: ${currentNode.name}, in nodesMap: ${nodesMap.containsKey(currentNode.name)}")
                                     if (nodesMap.containsKey(currentNode.name)) {
                                         modelNode = currentNode
                                         break
@@ -718,6 +729,7 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             
+                            Log.d("ArView", "ModelNode found for rotation: ${modelNode?.name}, isRotationEditable: ${modelNode?.isRotationEditable}")
                             if (modelNode != null && modelNode.isRotationEditable) {
                                 // Apply rotation using RotateGestureDetector's rotation property
                                 val rotationRadians = detector.rotation
