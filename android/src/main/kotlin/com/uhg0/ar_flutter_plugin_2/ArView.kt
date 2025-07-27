@@ -98,6 +98,24 @@ class ArView(
     private var gestureStartRotation: Float? = null // Starting rotation value for the current gesture
     private var lastAppliedRotation: Float = 0f // Track the cumulative rotation applied to avoid resets
 
+    // Helper function to calculate circular angle difference (shortest path between two angles)
+    private fun calculateCircularAngleDifference(targetAngle: Float, sourceAngle: Float): Float {
+        // Normalize both angles to [0, 360) range
+        val normalizedTarget = ((targetAngle % 360f) + 360f) % 360f
+        val normalizedSource = ((sourceAngle % 360f) + 360f) % 360f
+        
+        // Calculate the raw difference
+        var delta = normalizedTarget - normalizedSource
+        
+        // Find the shortest path around the circle
+        if (delta > 180f) {
+            delta -= 360f
+        } else if (delta < -180f) {
+            delta += 360f
+        }
+        
+        return delta
+    }
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -780,15 +798,15 @@ class ArView(
                                     Log.d("ArView", "🔄 NEW GESTURE - gestureStart: ${gestureStartRotation}°, current model: ${lastAppliedRotation}°")
                                 }
                                 
-                                // Calculate delta from the gesture start point using proper circular angle difference
-                                var deltaRotation = currentDetectorRotation - gestureStartRotation!!
+                                // Calculate delta using robust circular angle difference
+                                val deltaRotation = calculateCircularAngleDifference(currentDetectorRotation, gestureStartRotation!!)
                                 
-                                // Handle angle wrapping correctly - find shortest angular distance
-                                if (deltaRotation > 180f) {
-                                    deltaRotation -= 360f
-                                } else if (deltaRotation < -180f) {
-                                    deltaRotation += 360f
-                                }
+                                // Normalize current detector rotation for logging
+                                val normalizedCurrent = ((currentDetectorRotation % 360f) + 360f) % 360f
+                                val normalizedStart = ((gestureStartRotation!! % 360f) + 360f) % 360f
+                                
+                                Log.d("ArView", "🔄 RAW VALUES - start: ${gestureStartRotation}°, current: ${currentDetectorRotation}°")
+                                Log.d("ArView", "🔄 NORMALIZED - start: ${normalizedStart}°, current: ${normalizedCurrent}°, circular delta: ${deltaRotation}°")
                                 
                                 // Scale the rotation for responsive movement
                                 val scaledDelta = deltaRotation * 1.5f
