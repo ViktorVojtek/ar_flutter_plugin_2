@@ -312,22 +312,6 @@ class ArView(
                         Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
                         Log.d("ArView", "Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
                     }
-
-                    override fun onRotate(
-                        detector: RotateGestureDetector,
-                        e: MotionEvent,
-                        rotationDelta: Quaternion
-                    ): Boolean {
-                        val current = transform
-                        val newQuat = current.quaternion * rotationDelta
-                        transform = Transform(
-                            position   = current.position,
-                            quaternion = newQuat,
-                            scale      = current.scale
-                        )
-                        objectChannel.invokeMethod("onRotationChange", name ?: "")
-                        return true
-                    }
                 }
             } ?: run {
                 null
@@ -757,89 +741,60 @@ class ArView(
                             }
                         }
                     },
-                    onRotate = { _, -, _ ->
-                        false // Disable default rotation handling
-                        /* Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
-                        
-                        // Handle rotation gestures for nodes using JOML quaternion Y-axis rotation
+                    onRotate = { detector, e, node ->
+                        Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
                         if (node != null && this@ArView.handleRotation) {
-                            // Find the managed ModelNode
+                            // Find the ModelNode we’re managing
                             var modelNode: ModelNode? = null
                             var currentNode: Node? = node
-                            
                             while (currentNode != null) {
-                                if (currentNode is ModelNode && currentNode.name != null) {
-                                    if (nodesMap.containsKey(currentNode.name)) {
-                                        modelNode = currentNode
-                                        Log.d("ArView", "🔄 Found ModelNode for rotation: ${currentNode.name}")
-                                        break
-                                    }
+                                if (currentNode is ModelNode 
+                                    && currentNode.name != null 
+                                    && nodesMap.containsKey(currentNode.name)) {
+                                    modelNode = currentNode
+                                    break
                                 }
                                 currentNode = currentNode.parent
                             }
-                            
-                            if (modelNode != null) {
-                                // Force enable rotation properties
-                                modelNode.isRotationEditable = true
-                                modelNode.isTouchable = true
-                                
-                                // Get rotation angle from detector
-                                val currentRotationAngle = detector.rotation
-                                Log.d("ArView", "🔄 Current rotation angle: ${Math.toDegrees(currentRotationAngle.toDouble())}°")
-                                
-                                // Calculate rotation delta for incremental rotation
-                                val rotationDelta = if (e.action == MotionEvent.ACTION_DOWN) {
-                                    // Reset on gesture start
-                                    lastRotationAngle = currentRotationAngle
-                                    0f
+                            modelNode?.let { mn ->
+                                // Enable rotation on the fly
+                                mn.isRotationEditable = true
+                                mn.isTouchable       = true
+
+                                // Read the raw gesture rotation in radians
+                                val rot = detector.rotation
+
+                                // On first event, initialize tracking
+                                if (gestureStartRotation == null) {
+                                    gestureStartRotation   = rot
+                                    lastDetectorRotation   = rot
+                                    lastAppliedRotation    = mn.rotation.y
+                                    accumulatedRotationDelta = 0f
                                 } else {
-                                    // Calculate delta from last frame
-                                    var delta = currentRotationAngle - lastRotationAngle
-                                    // Handle 360° wraparound
-                                    if (delta > Math.PI) delta -= (2 * Math.PI).toFloat()
-                                    else if (delta < -Math.PI) delta += (2 * Math.PI).toFloat()
-                                    lastRotationAngle = currentRotationAngle
-                                    delta
+                                    // Compute the small delta since last frame (handles 360° wrap)
+                                    val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
+                                    accumulatedRotationDelta += delta
+                                    lastDetectorRotation = rot
                                 }
-                                
-                                Log.d("ArView", "🔄 Rotation delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
-                                
-                                if (rotationDelta != 0f) {
-                                    // Create Y-axis quaternion using JOML
-                                    val yAxis = Vector3f(0f, 1f, 0f)
-                                    val deltaQuat = Quaternionf().rotateAxis(rotationDelta, yAxis)
-                                    
-                                    // Get current rotation as quaternion (convert from SceneView Rotation to JOML)
-                                    val currentRotation = modelNode.rotation
-                                    val currentQuat = Quaternionf()
-                                        .rotateXYZ(currentRotation.x, currentRotation.y, currentRotation.z)
-                                    
-                                    // Apply incremental rotation: newQuat = currentQuat * deltaQuat
-                                    val newQuat = Quaternionf(currentQuat).mul(deltaQuat)
-                                    
-                                    // Convert back to Euler angles for SceneView
-                                    val eulerAngles = Vector3f()
-                                    newQuat.getEulerAnglesXYZ(eulerAngles)
-                                    
-                                    val newRotation = Rotation(
-                                        eulerAngles.x,
-                                        eulerAngles.y,
-                                        eulerAngles.z
-                                    )
-                                    modelNode.rotation = newRotation
-                                    
-                                    Log.d("ArView", "✅ APPLIED QUATERNION Y-AXIS ROTATION - delta: ${Math.toDegrees(rotationDelta.toDouble())}°")
-                                    Log.d("ArView", "📐 New rotation: x=${Math.toDegrees(eulerAngles.x.toDouble())}°, y=${Math.toDegrees(eulerAngles.y.toDouble())}°, z=${Math.toDegrees(eulerAngles.z.toDouble())}°")
-                                    
-                                    // Notify Flutter
-                                    objectChannel.invokeMethod("onRotationChange", modelNode.name ?: "")
+
+                                // Scale and apply to the node’s yaw
+                                val newYaw = lastAppliedRotation + accumulatedRotationDelta * 1.5f
+                                mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
+
+                                // Notify Flutter
+                                objectChannel.invokeMethod("onRotationChange", mn.name ?: "")
+
+                                // On gesture end, commit the rotation so next drag starts from here
+                                if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
+                                    lastAppliedRotation       = newYaw
+                                    gestureStartRotation      = null
+                                    lastDetectorRotation      = null
+                                    accumulatedRotationDelta  = 0f
                                 }
-                            } else {
-                                Log.w("ArView", "❌ No ModelNode found for rotation gesture")
                             }
-                        } else {
-                            Log.d("ArView", "🔄 Rotation gesture ignored - node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
-                        }*/
+                        }
+                        // Return false so other gestures (e.g. pan) aren’t blocked
+                        false
                     }
                 )
 
