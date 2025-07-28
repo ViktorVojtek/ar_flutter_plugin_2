@@ -73,12 +73,15 @@ class ARObjectManager {
           break;
         case 'onPanEnd':
           if (onPanEnd != null) {
-            final tappedNodeName = call.arguments["name"] as String;
-            final transform =
-                MatrixConverter().fromJson(call.arguments['transform'] as List);
+            final args = call.arguments as Map<String, dynamic>?;
+            if (args != null && args["name"] != null) {
+              final tappedNodeName = args["name"] as String;
+              final transform =
+                  MatrixConverter().fromJson(args['transform'] as List);
 
-            // Notify callback
-            onPanEnd!(tappedNodeName, transform);
+              // Notify callback
+              onPanEnd!(tappedNodeName, transform);
+            }
           }
           break;
         case 'onRotationStart':
@@ -95,12 +98,15 @@ class ARObjectManager {
           break;
         case 'onRotationEnd':
           if (onRotationEnd != null) {
-            final tappedNodeName = call.arguments["name"] as String;
-            final transform =
-                MatrixConverter().fromJson(call.arguments['transform'] as List);
+            final args = call.arguments as Map<String, dynamic>?;
+            if (args != null && args["name"] != null) {
+              final tappedNodeName = args["name"] as String;
+              final transform =
+                  MatrixConverter().fromJson(args['transform'] as List);
 
-            // Notify callback
-            onRotationEnd!(tappedNodeName, transform);
+              // Notify callback
+              onRotationEnd!(tappedNodeName, transform);
+            }
           }
           break;
         default:

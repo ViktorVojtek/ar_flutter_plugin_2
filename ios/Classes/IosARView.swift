@@ -629,7 +629,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             // kill variables
             panStartLocation = nil
             panCurrentLocation = nil
-            DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanEnd", arguments: serializeLocalTransformation(node: self.panningNode))}
+            // Only send onPanEnd if we have valid transformation data
+            if let transformationData = serializeLocalTransformation(node: self.panningNode) {
+                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanEnd", arguments: transformationData)}
+            }
             panningNode = nil
         }
     }
@@ -691,7 +694,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             // kill variables
             rotation = nil
             rotationVelocity = nil
-            DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationEnd", arguments: serializeLocalTransformation(node: self.panningNode))}
+            // Only send onRotationEnd if we have valid transformation data
+            if let transformationData = serializeLocalTransformation(node: self.panningNode) {
+                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationEnd", arguments: transformationData)}
+            }
             panningNode = nil
         }
     

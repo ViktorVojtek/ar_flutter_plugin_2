@@ -39,12 +39,17 @@ func serializeAnchor(anchor: ARAnchor, anchorNode: SCNNode?, ganchor: GARAnchor,
     return serializedAnchor
 }
 
-func serializeLocalTransformation(node: SCNNode?) -> Dictionary<String, Any?> {
+func serializeLocalTransformation(node: SCNNode?) -> Dictionary<String, Any?>? {
+    // Return nil if node is nil to avoid sending null values to Flutter
+    guard let node = node, let nodeName = node.name else {
+        return nil
+    }
+    
     var serializedLocalTransformation = Dictionary<String, Any?>()
 
-    let transform: [Float?] = [node?.transform.m11, node?.transform.m12, node?.transform.m13, node?.transform.m14, node?.transform.m21, node?.transform.m22, node?.transform.m23, node?.transform.m24, node?.transform.m31, node?.transform.m32, node?.transform.m33, node?.transform.m34, node?.transform.m41, node?.transform.m42, node?.transform.m43, node?.transform.m44]
+    let transform: [Float?] = [node.transform.m11, node.transform.m12, node.transform.m13, node.transform.m14, node.transform.m21, node.transform.m22, node.transform.m23, node.transform.m24, node.transform.m31, node.transform.m32, node.transform.m33, node.transform.m34, node.transform.m41, node.transform.m42, node.transform.m43, node.transform.m44]
     
-    serializedLocalTransformation["name"] = node?.name
+    serializedLocalTransformation["name"] = nodeName
     serializedLocalTransformation["transform"] = transform
 
     return serializedLocalTransformation

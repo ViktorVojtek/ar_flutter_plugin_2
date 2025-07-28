@@ -200,7 +200,7 @@ class ArView(
                 config.apply {
                     depthMode = Config.DepthMode.DISABLED
                     instantPlacementMode = Config.InstantPlacementMode.DISABLED
-                    lightEstimationMode = Config.LightEstimationMode.DISABLED // .ENVIRONMENTAL_HDR
+                    lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     focusMode = Config.FocusMode.AUTO
                     planeFindingMode = Config.PlaneFindingMode.DISABLED
                 }
@@ -525,17 +525,10 @@ class ArView(
             handleShowWorldOrigin(showWorldOrigin)
             
             sceneView.apply {
-                // No HDR environment loaded
-                lightEstimationEnabled = false
-
-                environment.intensity = 2.5f // Set a default intensity for the environment light
-
-                addChildNode(
-                    AmbientLight(
-                    color     = colorOf(1f, 1f, 1f, 1f),
-                    intensity = 5_000f
-                    )
-                )
+                environment = environmentLoader.createHDREnvironment(
+                    assetFileLocation = "environments/evening_meadow_2k.hdr"
+                )!!
+                environment.intensity = 2.0f
 
                 planeRenderer.isEnabled = argShowPlanes
                 planeRenderer.isVisible = argShowPlanes
