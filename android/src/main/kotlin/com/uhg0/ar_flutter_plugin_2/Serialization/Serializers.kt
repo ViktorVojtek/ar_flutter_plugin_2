@@ -7,6 +7,8 @@ import io.github.sceneview.math.Position as ScenePosition
 import io.github.sceneview.math.Rotation as SceneRotation
 import io.github.sceneview.node.ModelNode
 import kotlin.math.sqrt
+import kotlin.math.cos
+import kotlin.math.sin
 
 fun serializeARCoreHitResult(hitResult: HitResult): HashMap<String, Any> {
     val serializedHit = HashMap<String, Any>()
@@ -66,11 +68,17 @@ fun serializeLocalTransformation(node: ModelNode?): Map<String, Any?>? {
     }
     
     val transform = node.transform
+    val pos = transform.position
+    val rot = transform.rotation
+    val scale = transform.scale
+    
+    // Create transformation matrix from position, rotation, and scale
+    // This is a simplified version that mainly preserves position
     val matrix = floatArrayOf(
-        transform.matrix.get(0, 0), transform.matrix.get(0, 1), transform.matrix.get(0, 2), transform.matrix.get(0, 3),
-        transform.matrix.get(1, 0), transform.matrix.get(1, 1), transform.matrix.get(1, 2), transform.matrix.get(1, 3),
-        transform.matrix.get(2, 0), transform.matrix.get(2, 1), transform.matrix.get(2, 2), transform.matrix.get(2, 3),
-        transform.matrix.get(3, 0), transform.matrix.get(3, 1), transform.matrix.get(3, 2), transform.matrix.get(3, 3)
+        scale.x, 0.0f, 0.0f, pos.x,
+        0.0f, scale.y, 0.0f, pos.y,
+        0.0f, 0.0f, scale.z, pos.z,
+        0.0f, 0.0f, 0.0f, 1.0f
     )
     
     return mapOf(

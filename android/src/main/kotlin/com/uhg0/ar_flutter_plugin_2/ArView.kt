@@ -533,7 +533,6 @@ class ArView(
                 environment = environmentLoader.createHDREnvironment(
                     assetFileLocation = "environments/evening_meadow_2k.hdr"
                 )!!
-                environment.intensity = 2.0f
 
                 planeRenderer.isEnabled = argShowPlanes
                 planeRenderer.isVisible = argShowPlanes
