@@ -5,6 +5,7 @@ import com.google.ar.core.Plane
 import com.google.ar.core.Pose
 import io.github.sceneview.math.Position as ScenePosition
 import io.github.sceneview.math.Rotation as SceneRotation
+import io.github.sceneview.node.ModelNode
 import kotlin.math.sqrt
 
 fun serializeARCoreHitResult(hitResult: HitResult): HashMap<String, Any> {
@@ -57,3 +58,23 @@ fun serializePose(pose: Pose): DoubleArray {
     pose.toMatrix(serializedPose, 0)
     return DoubleArray(16) { serializedPose[it].toDouble() }
 } 
+
+fun serializeLocalTransformation(node: ModelNode?): Map<String, Any?>? {
+    // Return null if node is null to avoid sending null values to Flutter
+    if (node?.name == null) {
+        return null
+    }
+    
+    val transform = node.transform
+    val matrix = floatArrayOf(
+        transform.matrix.get(0, 0), transform.matrix.get(0, 1), transform.matrix.get(0, 2), transform.matrix.get(0, 3),
+        transform.matrix.get(1, 0), transform.matrix.get(1, 1), transform.matrix.get(1, 2), transform.matrix.get(1, 3),
+        transform.matrix.get(2, 0), transform.matrix.get(2, 1), transform.matrix.get(2, 2), transform.matrix.get(2, 3),
+        transform.matrix.get(3, 0), transform.matrix.get(3, 1), transform.matrix.get(3, 2), transform.matrix.get(3, 3)
+    )
+    
+    return mapOf(
+        "name" to node.name,
+        "transform" to matrix.map { it.toDouble() }
+    )
+}

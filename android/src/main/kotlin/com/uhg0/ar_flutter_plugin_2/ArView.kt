@@ -23,6 +23,7 @@ import com.google.ar.core.TrackingState
 import com.uhg0.ar_flutter_plugin_2.Serialization.deserializeMatrix4
 import com.uhg0.ar_flutter_plugin_2.Serialization.serializeHitResult
 import com.uhg0.ar_flutter_plugin_2.Serialization.serializeARCoreHitResult
+import com.uhg0.ar_flutter_plugin_2.Serialization.serializeLocalTransformation
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -102,6 +103,10 @@ class ArView(
     private var lastDetectorRotation: Float? = null
     private var lastAppliedRotation: Float = 0f
     private var accumulatedRotationDelta: Float = 0f
+    
+    // Pan gesture tracking variables
+    private var currentPanningNode: ModelNode? = null
+    private var panGestureActive = false
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -709,59 +714,84 @@ class ArView(
                         }
                     },
                     onScroll = { e1, e2, node, distance ->
-                        // Handle pan gestures for nodes
+                        // Handle pan gestures for nodes - restrict to single finger like iOS
                         if (node != null && this@ArView.handlePans) {
-                            Log.d("ArView", "Scroll detected on node: ${node.name} - handlePans: ${this@ArView.handlePans}")
+                            // Check pointer count to distinguish from multi-finger gestures
+                            val pointerCount = e2.pointerCount
+                            Log.d("ArView", "Scroll detected on node: ${node.name} - handlePans: ${this@ArView.handlePans}, pointers: $pointerCount")
                             
-                            // Find the managed ModelNode
-                            var modelNode: ModelNode? = null
-                            var currentNode: Node? = node
-                            
-                            while (currentNode != null) {
-                                Log.d("ArView", "Checking node: ${currentNode.name}, type: ${currentNode.javaClass.simpleName}")
-                                if (currentNode is ModelNode && currentNode.name != null) {
-                                    Log.d("ArView", "Found ModelNode: ${currentNode.name}, in nodesMap: ${nodesMap.containsKey(currentNode.name)}")
-                                    if (nodesMap.containsKey(currentNode.name)) {
-                                        modelNode = currentNode
-                                        break
+                            // Only handle pan if it's a single finger gesture (like iOS)
+                            if (pointerCount == 1) {
+                                // Find the managed ModelNode
+                                var modelNode: ModelNode? = null
+                                var currentNode: Node? = node
+                                
+                                while (currentNode != null) {
+                                    Log.d("ArView", "Checking node: ${currentNode.name}, type: ${currentNode.javaClass.simpleName}")
+                                    if (currentNode is ModelNode && currentNode.name != null) {
+                                        Log.d("ArView", "Found ModelNode: ${currentNode.name}, in nodesMap: ${nodesMap.containsKey(currentNode.name)}")
+                                        if (nodesMap.containsKey(currentNode.name)) {
+                                            modelNode = currentNode
+                                            break
+                                        }
                                     }
+                                    currentNode = currentNode.parent
                                 }
-                                currentNode = currentNode.parent
-                            }
-                            
-                            if (modelNode != null) {
-                                // CRITICAL FIX: Force properties and proceed with movement regardless of property check
-                                Log.d("ArView", "Gesture detected on node ${modelNode.name}, original isPositionEditable: ${modelNode.isPositionEditable}")
                                 
-                                // Force enable properties
-                                modelNode.isPositionEditable = true
-                                modelNode.isTouchable = true
-                                
-                                // Immediately apply the pan movement - don't wait or check properties again
-                                val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
-                                val deltaZ = -distance.y * 0.001f // Forward/backward movement (Y gesture maps to Z world coordinate)
-                                
-                                // Move in camera space
-                                val currentPosition = modelNode.position
-                                val newPosition = Position(
-                                    currentPosition.x + deltaX,
-                                    detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
-                                    currentPosition.z + deltaZ // Allow forward/backward movement
-                                )
-                                modelNode.position = newPosition
-                                
-                                Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
-                                
-                                // Notify Flutter with just the node name (Flutter expects String, not Map)
-                                objectChannel.invokeMethod("onPanChange", modelNode.name ?: "")
+                                if (modelNode != null) {
+                                    // Check if this is a new pan gesture starting
+                                    if (currentPanningNode != modelNode) {
+                                        // End previous pan if different node
+                                        if (currentPanningNode != null && panGestureActive) {
+                                            Log.d("ArView", "Ending pan on previous node: ${currentPanningNode?.name}")
+                                            objectChannel.invokeMethod("onPanEnd", serializeLocalTransformation(currentPanningNode))
+                                        }
+                                        
+                                        // Start new pan gesture
+                                        currentPanningNode = modelNode
+                                        panGestureActive = true
+                                        Log.d("ArView", "Pan gesture started on node: ${modelNode.name}")
+                                        objectChannel.invokeMethod("onPanStart", modelNode.name ?: "")
+                                    }
+                                    
+                                    // CRITICAL FIX: Force properties and proceed with movement regardless of property check
+                                    Log.d("ArView", "Single-finger pan gesture detected on node ${modelNode.name}, original isPositionEditable: ${modelNode.isPositionEditable}")
+                                    
+                                    // Force enable properties
+                                    modelNode.isPositionEditable = true
+                                    modelNode.isTouchable = true
+                                    
+                                    // Immediately apply the pan movement - don't wait or check properties again
+                                    val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
+                                    val deltaZ = -distance.y * 0.001f // Forward/backward movement (Y gesture maps to Z world coordinate)
+                                    
+                                    // Move in camera space
+                                    val currentPosition = modelNode.position
+                                    val newPosition = Position(
+                                        currentPosition.x + deltaX,
+                                        detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
+                                        currentPosition.z + deltaZ // Allow forward/backward movement
+                                    )
+                                    modelNode.position = newPosition
+                                    
+                                    Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
+                                    
+                                    // Notify Flutter with just the node name (Flutter expects String, not Map)
+                                    objectChannel.invokeMethod("onPanChange", modelNode.name ?: "")
+                                } else {
+                                    Log.w("ArView", "❌ No ModelNode found for gesture")
+                                }
                             } else {
-                                Log.w("ArView", "❌ No ModelNode found for gesture")
+                                Log.d("ArView", "❌ Multi-finger gesture detected ($pointerCount fingers), ignoring pan - likely rotation gesture")
                             }
                         }
                     },
                     onRotate = { detector, e, node ->
-                        Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}")
-                        if (node != null && this@ArView.handleRotation) {
+                        val pointerCount = e.pointerCount
+                        Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}, pointers: $pointerCount")
+                        
+                        // Only handle rotation with 2 fingers (like iOS rotation gesture)
+                        if (node != null && this@ArView.handleRotation && pointerCount >= 2) {
                             // Find the ModelNode we’re managing
                             var modelNode: ModelNode? = null
                             var currentNode: Node? = node
@@ -775,6 +805,8 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             modelNode?.let { mn ->
+                                Log.d("ArView", "Two-finger rotation gesture detected on node ${mn.name}")
+                                
                                 // Enable rotation on the fly
                                 mn.isRotationEditable = true
                                 mn.isTouchable       = true
@@ -788,6 +820,9 @@ class ArView(
                                     lastDetectorRotation   = rot
                                     lastAppliedRotation    = mn.rotation.y
                                     accumulatedRotationDelta = 0f
+                                    Log.d("ArView", "Rotation gesture started")
+                                    // Notify Flutter of rotation start
+                                    objectChannel.invokeMethod("onRotationStart", mn.name ?: "")
                                 } else {
                                     // Compute the small delta since last frame (handles 360° wrap)
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
@@ -804,12 +839,19 @@ class ArView(
 
                                 // On gesture end, commit the rotation so next drag starts from here
                                 if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
+                                    Log.d("ArView", "Rotation gesture ended, committing rotation: $newYaw")
+                                    // Notify Flutter of rotation end with transformation data
+                                    serializeLocalTransformation(mn)?.let { transformData ->
+                                        objectChannel.invokeMethod("onRotationEnd", transformData)
+                                    }
                                     lastAppliedRotation       = newYaw
                                     gestureStartRotation      = null
                                     lastDetectorRotation      = null
                                     accumulatedRotationDelta  = 0f
                                 }
                             }
+                        } else if (pointerCount < 2) {
+                            Log.d("ArView", "❌ Single finger detected for rotation, ignoring - use two fingers for rotation")
                         }
                         // Return false so other gestures (e.g. pan) aren’t blocked
                         false
@@ -825,6 +867,25 @@ class ArView(
                                 tag = "hand_motion_layout"
                             }
                     rootLayout.addView(handMotionLayout)
+                }
+                
+                // Add touch listener to detect gesture end events (for pan gesture end detection)
+                sceneView.setOnTouchListener { _, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            // End any active pan gesture
+                            if (panGestureActive && currentPanningNode != null) {
+                                Log.d("ArView", "Touch ended, ending pan gesture on node: ${currentPanningNode?.name}")
+                                serializeLocalTransformation(currentPanningNode)?.let { transformData ->
+                                    objectChannel.invokeMethod("onPanEnd", transformData)
+                                }
+                                currentPanningNode = null
+                                panGestureActive = false
+                            }
+                        }
+                    }
+                    // Return false to allow other touch handling to continue
+                    false
                 }
 
                 if (customPlaneTexturePath != null) {
