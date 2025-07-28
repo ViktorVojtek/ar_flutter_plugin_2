@@ -77,14 +77,18 @@ class ARObjectManager {
           break;
         case 'onPanEnd':
           if (onPanEnd != null) {
-            final args = call.arguments as Map<String, dynamic>?;
-            if (args != null && args["name"] != null) {
-              final tappedNodeName = args["name"] as String;
-              final transform =
-                  MatrixConverter().fromJson(args['transform'] as List);
+            // Handle arguments more flexibly to support iOS _Map<Object?, Object?> type
+            final args = call.arguments;
+            if (args != null && args is Map) {
+              final Map<String, dynamic> argsMap = Map<String, dynamic>.from(args);
+              if (argsMap["name"] != null) {
+                final tappedNodeName = argsMap["name"] as String;
+                final transform =
+                    MatrixConverter().fromJson(argsMap['transform'] as List);
 
-              // Notify callback
-              onPanEnd!(tappedNodeName, transform);
+                // Notify callback
+                onPanEnd!(tappedNodeName, transform);
+              }
             }
           }
           break;
@@ -106,14 +110,18 @@ class ARObjectManager {
           break;
         case 'onRotationEnd':
           if (onRotationEnd != null) {
-            final args = call.arguments as Map<String, dynamic>?;
-            if (args != null && args["name"] != null) {
-              final tappedNodeName = args["name"] as String;
-              final transform =
-                  MatrixConverter().fromJson(args['transform'] as List);
+            // Handle arguments more flexibly to support iOS _Map<Object?, Object?> type
+            final args = call.arguments;
+            if (args != null && args is Map) {
+              final Map<String, dynamic> argsMap = Map<String, dynamic>.from(args);
+              if (argsMap["name"] != null) {
+                final tappedNodeName = argsMap["name"] as String;
+                final transform =
+                    MatrixConverter().fromJson(argsMap['transform'] as List);
 
-              // Notify callback
-              onRotationEnd!(tappedNodeName, transform);
+                // Notify callback
+                onRotationEnd!(tappedNodeName, transform);
+              }
             }
           }
           break;
