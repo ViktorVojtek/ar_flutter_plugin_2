@@ -59,16 +59,20 @@ class ARObjectManager {
           break;
         case 'onPanStart':
           if (onPanStart != null) {
-            final tappedNode = call.arguments as String;
-            // Notify callback
-            onPanStart!(tappedNode);
+            final tappedNode = call.arguments as String?;
+            if (tappedNode != null) {
+              // Notify callback
+              onPanStart!(tappedNode);
+            }
           }
           break;
         case 'onPanChange':
           if (onPanChange != null) {
-            final tappedNode = call.arguments as String;
-            // Notify callback
-            onPanChange!(tappedNode);
+            final tappedNode = call.arguments as String?;
+            if (tappedNode != null) {
+              // Notify callback
+              onPanChange!(tappedNode);
+            }
           }
           break;
         case 'onPanEnd':
@@ -86,14 +90,18 @@ class ARObjectManager {
           break;
         case 'onRotationStart':
           if (onRotationStart != null) {
-            final tappedNode = call.arguments as String;
-            onRotationStart!(tappedNode);
+            final tappedNode = call.arguments as String?;
+            if (tappedNode != null) {
+              onRotationStart!(tappedNode);
+            }
           }
           break;
         case 'onRotationChange':
           if (onRotationChange != null) {
-            final tappedNode = call.arguments as String;
-            onRotationChange!(tappedNode);
+            final tappedNode = call.arguments as String?;
+            if (tappedNode != null) {
+              onRotationChange!(tappedNode);
+            }
           }
           break;
         case 'onRotationEnd':

@@ -744,14 +744,18 @@ class ArView(
                                         // End previous pan if different node
                                         if (currentPanningNode != null && panGestureActive) {
                                             Log.d("ArView", "Ending pan on previous node: ${currentPanningNode?.name}")
-                                            objectChannel.invokeMethod("onPanEnd", serializeLocalTransformation(currentPanningNode))
+                                            serializeLocalTransformation(currentPanningNode)?.let { transformData ->
+                                                objectChannel.invokeMethod("onPanEnd", transformData)
+                                            }
                                         }
                                         
                                         // Start new pan gesture
                                         currentPanningNode = modelNode
                                         panGestureActive = true
-                                        Log.d("ArView", "Pan gesture started on node: ${modelNode.name}")
-                                        objectChannel.invokeMethod("onPanStart", modelNode.name ?: "")
+                                        modelNode.name?.let { nodeName ->
+                                            Log.d("ArView", "Pan gesture started on node: $nodeName")
+                                            objectChannel.invokeMethod("onPanStart", nodeName)
+                                        }
                                     }
                                     
                                     // CRITICAL FIX: Force properties and proceed with movement regardless of property check
@@ -777,7 +781,9 @@ class ArView(
                                     Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
                                     
                                     // Notify Flutter with just the node name (Flutter expects String, not Map)
-                                    objectChannel.invokeMethod("onPanChange", modelNode.name ?: "")
+                                    modelNode.name?.let { nodeName ->
+                                        objectChannel.invokeMethod("onPanChange", nodeName)
+                                    }
                                 } else {
                                     Log.w("ArView", "❌ No ModelNode found for gesture")
                                 }
@@ -822,7 +828,9 @@ class ArView(
                                     accumulatedRotationDelta = 0f
                                     Log.d("ArView", "Rotation gesture started")
                                     // Notify Flutter of rotation start
-                                    objectChannel.invokeMethod("onRotationStart", mn.name ?: "")
+                                    mn.name?.let { nodeName ->
+                                        objectChannel.invokeMethod("onRotationStart", nodeName)
+                                    }
                                 } else {
                                     // Compute the small delta since last frame (handles 360° wrap)
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
@@ -835,7 +843,9 @@ class ArView(
                                 mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
 
                                 // Notify Flutter
-                                objectChannel.invokeMethod("onRotationChange", mn.name ?: "")
+                                mn.name?.let { nodeName ->
+                                    objectChannel.invokeMethod("onRotationChange", nodeName)
+                                }
 
                                 // On gesture end, commit the rotation so next drag starts from here
                                 if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
