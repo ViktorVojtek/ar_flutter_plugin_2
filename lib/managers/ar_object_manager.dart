@@ -51,10 +51,26 @@ class ARObjectManager {
           break;
         case 'onNodeTap':
           if (onNodeTap != null) {
-            final tappedNodes = call.arguments as List<dynamic>;
-            onNodeTap!(tappedNodes
-                .map((tappedNode) => tappedNode.toString())
-                .toList());
+            try {
+              // Handle the arguments more flexibly to avoid casting issues
+              final arguments = call.arguments;
+              if (arguments != null) {
+                List<String> tappedNodes;
+                if (arguments is List) {
+                  tappedNodes = arguments.map((tappedNode) => tappedNode.toString()).toList();
+                } else {
+                  // Single node case - wrap in list
+                  tappedNodes = [arguments.toString()];
+                }
+                onNodeTap!(tappedNodes);
+              }
+            } catch (e) {
+              if (debug) {
+                print('Error in onNodeTap: $e');
+                print('Arguments: ${call.arguments}');
+                print('Arguments type: ${call.arguments.runtimeType}');
+              }
+            }
           }
           break;
         case 'onPanStart':

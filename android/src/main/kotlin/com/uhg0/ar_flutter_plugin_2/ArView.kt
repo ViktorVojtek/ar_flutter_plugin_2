@@ -331,8 +331,15 @@ class ArView(
                         isRotationEditable = this@ArView.handleRotation
                         isTouchable = true
                         
-                        Log.d("ArView", "ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
-                        Log.d("ArView", "Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
+                        Log.d("ArView", "🎯 ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
+                        Log.d("ArView", "🎯 Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
+                        
+                        // Additional debugging for tap detection
+                        if (name != null) {
+                            Log.d("ArView", "🎯 Node created with name '$name' - will be added to nodesMap for tap detection")
+                        } else {
+                            Log.w("ArView", "❌ Node created without name - tap detection will not work!")
+                        }
                     }
                 }
             } ?: run {
@@ -385,9 +392,11 @@ class ArView(
                             
                             node.name?.let { nodeName ->
                                 nodesMap[nodeName] = node
-                                Log.d("ArView", "Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
-                                Log.d("ArView", "All nodes in map: ${nodesMap.keys}")
-                                Log.d("ArView", "Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                                Log.d("ArView", "🎯 Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
+                                Log.d("ArView", "🎯 All nodes in map: ${nodesMap.keys}")
+                                Log.d("ArView", "🎯 Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
+                                Log.d("ArView", "🎯 Node world position: ${node.worldPosition}")
+                                Log.d("ArView", "🎯 Node parent: ${node.parent?.javaClass?.simpleName}")
                                 
                                 // Update gesture properties after adding node
                                 updateNodeGestureProperties()
@@ -636,80 +645,115 @@ class ArView(
                 // Set up gesture handling - Use the current SceneView 2.2.1 API
                 setOnGestureListener(
                     onSingleTapConfirmed = { motionEvent, node ->
-                        Log.d("ArView", "SceneView onSingleTapConfirmed - handleTaps: ${this@ArView.handleTaps}, node: ${node?.name}")
+                        Log.d("ArView", "🎯 SceneView onSingleTapConfirmed - handleTaps: ${this@ArView.handleTaps}, node: ${node?.name}")
                         
-                        // Debug gesture configuration when a node is tapped
-                        if (node != null) {
-                            debugGestureConfiguration()
-                        }
-                        
-                        if (node != null) {
-                            Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
+                        try {
+                            // Debug gesture configuration when a node is tapped
+                            if (node != null) {
+                                debugGestureConfiguration()
+                            }
                             
-                            // First, try to find a ModelNode (3D object) that was tapped
-                            var modelNodeName: String? = null
-                            var currentNode: Node? = node
-                            
-                            // Traverse up the node hierarchy to find a ModelNode
-                            while (currentNode != null) {
-                                if (currentNode is ModelNode && currentNode.name != null) {
-                                    // Check if this ModelNode is in our managed nodes map
-                                    if (nodesMap.containsKey(currentNode.name)) {
-                                        modelNodeName = currentNode.name
-                                        Log.d("ArView", "Found ModelNode: $modelNodeName")
-                                        break
+                            if (node != null) {
+                                Log.d("ArView", "Tap detected on node: ${node.name}, type: ${node.javaClass.simpleName}")
+                                
+                                // First, try to find a ModelNode (3D object) that was tapped
+                                var modelNodeName: String? = null
+                                var currentNode: Node? = node
+                                
+                                // Traverse up the node hierarchy to find a ModelNode
+                                while (currentNode != null) {
+                                    Log.d("ArView", "Checking node: ${currentNode.name}, type: ${currentNode.javaClass.simpleName}")
+                                    if (currentNode is ModelNode && currentNode.name != null) {
+                                        // Check if this ModelNode is in our managed nodes map
+                                        if (nodesMap.containsKey(currentNode.name)) {
+                                            modelNodeName = currentNode.name
+                                            Log.d("ArView", "✅ Found managed ModelNode: $modelNodeName")
+                                            break
+                                        } else {
+                                            Log.d("ArView", "❌ ModelNode ${currentNode.name} not in managed nodes map")
+                                            Log.d("ArView", "Available nodes: ${nodesMap.keys}")
+                                        }
                                     }
+                                    currentNode = currentNode.parent
                                 }
-                                currentNode = currentNode.parent
-                            }
-                            
-                            // If we found a ModelNode, report it as tapped
-                            if (modelNodeName != null && this@ArView.handleTaps) {
-                                Log.d("ArView", "Reporting ModelNode tap: $modelNodeName")
-                                objectChannel.invokeMethod("onNodeTap", listOf(modelNodeName))
-                                return@setOnGestureListener
-                            }
-                            
-                            // Fallback: look for anchor names (for backward compatibility)
-                            var anchorName: String? = null
-                            currentNode = node
-                            while (currentNode != null) {
-                                anchorNodesMap.forEach { (name, anchorNode) ->
-                                    if (currentNode == anchorNode) {
-                                        anchorName = name
-                                        return@forEach
+                                
+                                // If we found a ModelNode, report it as tapped
+                                if (modelNodeName != null && this@ArView.handleTaps) {
+                                    Log.d("ArView", "🎯 Reporting ModelNode tap: $modelNodeName")
+                                    try {
+                                        objectChannel.invokeMethod("onNodeTap", listOf(modelNodeName))
+                                        Log.d("ArView", "✅ Successfully sent ModelNode tap to Flutter")
+                                    } catch (e: Exception) {
+                                        Log.e("ArView", "❌ Error sending ModelNode tap to Flutter", e)
                                     }
+                                    return@setOnGestureListener
                                 }
-                                if (anchorName != null) break
-                                currentNode = currentNode.parent
-                            }
-                            
-                            if (anchorName != null && this@ArView.handleTaps) {
-                                Log.d("ArView", "Reporting anchor tap: $anchorName")
-                                objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
-                            }
-                        } else {
-                            Log.d("ArView", "Tap detected on empty space (no node hit)")
-                            try {
-                                // Get current frame to avoid "old frame" errors
-                                val currentFrame = sceneView.session?.update()
-                                if (currentFrame != null) {
-                                    val hitResults = currentFrame.hitTest(motionEvent)
-                                    Log.d("ArView", "Hit Results count: ${hitResults.size}")
-
-                                    val serializedResults = hitResults.map { hitResult ->
-                                        serializeARCoreHitResult(hitResult)
+                                
+                                // Fallback: look for anchor names (for backward compatibility)
+                                var anchorName: String? = null
+                                currentNode = node
+                                while (currentNode != null) {
+                                    anchorNodesMap.forEach { (name, anchorNode) ->
+                                        if (currentNode == anchorNode) {
+                                            anchorName = name
+                                            return@forEach
+                                        }
                                     }
-                                    
-                                    if (this@ArView.handleTaps) {
-                                        notifyPlaneOrPointTap(serializedResults)
+                                    if (anchorName != null) break
+                                    currentNode = currentNode.parent
+                                }
+                                
+                                if (anchorName != null && this@ArView.handleTaps) {
+                                    Log.d("ArView", "🎯 Reporting anchor tap: $anchorName")
+                                    try {
+                                        objectChannel.invokeMethod("onNodeTap", listOf(anchorName))
+                                        Log.d("ArView", "✅ Successfully sent anchor tap to Flutter")
+                                    } catch (e: Exception) {
+                                        Log.e("ArView", "❌ Error sending anchor tap to Flutter", e)
                                     }
                                 } else {
-                                    Log.w("ArView", "No current frame available for hit testing")
+                                    Log.w("ArView", "❌ No managed node or anchor found for tapped node: ${node.name}")
                                 }
-                            } catch (e: Exception) {
-                                Log.e("ArView", "Error during hit testing: ${e.message}")
+                            } else {
+                                Log.d("ArView", "🎯 Tap detected on empty space (no node hit)")
+                                try {
+                                    // Get current frame to avoid "old frame" errors
+                                    val currentFrame = sceneView.session?.update()
+                                    if (currentFrame != null) {
+                                        val hitResults = currentFrame.hitTest(motionEvent)
+                                        Log.d("ArView", "Hit Results count: ${hitResults.size}")
+
+                                        val serializedResults = hitResults.map { hitResult ->
+                                            try {
+                                                serializeARCoreHitResult(hitResult)
+                                            } catch (e: Exception) {
+                                                Log.e("ArView", "❌ Error serializing hit result", e)
+                                                // Return empty map as fallback
+                                                HashMap<String, Any>()
+                                            }
+                                        }.filter { it.isNotEmpty() } // Filter out empty results
+                                        
+                                        Log.d("ArView", "Serialized ${serializedResults.size} hit results")
+                                        
+                                        if (this@ArView.handleTaps && serializedResults.isNotEmpty()) {
+                                            try {
+                                                notifyPlaneOrPointTap(serializedResults)
+                                                Log.d("ArView", "✅ Successfully sent plane/point tap to Flutter")
+                                            } catch (e: Exception) {
+                                                Log.e("ArView", "❌ Error sending plane/point tap to Flutter", e)
+                                            }
+                                        } else if (serializedResults.isEmpty()) {
+                                            Log.w("ArView", "❌ No valid hit results to send to Flutter")
+                                        }
+                                    } else {
+                                        Log.w("ArView", "❌ No current frame available for hit testing")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("ArView", "❌ Error during hit testing", e)
+                                }
                             }
+                        } catch (e: Exception) {
+                            Log.e("ArView", "❌ Error in onSingleTapConfirmed", e)
                         }
                     },
                     onScroll = { e1, e2, node, distance ->
@@ -1562,12 +1606,11 @@ class ArView(
     private fun notifyPlaneOrPointTap(hitResults: List<Map<String, Any>>) {
         mainScope.launch {
             try {
-                val serializedResults = ArrayList<HashMap<String, Any>>()
-                hitResults.forEach { hit ->
-                    serializedResults.add(serializeHitResult(hit))
-                }
-                sessionChannel.invokeMethod("onPlaneOrPointTap", serializedResults)
+                // hitResults is already serialized from serializeARCoreHitResult, 
+                // no need for additional serialization
+                sessionChannel.invokeMethod("onPlaneOrPointTap", hitResults)
             } catch (e: Exception) {
+                Log.e("ArView", "Error in notifyPlaneOrPointTap", e)
                 e.printStackTrace()
             }
         }

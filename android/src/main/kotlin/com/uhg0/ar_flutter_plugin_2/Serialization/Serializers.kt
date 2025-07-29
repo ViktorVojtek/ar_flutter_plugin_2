@@ -13,24 +13,32 @@ import kotlin.math.sin
 fun serializeARCoreHitResult(hitResult: HitResult): HashMap<String, Any> {
     val serializedHit = HashMap<String, Any>()
     
-    // Determine type based on trackable
-    when (hitResult.trackable) {
-        is Plane -> serializedHit["type"] = 1 // Type plane
-        else -> serializedHit["type"] = 2 // Type point (feature points, depth points)
+    try {
+        // Determine type based on trackable
+        when (hitResult.trackable) {
+            is Plane -> serializedHit["type"] = 1 // Type plane
+            else -> serializedHit["type"] = 2 // Type point (feature points, depth points)
+        }
+        
+        // Calculate distance from camera
+        val pose = hitResult.hitPose
+        val translation = pose.translation
+        val distance = sqrt(
+            translation[0] * translation[0] +
+            translation[1] * translation[1] +
+            translation[2] * translation[2]
+        ).toDouble()
+        serializedHit["distance"] = distance
+        
+        // Serialize the world transform matrix
+        serializedHit["worldTransform"] = serializePose(pose)
+        
+    } catch (e: Exception) {
+        // Fallback values in case of error
+        serializedHit["type"] = 2 // Default to point
+        serializedHit["distance"] = 0.0
+        serializedHit["worldTransform"] = DoubleArray(16) { if (it % 5 == 0) 1.0 else 0.0 } // Identity matrix
     }
-    
-    // Calculate distance from camera
-    val pose = hitResult.hitPose
-    val translation = pose.translation
-    val distance = sqrt(
-        translation[0] * translation[0] +
-        translation[1] * translation[1] +
-        translation[2] * translation[2]
-    ).toDouble()
-    serializedHit["distance"] = distance
-    
-    // Serialize the world transform matrix
-    serializedHit["worldTransform"] = serializePose(pose)
     
     return serializedHit
 }
