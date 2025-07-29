@@ -101,10 +101,11 @@ class ArView(
     // Rotation gesture tracking variables
     private var gestureStartRotation: Float? = null
     private var lastDetectorRotation: Float? = null
-    private var lastAppliedRotation: Float = 0f
-    private var accumulatedRotationDelta: Float = 0f
+    // private var lastAppliedRotation: Float = 0f // UNUSED: Removed in favor of direct rotation approach
+    // private var accumulatedRotationDelta: Float = 0f // UNUSED: Removed in favor of direct rotation approach
     private var rotationGestureActive: Boolean = false
     private var currentRotatingNode: ModelNode? = null
+    private var lastRotationUpdateTime: Long = 0L
     
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
@@ -885,8 +886,7 @@ class ArView(
                                 if (gestureStartRotation == null) {
                                     gestureStartRotation   = rot
                                     lastDetectorRotation   = rot
-                                    lastAppliedRotation    = mn.rotation.y
-                                    accumulatedRotationDelta = 0f
+                                    lastRotationUpdateTime = System.currentTimeMillis()
                                     rotationGestureActive = true
                                     currentRotatingNode = mn
                                     Log.d("ArView", "🟢 Rotation gesture started")
@@ -897,13 +897,18 @@ class ArView(
                                 } else {
                                     // Compute the small delta since last frame (handles 360° wrap)
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
-                                    accumulatedRotationDelta += delta
+                                    
+                                    // Apply velocity-based rotation like iOS (scale and invert)
+                                    val scaledDelta = (delta * 0.5f) * -1f
+                                    
+                                    // Apply incremental rotation change
+                                    val currentYaw = mn.rotation.y
+                                    val newYaw = currentYaw + scaledDelta
+                                    mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
+                                    
                                     lastDetectorRotation = rot
                                 }
 
-                                // Scale and apply to the node’s yaw
-                                val newYaw = lastAppliedRotation + accumulatedRotationDelta * 1.5f
-                                mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
 
                                 // Send rotation change event with transformation data
                                 serializeLocalTransformation(mn)?.let { transformData ->
@@ -948,9 +953,6 @@ class ArView(
                             if (rotationGestureActive && currentRotatingNode != null) {
                                 Log.d("ArView", "🔴 Touch ended, ending rotation gesture on node: ${currentRotatingNode?.name}")
                                 
-                                // Commit the rotation so next rotation starts from current position
-                                lastAppliedRotation = currentRotatingNode!!.rotation.y
-                                
                                 serializeLocalTransformation(currentRotatingNode)?.let { transformData ->
                                     objectChannel.invokeMethod("onRotationEnd", transformData)
                                 }
@@ -958,7 +960,7 @@ class ArView(
                                 rotationGestureActive = false
                                 gestureStartRotation = null
                                 lastDetectorRotation = null
-                                accumulatedRotationDelta = 0f
+                                lastRotationUpdateTime = 0L
                             }
                         }
                     }
