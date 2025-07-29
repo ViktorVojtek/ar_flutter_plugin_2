@@ -101,7 +101,6 @@ class ArView(
     // Rotation gesture tracking variables
     private var gestureStartRotation: Float? = null
     private var lastDetectorRotation: Float? = null
-    private var initialNodeRotationY: Float = 0f // Store initial Y rotation when gesture starts
     // private var lastAppliedRotation: Float = 0f // UNUSED: Removed in favor of direct rotation approach
     // private var accumulatedRotationDelta: Float = 0f // UNUSED: Removed in favor of direct rotation approach
     private var rotationGestureActive: Boolean = false
@@ -898,35 +897,37 @@ class ArView(
                                 if (gestureStartRotation == null) {
                                     gestureStartRotation   = rot
                                     lastDetectorRotation   = rot
-                                    initialNodeRotationY   = mn.rotation.y // Store initial node rotation
                                     lastRotationUpdateTime = System.currentTimeMillis()
                                     rotationGestureActive = true
                                     currentRotatingNode = mn
-                                    Log.d("ArView", "🟢 Rotation gesture started - initial detector: $rot, initial node Y: $initialNodeRotationY")
+                                    Log.d("ArView", "🟢 Rotation gesture started - initial detector: $rot")
                                     // Send rotation start event with transformation data
                                     serializeLocalTransformation(mn)?.let { transformData ->
                                         objectChannel.invokeMethod("onRotationStart", transformData)
                                     }
                                 } else {
-                                    // SIMPLIFIED APPROACH: Use total rotation from start instead of deltas
-                                    val totalRotationFromStart = rot - gestureStartRotation!!
-                                    Log.d("ArView", "🔍 Total rotation from start: $totalRotationFromStart (detector: $rot, start: $gestureStartRotation)")
+                                    // FIXED APPROACH: Calculate delta from last rotation and normalize
+                                    val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
+                                    Log.d("ArView", "🔍 Raw delta: $delta (detector: $rot, lastRot: $lastDetectorRotation)")
                                     
-                                    // Apply scaled and inverted rotation directly (like iOS)
-                                    val scaledRotation = (totalRotationFromStart * 0.5f) * -1f
+                                    // Apply velocity-based rotation like iOS (scale and invert)
+                                    val scaledDelta = (delta * 0.5f) * -1f
                                     
-                                    // Set rotation directly based on initial Y rotation + total gesture rotation
-                                    val newYaw = initialNodeRotationY + scaledRotation
+                                    // Apply incremental rotation change to current rotation
+                                    val currentYaw = mn.rotation.y
+                                    val newYaw = normalizeAngle(currentYaw + scaledDelta)
                                     mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
-                                    Log.d("ArView", "🔄 Direct rotation applied - totalFromStart: $totalRotationFromStart, scaledRotation: $scaledRotation, initialY: $initialNodeRotationY, newYaw: $newYaw")
+                                    // Update last detector rotation for next frame
+                                    lastDetectorRotation = rot
+                                    
+                                    Log.d("ArView", "🔄 Delta rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
                                 }
 
-                                // TEMPORARILY COMMENT OUT onRotationChange to debug
                                 // Send rotation change event with transformation data
-                                // serializeLocalTransformation(mn)?.let { transformData ->
-                                //     objectChannel.invokeMethod("onRotationChange", transformData)
-                                // }
+                                serializeLocalTransformation(mn)?.let { transformData ->
+                                    objectChannel.invokeMethod("onRotationChange", transformData)
+                                }
 
                             }
                         } else if (pointerCount < 2) {
@@ -973,7 +974,6 @@ class ArView(
                                 rotationGestureActive = false
                                 gestureStartRotation = null
                                 lastDetectorRotation = null
-                                initialNodeRotationY = 0f // Reset initial rotation
                                 lastRotationUpdateTime = 0L
                             }
                         }
