@@ -127,6 +127,16 @@ class ArView(
         else if (delta < -Math.PI) delta += (2 * Math.PI).toFloat()
         return delta
     }
+    
+    /**
+     * Normalize angle to be within -π to π range to prevent rotation jumps
+     */
+    private fun normalizeAngle(angle: Float): Float {
+        var normalized = angle % (2 * Math.PI).toFloat()
+        if (normalized > Math.PI) normalized -= (2 * Math.PI).toFloat()
+        else if (normalized < -Math.PI) normalized += (2 * Math.PI).toFloat()
+        return normalized
+    }
 
     private val onSessionMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
@@ -895,16 +905,21 @@ class ArView(
                                         objectChannel.invokeMethod("onRotationStart", transformData)
                                     }
                                 } else {
-                                    // Compute the small delta since last frame (handles 360° wrap)
+                                    // Only apply rotation if we have meaningful delta to prevent jitter
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
                                     
-                                    // Apply velocity-based rotation like iOS (scale and invert)
-                                    val scaledDelta = (delta * 0.5f) * -1f
-                                    
-                                    // Apply incremental rotation change
-                                    val currentYaw = mn.rotation.y
-                                    val newYaw = currentYaw + scaledDelta
-                                    mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
+                                    // Add threshold to filter out tiny movements that might cause jitter
+                                    if (kotlin.math.abs(delta) > 0.005f) {
+                                        // Apply velocity-based rotation like iOS (scale and invert)
+                                        val scaledDelta = (delta * 0.5f) * -1f
+                                        
+                                        // Apply incremental rotation change with proper angle normalization
+                                        val currentYaw = mn.rotation.y
+                                        val newYaw = normalizeAngle(currentYaw + scaledDelta)
+                                        mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
+                                        
+                                        Log.d("ArView", "🔄 Rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
+                                    }
                                     
                                     lastDetectorRotation = rot
                                 }
