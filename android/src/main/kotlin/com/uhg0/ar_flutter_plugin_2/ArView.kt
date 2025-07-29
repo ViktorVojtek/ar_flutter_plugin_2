@@ -103,6 +103,8 @@ class ArView(
     private var lastDetectorRotation: Float? = null
     private var lastAppliedRotation: Float = 0f
     private var accumulatedRotationDelta: Float = 0f
+    private var rotationGestureActive: Boolean = false
+    private var currentRotatingNode: Node? = null
     
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
@@ -885,10 +887,12 @@ class ArView(
                                     lastDetectorRotation   = rot
                                     lastAppliedRotation    = mn.rotation.y
                                     accumulatedRotationDelta = 0f
-                                    Log.d("ArView", "Rotation gesture started")
-                                    // Notify Flutter of rotation start
-                                    mn.name?.let { nodeName ->
-                                        objectChannel.invokeMethod("onRotationStart", nodeName)
+                                    rotationGestureActive = true
+                                    currentRotatingNode = mn
+                                    Log.d("ArView", "🟢 Rotation gesture started")
+                                    // Send rotation start event with transformation data
+                                    serializeLocalTransformation(mn)?.let { transformData ->
+                                        objectChannel.invokeMethod("onRotationStart", transformData)
                                     }
                                 } else {
                                     // Compute the small delta since last frame (handles 360° wrap)
@@ -901,23 +905,11 @@ class ArView(
                                 val newYaw = lastAppliedRotation + accumulatedRotationDelta * 1.5f
                                 mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
 
-                                // Notify Flutter
-                                mn.name?.let { nodeName ->
-                                    objectChannel.invokeMethod("onRotationChange", nodeName)
+                                // Send rotation change event with transformation data
+                                serializeLocalTransformation(mn)?.let { transformData ->
+                                    objectChannel.invokeMethod("onRotationChange", transformData)
                                 }
 
-                                // On gesture end, commit the rotation so next drag starts from here
-                                if (e.action == MotionEvent.ACTION_UP || e.action == MotionEvent.ACTION_CANCEL) {
-                                    Log.d("ArView", "Rotation gesture ended, committing rotation: $newYaw")
-                                    // Notify Flutter of rotation end with transformation data
-                                    serializeLocalTransformation(mn)?.let { transformData ->
-                                        objectChannel.invokeMethod("onRotationEnd", transformData)
-                                    }
-                                    lastAppliedRotation       = newYaw
-                                    gestureStartRotation      = null
-                                    lastDetectorRotation      = null
-                                    accumulatedRotationDelta  = 0f
-                                }
                             }
                         } else if (pointerCount < 2) {
                             Log.d("ArView", "❌ Single finger detected for rotation, ignoring - use two fingers for rotation")
@@ -938,7 +930,7 @@ class ArView(
                     rootLayout.addView(handMotionLayout)
                 }
                 
-                // Add touch listener to detect gesture end events (for pan gesture end detection)
+                // Add touch listener to detect gesture end events (for pan and rotation gesture end detection)
                 sceneView.setOnTouchListener { _, event ->
                     when (event.action) {
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -950,6 +942,25 @@ class ArView(
                                 }
                                 currentPanningNode = null
                                 panGestureActive = false
+                            }
+                            
+                            // End any active rotation gesture
+                            if (rotationGestureActive && currentRotatingNode != null) {
+                                Log.d("ArView", "🔴 Touch ended, ending rotation gesture on node: ${currentRotatingNode?.name}")
+                                
+                                // Commit the rotation so next rotation starts from current position
+                                if (currentRotatingNode is ModelNode) {
+                                    lastAppliedRotation = (currentRotatingNode as ModelNode).rotation.y
+                                }
+                                
+                                serializeLocalTransformation(currentRotatingNode)?.let { transformData ->
+                                    objectChannel.invokeMethod("onRotationEnd", transformData)
+                                }
+                                currentRotatingNode = null
+                                rotationGestureActive = false
+                                gestureStartRotation = null
+                                lastDetectorRotation = null
+                                accumulatedRotationDelta = 0f
                             }
                         }
                     }
