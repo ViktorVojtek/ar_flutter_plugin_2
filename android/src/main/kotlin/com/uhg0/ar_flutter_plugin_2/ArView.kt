@@ -104,7 +104,7 @@ class ArView(
     private var lastAppliedRotation: Float = 0f
     private var accumulatedRotationDelta: Float = 0f
     private var rotationGestureActive: Boolean = false
-    private var currentRotatingNode: Node? = null
+    private var currentRotatingNode: ModelNode? = null
     
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
@@ -949,9 +949,7 @@ class ArView(
                                 Log.d("ArView", "🔴 Touch ended, ending rotation gesture on node: ${currentRotatingNode?.name}")
                                 
                                 // Commit the rotation so next rotation starts from current position
-                                if (currentRotatingNode is ModelNode) {
-                                    lastAppliedRotation = (currentRotatingNode as ModelNode).rotation.y
-                                }
+                                lastAppliedRotation = currentRotatingNode!!.rotation.y
                                 
                                 serializeLocalTransformation(currentRotatingNode)?.let { transformData ->
                                     objectChannel.invokeMethod("onRotationEnd", transformData)
