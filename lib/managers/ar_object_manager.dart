@@ -141,6 +141,15 @@ class ARObjectManager {
             }
           }
           break;
+        case 'onEmptySpaceTap':
+          // Fallback event for when normal plane/point tap fails
+          // This can be used for deselecting objects
+          if (debug) {
+            print('🎯 Received onEmptySpaceTap - this can be used for deselecting objects');
+          }
+          // You can add a callback here for empty space taps if needed
+          // For example: onEmptySpaceTap?.call();
+          break;
         default:
           if (debug) {
             print('Unimplemented method ${call.method} ');

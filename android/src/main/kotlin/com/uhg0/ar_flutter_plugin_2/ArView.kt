@@ -725,9 +725,11 @@ class ArView(
 
                                         val serializedResults = hitResults.map { hitResult ->
                                             try {
-                                                serializeARCoreHitResult(hitResult)
+                                                val result = serializeARCoreHitResult(hitResult)
+                                                Log.d("ArView", "🎯 Serialized hit result: type=${result["type"]}, distance=${result["distance"]}")
+                                                result
                                             } catch (e: Exception) {
-                                                Log.e("ArView", "❌ Error serializing hit result", e)
+                                                Log.e("ArView", "❌ Error serializing individual hit result", e)
                                                 // Return empty map as fallback
                                                 HashMap<String, Any>()
                                             }
@@ -741,9 +743,23 @@ class ArView(
                                                 Log.d("ArView", "✅ Successfully sent plane/point tap to Flutter")
                                             } catch (e: Exception) {
                                                 Log.e("ArView", "❌ Error sending plane/point tap to Flutter", e)
+                                                // Fallback: Send a simple empty space tap notification
+                                                try {
+                                                    Log.d("ArView", "🔄 Attempting fallback empty space tap notification")
+                                                    objectChannel.invokeMethod("onEmptySpaceTap", null)
+                                                } catch (fallbackError: Exception) {
+                                                    Log.e("ArView", "❌ Fallback notification also failed", fallbackError)
+                                                }
                                             }
                                         } else if (serializedResults.isEmpty()) {
                                             Log.w("ArView", "❌ No valid hit results to send to Flutter")
+                                            // Still try to send empty space tap notification
+                                            try {
+                                                Log.d("ArView", "🔄 No hit results, sending empty space tap notification")
+                                                objectChannel.invokeMethod("onEmptySpaceTap", null)
+                                            } catch (fallbackError: Exception) {
+                                                Log.e("ArView", "❌ Empty space tap notification failed", fallbackError)
+                                            }
                                         }
                                     } else {
                                         Log.w("ArView", "❌ No current frame available for hit testing")
@@ -1606,12 +1622,48 @@ class ArView(
     private fun notifyPlaneOrPointTap(hitResults: List<Map<String, Any>>) {
         mainScope.launch {
             try {
-                // hitResults is already serialized from serializeARCoreHitResult, 
-                // no need for additional serialization
-                sessionChannel.invokeMethod("onPlaneOrPointTap", hitResults)
+                Log.d("ArView", "🎯 Sending ${hitResults.size} hit results to Flutter")
+                hitResults.forEachIndexed { index, hitResult ->
+                    Log.d("ArView", "🎯 Hit result $index: type=${hitResult["type"]}, distance=${hitResult["distance"]}")
+                    Log.d("ArView", "🎯 Hit result $index worldTransform type: ${hitResult["worldTransform"]?.javaClass?.simpleName}")
+                    if (hitResult["worldTransform"] is DoubleArray) {
+                        Log.d("ArView", "🎯 Hit result $index worldTransform length: ${(hitResult["worldTransform"] as DoubleArray).size}")
+                    }
+                }
+                
+                // Ensure worldTransform is converted to List for platform channel
+                val processedHitResults = hitResults.map { hitResult ->
+                    val processed = HashMap<String, Any>()
+                    processed["type"] = hitResult["type"] ?: 2
+                    processed["distance"] = hitResult["distance"] ?: 0.0
+                    
+                    // Convert DoubleArray to List if needed
+                    val worldTransform = hitResult["worldTransform"]
+                    processed["worldTransform"] = when (worldTransform) {
+                        is DoubleArray -> worldTransform.toList()
+                        is List<*> -> worldTransform
+                        else -> {
+                            Log.w("ArView", "Unknown worldTransform type: ${worldTransform?.javaClass?.simpleName}")
+                            DoubleArray(16) { if (it % 5 == 0) 1.0 else 0.0 }.toList() // Identity matrix
+                        }
+                    }
+                    processed
+                }
+                
+                Log.d("ArView", "🎯 Processed hit results for sending")
+                sessionChannel.invokeMethod("onPlaneOrPointTap", processedHitResults)
+                Log.d("ArView", "✅ Successfully sent hit results to Flutter")
             } catch (e: Exception) {
-                Log.e("ArView", "Error in notifyPlaneOrPointTap", e)
+                Log.e("ArView", "❌ Error in notifyPlaneOrPointTap", e)
                 e.printStackTrace()
+                
+                // Fallback: Send simple empty space notification
+                try {
+                    Log.d("ArView", "🔄 Sending fallback empty space tap")
+                    objectChannel.invokeMethod("onEmptySpaceTap", null)
+                } catch (fallbackError: Exception) {
+                    Log.e("ArView", "❌ Fallback also failed", fallbackError)
+                }
             }
         }
     }

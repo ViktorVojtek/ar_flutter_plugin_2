@@ -150,15 +150,57 @@ class ARSessionManager {
           break;
         case 'onPlaneOrPointTap':
           if (onPlaneOrPointTap != null) {
-            final rawHitTestResults = call.arguments as List<dynamic>;
-            final serializedHitTestResults = rawHitTestResults
-                .map(
-                    (hitTestResult) => Map<String, dynamic>.from(hitTestResult))
-                .toList();
-            final hitTestResults = serializedHitTestResults.map((e) {
-              return ARHitTestResult.fromJson(e);
-            }).toList();
-            onPlaneOrPointTap(hitTestResults);
+            try {
+              // Handle arguments more flexibly to avoid casting issues
+              final arguments = call.arguments;
+              if (debug) {
+                print('🎯 Received onPlaneOrPointTap arguments: $arguments');
+                print('🎯 Arguments type: ${arguments.runtimeType}');
+              }
+              
+              if (arguments != null && arguments is List) {
+                final rawHitTestResults = arguments;
+                if (debug) {
+                  print('🎯 Raw hit test results count: ${rawHitTestResults.length}');
+                  for (int i = 0; i < rawHitTestResults.length; i++) {
+                    print('🎯 Hit result $i: ${rawHitTestResults[i]}');
+                    print('🎯 Hit result $i type: ${rawHitTestResults[i].runtimeType}');
+                  }
+                }
+                
+                final serializedHitTestResults = rawHitTestResults
+                    .map((hitTestResult) {
+                      if (debug) {
+                        print('🎯 Converting hit result: $hitTestResult');
+                      }
+                      return Map<String, dynamic>.from(hitTestResult);
+                    })
+                    .toList();
+                    
+                if (debug) {
+                  print('🎯 Serialized hit test results: $serializedHitTestResults');
+                }
+                
+                final hitTestResults = serializedHitTestResults.map((e) {
+                  if (debug) {
+                    print('🎯 Creating ARHitTestResult from: $e');
+                  }
+                  return ARHitTestResult.fromJson(e);
+                }).toList();
+                
+                if (debug) {
+                  print('🎯 Final hit test results count: ${hitTestResults.length}');
+                }
+                
+                onPlaneOrPointTap(hitTestResults);
+              }
+            } catch (e) {
+              if (debug) {
+                print('❌ Error in onPlaneOrPointTap: $e');
+                print('Arguments: ${call.arguments}');
+                print('Arguments type: ${call.arguments.runtimeType}');
+              }
+            }
           }
           break;
         case 'onPlaneDetected':
