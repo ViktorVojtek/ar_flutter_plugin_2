@@ -905,23 +905,20 @@ class ArView(
                                         objectChannel.invokeMethod("onRotationStart", transformData)
                                     }
                                 } else {
-                                    // Only apply rotation if we have meaningful delta to prevent jitter
+                                    // Compute the small delta since last frame (handles 360° wrap)
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
                                     
-                                    // Add threshold to filter out tiny movements that might cause jitter
-                                    if (kotlin.math.abs(delta) > 0.005f) {
-                                        // Apply velocity-based rotation like iOS (scale and invert)
-                                        val scaledDelta = (delta * 0.5f) * -1f
-                                        
-                                        // Apply incremental rotation change with proper angle normalization
-                                        val currentYaw = mn.rotation.y
-                                        val newYaw = normalizeAngle(currentYaw + scaledDelta)
-                                        mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
-                                        
-                                        Log.d("ArView", "🔄 Rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
-                                    }
+                                    // Apply velocity-based rotation like iOS (scale and invert)
+                                    val scaledDelta = (delta * 0.5f) * -1f
+                                    
+                                    // Apply incremental rotation change with proper angle normalization
+                                    val currentYaw = mn.rotation.y
+                                    val newYaw = normalizeAngle(currentYaw + scaledDelta)
+                                    mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
                                     lastDetectorRotation = rot
+                                    
+                                    Log.d("ArView", "🔄 Rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
                                 }
 
 
