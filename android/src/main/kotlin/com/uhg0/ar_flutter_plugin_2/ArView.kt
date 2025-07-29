@@ -101,11 +101,8 @@ class ArView(
     // Rotation gesture tracking variables
     private var gestureStartRotation: Float? = null
     private var lastDetectorRotation: Float? = null
-    // private var lastAppliedRotation: Float = 0f // UNUSED: Removed in favor of direct rotation approach
-    // private var accumulatedRotationDelta: Float = 0f // UNUSED: Removed in favor of direct rotation approach
     private var rotationGestureActive: Boolean = false
     private var currentRotatingNode: ModelNode? = null
-    private var lastRotationUpdateTime: Long = 0L
     
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
@@ -816,8 +813,8 @@ class ArView(
                                         // End previous pan if different node
                                         if (currentPanningNode != null && panGestureActive) {
                                             Log.d("ArView", "Ending pan on previous node: ${currentPanningNode?.name}")
-                                            serializeLocalTransformation(currentPanningNode)?.let { transformData ->
-                                                objectChannel.invokeMethod("onPanEnd", transformData)
+                                            currentPanningNode?.name?.let { nodeName ->
+                                                objectChannel.invokeMethod("onPanEnd", nodeName)
                                             }
                                         }
                                         
@@ -883,52 +880,59 @@ class ArView(
                                 currentNode = currentNode.parent
                             }
                             modelNode?.let { mn ->
-                                Log.d("ArView", "Two-finger rotation gesture detected on node ${mn.name}")
+                                Log.d("ArView", "🔄 Two-finger rotation gesture on node ${mn.name}")
                                 
                                 // Enable rotation on the fly
                                 mn.isRotationEditable = true
-                                mn.isTouchable       = true
+                                mn.isTouchable = true
 
-                                // Read the raw gesture rotation in radians
-                                val rot = detector.rotation
-                                Log.d("ArView", "🔍 Raw detector rotation: $rot")
+                                // Get current detector rotation in radians
+                                val currentDetectorRotation = detector.rotation
+                                Log.d("ArView", "� Detector rotation: ${Math.toDegrees(currentDetectorRotation.toDouble()).toFloat()}°")
 
-                                // On first event, initialize tracking
+                                // Initialize rotation tracking on first event
                                 if (gestureStartRotation == null) {
-                                    gestureStartRotation   = rot
-                                    lastDetectorRotation   = rot
-                                    lastRotationUpdateTime = System.currentTimeMillis()
+                                    gestureStartRotation = currentDetectorRotation
+                                    lastDetectorRotation = currentDetectorRotation
                                     rotationGestureActive = true
                                     currentRotatingNode = mn
-                                    Log.d("ArView", "🟢 Rotation gesture started - initial detector: $rot")
-                                    // Send rotation start event with transformation data
-                                    serializeLocalTransformation(mn)?.let { transformData ->
-                                        objectChannel.invokeMethod("onRotationStart", transformData)
+                                    Log.d("ArView", "🟢 Rotation gesture started on node ${mn.name}")
+                                    
+                                    // Send start event with node name for consistency
+                                    mn.name?.let { nodeName ->
+                                        objectChannel.invokeMethod("onRotationStart", nodeName)
                                     }
                                 } else {
-                                    // FIXED APPROACH: Calculate delta from last rotation and normalize
-                                    val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
-                                    Log.d("ArView", "🔍 Raw delta: $delta (detector: $rot, lastRot: $lastDetectorRotation)")
+                                    // Calculate incremental rotation delta 
+                                    val delta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
                                     
-                                    // Apply velocity-based rotation like iOS (scale and invert)
-                                    val scaledDelta = (delta * 0.5f) * -1f
+                                    // Filter out unreasonably large deltas (likely gesture jumps)
+                                    val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
+                                    if (deltaDegreesAbs > 45.0f) {
+                                        Log.w("ArView", "� Ignoring large rotation delta: ${Math.toDegrees(delta.toDouble()).toFloat()}°")
+                                        lastDetectorRotation = currentDetectorRotation
+                                        return@let
+                                    }
                                     
-                                    // Apply incremental rotation change to current rotation
+                                    // Apply scaled and inverted delta (like iOS)
+                                    val scaledDelta = delta * -0.5f
+                                    
+                                    // Apply rotation incrementally to current Y rotation
                                     val currentYaw = mn.rotation.y
                                     val newYaw = normalizeAngle(currentYaw + scaledDelta)
                                     mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
-                                    // Update last detector rotation for next frame
-                                    lastDetectorRotation = rot
+                                    // Update tracking
+                                    lastDetectorRotation = currentDetectorRotation
                                     
-                                    Log.d("ArView", "🔄 Delta rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
+                                    Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° -> scaled: ${Math.toDegrees(scaledDelta.toDouble()).toFloat()}°")
+                                    Log.d("ArView", "   Current rotation: ${Math.toDegrees(currentYaw.toDouble()).toFloat()}° -> New: ${Math.toDegrees(newYaw.toDouble()).toFloat()}°")
+                                    
+                                    // Send change event with node name for consistency  
+                                    mn.name?.let { nodeName ->
+                                        objectChannel.invokeMethod("onRotationChange", nodeName)
+                                    }
                                 }
-
-                                // Send rotation change event with transformation data
-                                serializeLocalTransformation(mn)?.let { transformData ->
-                                    objectChannel.invokeMethod("onRotationChange", transformData)
-                                }
-
                             }
                         } else if (pointerCount < 2) {
                             Log.d("ArView", "❌ Single finger detected for rotation, ignoring - use two fingers for rotation")
@@ -956,8 +960,8 @@ class ArView(
                             // End any active pan gesture
                             if (panGestureActive && currentPanningNode != null) {
                                 Log.d("ArView", "Touch ended, ending pan gesture on node: ${currentPanningNode?.name}")
-                                serializeLocalTransformation(currentPanningNode)?.let { transformData ->
-                                    objectChannel.invokeMethod("onPanEnd", transformData)
+                                currentPanningNode?.name?.let { nodeName ->
+                                    objectChannel.invokeMethod("onPanEnd", nodeName)
                                 }
                                 currentPanningNode = null
                                 panGestureActive = false
@@ -967,14 +971,13 @@ class ArView(
                             if (rotationGestureActive && currentRotatingNode != null) {
                                 Log.d("ArView", "🔴 Touch ended, ending rotation gesture on node: ${currentRotatingNode?.name}")
                                 
-                                serializeLocalTransformation(currentRotatingNode)?.let { transformData ->
-                                    objectChannel.invokeMethod("onRotationEnd", transformData)
+                                currentRotatingNode?.name?.let { nodeName ->
+                                    objectChannel.invokeMethod("onRotationEnd", nodeName)
                                 }
                                 currentRotatingNode = null
                                 rotationGestureActive = false
                                 gestureStartRotation = null
                                 lastDetectorRotation = null
-                                lastRotationUpdateTime = 0L
                             }
                         }
                     }
