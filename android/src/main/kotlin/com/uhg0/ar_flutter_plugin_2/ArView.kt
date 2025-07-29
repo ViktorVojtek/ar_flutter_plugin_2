@@ -891,6 +891,7 @@ class ArView(
 
                                 // Read the raw gesture rotation in radians
                                 val rot = detector.rotation
+                                Log.d("ArView", "🔍 Raw detector rotation: $rot")
 
                                 // On first event, initialize tracking
                                 if (gestureStartRotation == null) {
@@ -899,7 +900,7 @@ class ArView(
                                     lastRotationUpdateTime = System.currentTimeMillis()
                                     rotationGestureActive = true
                                     currentRotatingNode = mn
-                                    Log.d("ArView", "🟢 Rotation gesture started")
+                                    Log.d("ArView", "🟢 Rotation gesture started - initial rotation: $rot")
                                     // Send rotation start event with transformation data
                                     serializeLocalTransformation(mn)?.let { transformData ->
                                         objectChannel.invokeMethod("onRotationStart", transformData)
@@ -907,13 +908,14 @@ class ArView(
                                 } else {
                                     // Compute the small delta since last frame (handles 360° wrap)
                                     val delta = calculateIncrementalRotationDelta(rot, lastDetectorRotation!!)
+                                    Log.d("ArView", "🔍 Calculated delta: $delta (from rot: $rot, lastRot: $lastDetectorRotation)")
                                     
                                     // Apply velocity-based rotation like iOS (scale and invert)
                                     val scaledDelta = (delta * 0.5f) * -1f
                                     
-                                    // Apply incremental rotation change with proper angle normalization
+                                    // Apply incremental rotation change WITHOUT normalization to test
                                     val currentYaw = mn.rotation.y
-                                    val newYaw = normalizeAngle(currentYaw + scaledDelta)
+                                    val newYaw = currentYaw + scaledDelta
                                     mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
                                     lastDetectorRotation = rot
@@ -921,11 +923,11 @@ class ArView(
                                     Log.d("ArView", "🔄 Rotation applied - delta: $delta, scaledDelta: $scaledDelta, currentYaw: $currentYaw, newYaw: $newYaw")
                                 }
 
-
+                                // TEMPORARILY COMMENT OUT onRotationChange to debug
                                 // Send rotation change event with transformation data
-                                serializeLocalTransformation(mn)?.let { transformData ->
-                                    objectChannel.invokeMethod("onRotationChange", transformData)
-                                }
+                                // serializeLocalTransformation(mn)?.let { transformData ->
+                                //     objectChannel.invokeMethod("onRotationChange", transformData)
+                                // }
 
                             }
                         } else if (pointerCount < 2) {
