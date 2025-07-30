@@ -913,12 +913,11 @@ class ArView(
                                     val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
                                     if (deltaDegreesAbs > 45.0f) {
                                         Log.w("ArView", "� Ignoring large rotation delta: ${Math.toDegrees(delta.toDouble()).toFloat()}°")
-                                        lastDetectorRotation = currentDetectorRotation
-                                        return@let
+                                        // lastDetectorRotation = currentDetectorRotation
+                                        // return@let  // DISABLED: Allow all rotation deltas through
                                     }
                                     
-                                    // Apply scaled and inverted delta (like iOS)
-                                    val scaledDelta = delta * -0.5f
+                                    // Apply delta directly without artificial scaling (ChatGPT approach)
                                     
                                     // Apply rotation incrementally to current Y rotation
                                     val currentYaw = mn.rotation.y
