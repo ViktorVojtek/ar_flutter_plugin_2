@@ -898,9 +898,16 @@ class ArView(
                                         objectChannel.invokeMethod("onRotationStart", nodeName)
                                     }
                                 } else {
-                                    // TODO: Velocity-based rotation approach 
-                                    // Skip for now to avoid compilation errors
-                                    // val delta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
+                                    // Compute incremental delta from absolute rotation (ChatGPT approach)
+                                    // Key insight: iOS gives deltas, Android gives absolute angles - we need to convert!
+                                    var delta = currentDetectorRotation - lastDetectorRotation!!
+                                    
+                                    // Handle wrap-around at ±π (crucial for smooth rotation, prevents 300° jumps)
+                                    if (delta > Math.PI) {
+                                        delta -= (2 * Math.PI).toFloat()
+                                    } else if (delta < -Math.PI) {
+                                        delta += (2 * Math.PI).toFloat()
+                                    }
                                     
                                     // Filter out unreasonably large deltas (likely gesture jumps)
                                     val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
@@ -915,13 +922,13 @@ class ArView(
                                     
                                     // Apply rotation incrementally to current Y rotation
                                     val currentYaw = mn.rotation.y
-                                    val newYaw = currentYaw // normalizeAngle(currentYaw + scaledDelta)
+                                    val newYaw = currentYaw + delta
                                     mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
                                     // Update tracking
                                     lastDetectorRotation = currentDetectorRotation
                                     
-                                    Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° -> scaled: ${Math.toDegrees(scaledDelta.toDouble()).toFloat()}°")
+                                    Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° (${delta} rad)")
                                     Log.d("ArView", "   Current rotation: ${Math.toDegrees(currentYaw.toDouble()).toFloat()}° -> New: ${Math.toDegrees(newYaw.toDouble()).toFloat()}°")
                                     
                                     // Send change event with node name for consistency  
