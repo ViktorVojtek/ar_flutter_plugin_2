@@ -113,6 +113,32 @@ If you have problems with permissions on iOS (e.g. with the camera view not show
   end
 ```
 
+## ✨ Enhanced Features
+
+### 🎯 Comprehensive Plane Detection
+This plugin now provides detailed information about detected planes including:
+
+- **Position data**: Get the exact 3D coordinates of detected planes
+- **Height information**: Essential for distinguishing ground planes from tables, desks, etc.
+- **Size measurements**: Width, length, and total area of detected planes  
+- **Plane alignment**: Distinguish between horizontal and vertical surfaces
+- **Transform data**: Full transformation matrix for advanced positioning
+
+This enables smart object placement based on plane characteristics:
+```dart
+void onPlaneDetected(ARPlane plane) {
+  if (plane.alignment == 'horizontal' && plane.height < 0.3) {
+    // Ground plane - place floor objects
+  } else if (plane.height >= 0.5 && plane.height <= 1.2) {
+    // Table/desk surface - place smaller objects
+  } else if (plane.alignment == 'vertical') {
+    // Wall - place wall-mounted objects
+  }
+}
+```
+
+See `examples/enhanced_plane_detection.dart` for a complete implementation.
+
 ## Example AR screen implementation
 - with methods for add/remove object
 
@@ -295,10 +321,27 @@ class _ARScreenState extends State<ARScreen> {
     }
   }
 
-  void onPlaneDetected(dynamic plane) {
+  void onPlaneDetected(ARPlane plane) {
     debugPrint("Plane detected: $plane");
-    // You can add additional plane detection logic here if needed
-    // For example, you might want to track detected planes for better object placement
+    
+    // Enhanced plane information is now available
+    debugPrint("Plane type: ${plane.type}");
+    debugPrint("Plane alignment: ${plane.alignment}"); // 'horizontal' or 'vertical'
+    debugPrint("Plane height: ${plane.height}m");
+    debugPrint("Plane position: (${plane.center.x}, ${plane.center.y}, ${plane.center.z})");
+    debugPrint("Plane size: ${plane.width}m × ${plane.length}m");
+    debugPrint("Plane area: ${plane.extent.area}m²");
+    
+    // Example: Filter planes by type
+    if (plane.alignment == 'horizontal' && plane.height < 0.3) {
+      debugPrint("Ground plane detected at height ${plane.height}m");
+    } else if (plane.alignment == 'horizontal' && plane.height >= 0.5 && plane.height <= 1.2) {
+      debugPrint("Table/desk surface detected at height ${plane.height}m");
+    } else if (plane.alignment == 'vertical') {
+      debugPrint("Wall detected");
+    }
+    
+    // You can now use plane height and position for intelligent object placement
   }
 
   Future<void> addModel() async {

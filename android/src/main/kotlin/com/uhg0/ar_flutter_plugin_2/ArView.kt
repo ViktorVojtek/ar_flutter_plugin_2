@@ -626,8 +626,10 @@ class ArView(
                                             Log.d("ArView", "🎯 Captured plane Y coordinate: $detectedPlaneY for movement constraint")
                                         }
                                         
+                                        // Send comprehensive plane information to Flutter
+                                        val planeData = serializePlaneData(plane)
                                         mainScope.launch {
-                                            sessionChannel.invokeMethod("onPlaneDetected", detectedPlanes.size)
+                                            sessionChannel.invokeMethod("onPlaneDetected", planeData)
                                         }
                                     }
                                 }
@@ -1884,6 +1886,61 @@ class ArView(
             // Optionnel : remettre à null après suppression
             worldOriginNode = null
         }
+    }
+
+    // Serialize comprehensive plane data for Flutter
+    private fun serializePlaneData(plane: Plane): Map<String, Any> {
+        val centerPose = plane.centerPose
+        val polygon = plane.polygon
+        
+        // Calculate plane bounds
+        var minX = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var minZ = Float.MAX_VALUE
+        var maxZ = Float.MIN_VALUE
+        
+        polygon.rewind()
+        for (i in 0 until polygon.limit() step 2) {
+            val x = polygon.get(i)
+            val z = polygon.get(i + 1)
+            minX = kotlin.math.min(minX, x)
+            maxX = kotlin.math.max(maxX, x)
+            minZ = kotlin.math.min(minZ, z)
+            maxZ = kotlin.math.max(maxZ, z)
+        }
+        
+        val width = maxX - minX
+        val height = maxZ - minZ
+        
+        return mapOf(
+            "identifier" to plane.hashCode().toString(),
+            "type" to when (plane.type) {
+                Plane.Type.HORIZONTAL_DOWNWARD_FACING -> "horizontalDownwardFacing"
+                Plane.Type.HORIZONTAL_UPWARD_FACING -> "horizontalUpwardFacing"
+                Plane.Type.VERTICAL -> "vertical"
+                else -> "unknown"
+            },
+            "center" to mapOf(
+                "x" to centerPose.translation[0],
+                "y" to centerPose.translation[1], // This is the height!
+                "z" to centerPose.translation[2]
+            ),
+            "extent" to mapOf(
+                "width" to width,
+                "height" to height
+            ),
+            "transform" to listOf(
+                centerPose.matrix[0], centerPose.matrix[1], centerPose.matrix[2], centerPose.matrix[3],
+                centerPose.matrix[4], centerPose.matrix[5], centerPose.matrix[6], centerPose.matrix[7],
+                centerPose.matrix[8], centerPose.matrix[9], centerPose.matrix[10], centerPose.matrix[11],
+                centerPose.matrix[12], centerPose.matrix[13], centerPose.matrix[14], centerPose.matrix[15]
+            ),
+            "alignment" to when (plane.type) {
+                Plane.Type.HORIZONTAL_DOWNWARD_FACING, Plane.Type.HORIZONTAL_UPWARD_FACING -> "horizontal"
+                Plane.Type.VERTICAL -> "vertical"
+                else -> "unknown"
+            }
+        )
     }
 
     // Temporary simple normalizeAngle function (to be removed)

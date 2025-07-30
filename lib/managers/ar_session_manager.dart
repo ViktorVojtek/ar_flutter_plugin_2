@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
+import 'package:ar_flutter_plugin_2/models/ar_plane.dart';
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,7 +12,7 @@ import 'package:vector_math/vector_math_64.dart';
 
 // Type definitions to enforce a consistent use of the API
 typedef ARHitResultHandler = void Function(List<ARHitTestResult> hits);
-typedef ARPlaneResultHandler = void Function(int planeCount);
+typedef ARPlaneResultHandler = void Function(ARPlane plane);
 typedef ErrorHandler = void Function(String error);
 
 /// Manages the session configuration, parameters and events of an [ARView]
@@ -31,7 +32,7 @@ class ARSessionManager {
   /// Receives hit results from user taps with tracked planes or feature points
   late ARHitResultHandler onPlaneOrPointTap;
 
-  /// Receives total number of Planes when a plane is detected and added to the view
+  /// Receives comprehensive plane data when a plane is detected and added to the view
   late ARPlaneResultHandler onPlaneDetected;
 
   /// Callback that is triggered once error is triggered
@@ -205,8 +206,19 @@ class ARSessionManager {
           break;
         case 'onPlaneDetected':
           if (onPlaneDetected != null) {
-            final planeCountResult = call.arguments as int;
-            onPlaneDetected(planeCountResult);
+            try {
+              final planeData = call.arguments as Map<String, dynamic>;
+              final plane = ARPlane.fromMap(planeData);
+              onPlaneDetected(plane);
+              if (debug) {
+                print('Plane detected: $plane');
+              }
+            } catch (e) {
+              if (debug) {
+                print('Error parsing plane data: $e');
+                print('Arguments: ${call.arguments}');
+              }
+            }
           }
           break;
         case 'dispose':

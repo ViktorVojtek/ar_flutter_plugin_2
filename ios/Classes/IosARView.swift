@@ -367,7 +367,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             let plane = modelBuilder.makePlane(anchor: planeAnchor, flutterAssetFile: customPlaneTexturePath)
             trackedPlanes[anchor.identifier] = (node, plane)
             planeCount += 1
-            DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onPlaneDetected", arguments: self.planeCount)}
+            
+            // Send comprehensive plane information to Flutter
+            let planeData = serializePlaneData(planeAnchor: planeAnchor)
+            DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onPlaneDetected", arguments: planeData)}
+            
             if (showPlanes) {
                 node.addChildNode(plane)
             }
@@ -819,6 +823,49 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             return "No match"
         @unknown default:
             return "Unknown"
+        }
+    }
+    
+    // Serialize comprehensive plane data for Flutter
+    func serializePlaneData(planeAnchor: ARPlaneAnchor) -> [String: Any] {
+        let center = planeAnchor.center
+        let extent = planeAnchor.extent
+        let transform = planeAnchor.transform
+        
+        // Get the height (Y position) from the transform matrix
+        let height = transform.columns.3.y
+        
+        return [
+            "identifier": planeAnchor.identifier.uuidString,
+            "type": alignmentToString(planeAnchor.alignment),
+            "center": [
+                "x": center.x,
+                "y": height, // This is the height of the plane!
+                "z": center.z
+            ],
+            "extent": [
+                "width": extent.x,
+                "height": extent.z
+            ],
+            "transform": [
+                transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
+                transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
+                transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
+                transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
+            ],
+            "alignment": alignmentToString(planeAnchor.alignment)
+        ]
+    }
+    
+    // Helper function to convert alignment to string
+    func alignmentToString(_ alignment: ARPlaneAnchor.Alignment) -> String {
+        switch alignment {
+        case .horizontal:
+            return "horizontal"
+        case .vertical:
+            return "vertical"
+        @unknown default:
+            return "unknown"
         }
     }
 }
