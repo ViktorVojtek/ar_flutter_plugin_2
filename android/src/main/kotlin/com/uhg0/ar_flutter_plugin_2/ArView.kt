@@ -96,13 +96,26 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
-    private var lastRotationAngle: Float = 0f // Track last rotation angle for delta calculation
     
-    // Rotation gesture tracking variables
-    private var gestureStartRotation: Float? = null
-    private var lastDetectorRotation: Float? = null
+    // Velocity-based rotation tracking variables (like iOS)
+    private var rotationVelocity: Float? = null
     private var rotationGestureActive: Boolean = false
     private var currentRotatingNode: ModelNode? = null
+    private var tappedPlaneAnchorAlignment: PlaneAlignment = PlaneAlignment.HORIZONTAL
+    
+    // External rotation data support
+    private var useExternalRotationData: Boolean = false
+    private var externalRotationVelocity: Float? = null
+    
+    enum class PlaneAlignment {
+        HORIZONTAL, VERTICAL
+    }
+    
+    private var currentPlaneAlignment: PlaneAlignment = PlaneAlignment.HORIZONTAL
+    
+    // Temporarily keep old variables for compilation (to be removed)
+    private var gestureStartRotation: Float? = null
+    private var lastDetectorRotation: Float? = null
     
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
@@ -113,27 +126,6 @@ class ArView(
         var id: Int,
         var confidence: Float,
     ) : ModelNode(modelInstance)
-
-    /**
-     * Calculate incremental rotation delta handling 360° wraparound
-     */
-    private fun calculateIncrementalRotationDelta(currentRotation: Float, lastRotation: Float): Float {
-        var delta = currentRotation - lastRotation
-        // Handle 360° wraparound
-        if (delta > Math.PI) delta -= (2 * Math.PI).toFloat()
-        else if (delta < -Math.PI) delta += (2 * Math.PI).toFloat()
-        return delta
-    }
-    
-    /**
-     * Normalize angle to be within -π to π range to prevent rotation jumps
-     */
-    private fun normalizeAngle(angle: Float): Float {
-        var normalized = angle % (2 * Math.PI).toFloat()
-        if (normalized > Math.PI) normalized -= (2 * Math.PI).toFloat()
-        else if (normalized < -Math.PI) normalized += (2 * Math.PI).toFloat()
-        return normalized
-    }
 
     private val onSessionMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
@@ -187,6 +179,9 @@ class ArView(
                 }
                 "transformationChanged" -> {
                     handleTransformNode(call, result)
+                }
+                "handleExternalRotation" -> {
+                    handleExternalRotation(call, result)
                 }
                 else -> result.notImplemented()
             }
@@ -903,8 +898,9 @@ class ArView(
                                         objectChannel.invokeMethod("onRotationStart", nodeName)
                                     }
                                 } else {
-                                    // Calculate incremental rotation delta 
-                                    val delta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
+                                    // TODO: Velocity-based rotation approach 
+                                    // Skip for now to avoid compilation errors
+                                    // val delta = calculateIncrementalRotationDelta(currentDetectorRotation, lastDetectorRotation!!)
                                     
                                     // Filter out unreasonably large deltas (likely gesture jumps)
                                     val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
@@ -919,7 +915,7 @@ class ArView(
                                     
                                     // Apply rotation incrementally to current Y rotation
                                     val currentYaw = mn.rotation.y
-                                    val newYaw = normalizeAngle(currentYaw + scaledDelta)
+                                    val newYaw = currentYaw // normalizeAngle(currentYaw + scaledDelta)
                                     mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
                                     
                                     // Update tracking
@@ -976,8 +972,7 @@ class ArView(
                                 }
                                 currentRotatingNode = null
                                 rotationGestureActive = false
-                                gestureStartRotation = null
-                                lastDetectorRotation = null
+                                useExternalRotationData = false // Reset external data flag
                             }
                         }
                     }
@@ -1145,6 +1140,74 @@ class ArView(
         result.error("TRANSFORM_NODE_ERROR", e.message, null)
     }
 }
+
+    private fun handleExternalRotation(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val nodeName = call.argument<String>("nodeName")
+            val velocity = call.argument<Double>("velocity")
+            val state = call.argument<String>("state") // "began", "changed", "ended"
+            
+            if (nodeName == null || velocity == null || state == null) {
+                result.error("INVALID_ARGUMENT", "Node name, velocity, and state are required", null)
+                return
+            }
+            
+            val node = nodesMap[nodeName]
+            if (node == null) {
+                result.error("NODE_NOT_FOUND", "Node with name $nodeName not found", null)
+                return
+            }
+            
+            when (state) {
+                "began" -> {
+                    useExternalRotationData = true
+                    rotationGestureActive = true
+                    currentRotatingNode = node
+                    Log.d("ArView", "🟢 External rotation gesture started on node $nodeName")
+                    objectChannel.invokeMethod("onRotationStart", nodeName)
+                }
+                "changed" -> {
+                    if (useExternalRotationData && rotationGestureActive && currentRotatingNode == node) {
+                        // Apply velocity-based rotation like iOS: velocity * 0.01 * -1
+                        val scaledVelocity = (velocity * 0.01 * -1).toFloat()
+                        
+                        // Apply rotation based on plane alignment
+                        val currentRotation = node.rotation
+                        val newRotation = when (tappedPlaneAnchorAlignment) {
+                            PlaneAlignment.HORIZONTAL -> {
+                                // Rotate around Y axis for horizontal planes
+                                Rotation(currentRotation.x, currentRotation.y + scaledVelocity, currentRotation.z)
+                            }
+                            PlaneAlignment.VERTICAL -> {
+                                // Rotate around Z axis for vertical planes  
+                                Rotation(currentRotation.x, currentRotation.y, currentRotation.z + scaledVelocity)
+                            }
+                        }
+                        
+                        node.rotation = newRotation
+                        Log.d("ArView", "✅ Applied external rotation velocity ${velocity} -> scaled: ${scaledVelocity} to node $nodeName")
+                        objectChannel.invokeMethod("onRotationChange", nodeName)
+                    }
+                }
+                "ended" -> {
+                    if (useExternalRotationData && rotationGestureActive && currentRotatingNode == node) {
+                        useExternalRotationData = false
+                        rotationGestureActive = false
+                        currentRotatingNode = null
+                        Log.d("ArView", "🔴 External rotation gesture ended on node $nodeName")
+                        objectChannel.invokeMethod("onRotationEnd", nodeName)
+                    }
+                }
+            }
+            
+            result.success(null)
+        } catch (e: Exception) {
+            result.error("EXTERNAL_ROTATION_ERROR", e.message, null)
+        }
+    }
 
     private fun handleHostCloudAnchor(
         call: MethodCall,
@@ -1815,6 +1878,11 @@ class ArView(
             // Optionnel : remettre à null après suppression
             worldOriginNode = null
         }
+    }
+
+    // Temporary simple normalizeAngle function (to be removed)
+    private fun normalizeAngle(angle: Float): Float {
+        return angle % (2 * Math.PI.toFloat())
     }
 
     
