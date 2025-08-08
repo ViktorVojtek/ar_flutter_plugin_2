@@ -874,8 +874,6 @@ class ArView(
                                         Log.e("ArView", "❌ Error applying pan movement to node ${modelNode.name}: ${e.message}", e)
                                     }
                                     
-                                    Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
-                                    
                                     // Notify Flutter with just the node name (Flutter expects String, not Map)
                                     modelNode.name?.let { nodeName ->
                                         objectChannel.invokeMethod("onPanChange", nodeName)
@@ -888,7 +886,7 @@ class ArView(
                             }
                         }
                     },
-                    onRotate = { detector, e, node ->
+                    onRotate = { detector: RotateGestureDetector, e: MotionEvent, node: Node? ->
                         val pointerCount = e.pointerCount
                         Log.d("ArView", "🔄 Native onRotate called - action: ${e.action}, node: ${node?.name}, handleRotation: ${this@ArView.handleRotation}, pointers: $pointerCount")
                         
@@ -913,59 +911,60 @@ class ArView(
                                     // Force enable rotation properties using our dedicated method
                                     forceNodeGestureProperties(mn, enablePan = false, enableRotation = true)
 
-                                // Get current detector rotation in radians
-                                val currentDetectorRotation = detector.rotation
-                                Log.d("ArView", "� Detector rotation: ${Math.toDegrees(currentDetectorRotation.toDouble()).toFloat()}°")
+                                    // Get current detector rotation in radians
+                                    val currentDetectorRotation = detector.rotation
+                                    Log.d("ArView", "📐 Detector rotation: ${Math.toDegrees(currentDetectorRotation.toDouble()).toFloat()}°")
 
-                                // Initialize rotation tracking on first event
-                                if (gestureStartRotation == null) {
-                                    gestureStartRotation = currentDetectorRotation
-                                    lastDetectorRotation = currentDetectorRotation
-                                    rotationGestureActive = true
-                                    currentRotatingNode = mn
-                                    Log.d("ArView", "🟢 Rotation gesture started on node ${mn.name}")
-                                    
-                                    // Send start event with node name for consistency
-                                    mn.name?.let { nodeName ->
-                                        objectChannel.invokeMethod("onRotationStart", nodeName)
+                                    // Initialize rotation tracking on first event
+                                    if (gestureStartRotation == null) {
+                                        gestureStartRotation = currentDetectorRotation
+                                        lastDetectorRotation = currentDetectorRotation
+                                        rotationGestureActive = true
+                                        currentRotatingNode = mn
+                                        Log.d("ArView", "🟢 Rotation gesture started on node ${mn.name}")
+                                        
+                                        // Send start event with node name for consistency
+                                        mn.name?.let { nodeName ->
+                                            objectChannel.invokeMethod("onRotationStart", nodeName)
+                                        }
+                                    } else {
+                                        // Compute incremental delta from absolute rotation
+                                        var delta = currentDetectorRotation - lastDetectorRotation!!
+                                        
+                                        // Handle wrap-around at ±π (crucial for smooth rotation)
+                                        if (delta > Math.PI) {
+                                            delta -= (2 * Math.PI).toFloat()
+                                        } else if (delta < -Math.PI) {
+                                            delta += (2 * Math.PI).toFloat()
+                                        }
+                                        
+                                        // Filter out unreasonably large deltas (likely gesture jumps) 
+                                        val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
+                                        if (deltaDegreesAbs > 45.0f) {
+                                            Log.w("ArView", "⚠️ Large rotation delta detected: ${Math.toDegrees(delta.toDouble()).toFloat()}°, allowing but clamping")
+                                            // Clamp the delta to prevent massive jumps
+                                            val maxDelta = Math.toRadians(45.0).toFloat()
+                                            delta = if (delta > 0) maxDelta else -maxDelta
+                                        }
+                                        
+                                        // Apply delta directly to current Y rotation (horizontal plane rotation)
+                                        val currentRotation = mn.rotation
+                                        val newYaw = currentRotation.y + delta
+                                        mn.rotation = Rotation(currentRotation.x, newYaw, currentRotation.z)
+                                        
+                                        // Update tracking
+                                        lastDetectorRotation = currentDetectorRotation
+                                        
+                                        Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° (${delta} rad)")
+                                        Log.d("ArView", "   Node ${mn.name} rotation: ${Math.toDegrees(currentRotation.y.toDouble()).toFloat()}° -> ${Math.toDegrees(newYaw.toDouble()).toFloat()}°")
+                                        
+                                        // Send change event with node name for consistency  
+                                        mn.name?.let { nodeName ->
+                                            objectChannel.invokeMethod("onRotationChange", nodeName)
+                                        }
                                     }
-                                } else {
-                                    // Compute incremental delta from absolute rotation (ChatGPT approach)
-                                    // Key insight: iOS gives deltas, Android gives absolute angles - we need to convert!
-                                    var delta = currentDetectorRotation - lastDetectorRotation!!
-                                    
-                                    // Handle wrap-around at ±π (crucial for smooth rotation, prevents 300° jumps)
-                                    if (delta > Math.PI) {
-                                        delta -= (2 * Math.PI).toFloat()
-                                    } else if (delta < -Math.PI) {
-                                        delta += (2 * Math.PI).toFloat()
-                                    }
-                                    
-                                    // Filter out unreasonably large deltas (likely gesture jumps)
-                                    val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
-                                    if (deltaDegreesAbs > 45.0f) {
-                                        Log.w("ArView", "� Ignoring large rotation delta: ${Math.toDegrees(delta.toDouble()).toFloat()}°")
-                                        // lastDetectorRotation = currentDetectorRotation
-                                        // return@let  // DISABLED: Allow all rotation deltas through
-                                    }
-                                    
-                                    // Apply delta directly without artificial scaling (ChatGPT approach)
-                                    
-                                    // Apply rotation incrementally to current Y rotation
-                                    val currentYaw = mn.rotation.y
-                                    val newYaw = currentYaw + delta
-                                    mn.rotation = Rotation(mn.rotation.x, newYaw, mn.rotation.z)
-                                    
-                                    // Update tracking
-                                    lastDetectorRotation = currentDetectorRotation
-                                    
-                                    Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° (${delta} rad)")
-                                    Log.d("ArView", "   Current rotation: ${Math.toDegrees(currentYaw.toDouble()).toFloat()}° -> New: ${Math.toDegrees(newYaw.toDouble()).toFloat()}°")
-                                    
-                                    // Send change event with node name for consistency  
-                                    mn.name?.let { nodeName ->
-                                        objectChannel.invokeMethod("onRotationChange", nodeName)
-                                    }
+                                } catch (e: Exception) {
+                                    Log.e("ArView", "❌ Error applying rotation to node ${mn.name}: ${e.message}", e)
                                 }
                             }
                         } else if (pointerCount < 2) {
@@ -1989,6 +1988,4 @@ class ArView(
     private fun normalizeAngle(angle: Float): Float {
         return angle % (2 * Math.PI.toFloat())
     }
-
-    
 }
