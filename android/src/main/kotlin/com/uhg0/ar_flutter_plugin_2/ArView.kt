@@ -120,6 +120,10 @@ class ArView(
     // Pan gesture tracking variables
     private var currentPanningNode: ModelNode? = null
     private var panGestureActive = false
+    
+    // iOS-inspired gesture state tracking for better reliability
+    private var panGestureStarted = false
+    private var rotationGestureStarted = false
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
