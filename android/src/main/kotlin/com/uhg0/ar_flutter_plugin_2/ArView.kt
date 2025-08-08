@@ -1929,12 +1929,11 @@ class ArView(
                 "width" to width,
                 "height" to height
             ),
-            "transform" to listOf(
-                centerPose.matrix[0], centerPose.matrix[1], centerPose.matrix[2], centerPose.matrix[3],
-                centerPose.matrix[4], centerPose.matrix[5], centerPose.matrix[6], centerPose.matrix[7],
-                centerPose.matrix[8], centerPose.matrix[9], centerPose.matrix[10], centerPose.matrix[11],
-                centerPose.matrix[12], centerPose.matrix[13], centerPose.matrix[14], centerPose.matrix[15]
-            ),
+            "transform" to run {
+                val matrix = FloatArray(16)
+                centerPose.toMatrix(matrix, 0)
+                matrix.map { it.toDouble() }
+            },
             "alignment" to when (plane.type) {
                 Plane.Type.HORIZONTAL_DOWNWARD_FACING, Plane.Type.HORIZONTAL_UPWARD_FACING -> "horizontal"
                 Plane.Type.VERTICAL -> "vertical"
