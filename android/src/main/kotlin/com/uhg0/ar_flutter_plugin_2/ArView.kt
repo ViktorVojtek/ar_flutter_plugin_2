@@ -499,6 +499,15 @@ class ArView(
         Log.d("ArView", "=== FINISHED UPDATING NODE PROPERTIES ===")
     }
 
+    // Force gesture properties on a specific node - ensures gestures work
+    private fun forceNodeGestureProperties(node: ModelNode, enablePan: Boolean = true, enableRotation: Boolean = true) {
+        Log.d("ArView", "🔧 FORCING gesture properties on node ${node.name}: pan=$enablePan, rotation=$enableRotation")
+        node.isPositionEditable = enablePan
+        node.isRotationEditable = enableRotation
+        node.isTouchable = true
+        Log.d("ArView", "✅ Node ${node.name} properties forced: isPositionEditable=${node.isPositionEditable}, isRotationEditable=${node.isRotationEditable}")
+    }
+
     private fun handleInit(
         call: MethodCall,
         result: MethodChannel.Result,
@@ -827,22 +836,43 @@ class ArView(
                                     // CRITICAL FIX: Force properties and proceed with movement regardless of property check
                                     Log.d("ArView", "Single-finger pan gesture detected on node ${modelNode.name}, original isPositionEditable: ${modelNode.isPositionEditable}")
                                     
-                                    // Force enable properties
-                                    modelNode.isPositionEditable = true
-                                    modelNode.isTouchable = true
-                                    
-                                    // Immediately apply the pan movement - don't wait or check properties again
-                                    val deltaX = -distance.x * 0.001f // Scale and invert for natural movement
-                                    val deltaZ = -distance.y * 0.001f // Forward/backward movement (Y gesture maps to Z world coordinate)
-                                    
-                                    // Move in camera space
-                                    val currentPosition = modelNode.position
-                                    val newPosition = Position(
-                                        currentPosition.x + deltaX,
-                                        detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
-                                        currentPosition.z + deltaZ // Allow forward/backward movement
-                                    )
-                                    modelNode.position = newPosition
+                                    try {
+                                        // Force enable properties using our dedicated method
+                                        forceNodeGestureProperties(modelNode, enablePan = true, enableRotation = false)
+                                        
+                                        // Get camera transformation for world-relative movement
+                                        val cameraNode = sceneView.cameraNode
+                                        val cameraRotationY = cameraNode.worldRotation.y
+                                        
+                                        // Scale down the movement for more precise control
+                                        val moveScale = 0.0005f // Reduced from 0.001f for finer control
+                                        val rawDeltaX = -distance.x * moveScale
+                                        val rawDeltaZ = -distance.y * moveScale
+                                        
+                                        // Apply camera-relative movement (rotate movement vector by camera Y rotation)
+                                        val cosY = kotlin.math.cos(cameraRotationY)
+                                        val sinY = kotlin.math.sin(cameraRotationY)
+                                        val worldDeltaX = rawDeltaX * cosY - rawDeltaZ * sinY
+                                        val worldDeltaZ = rawDeltaX * sinY + rawDeltaZ * cosY
+                                        
+                                        // Apply movement to current position
+                                        val currentPosition = modelNode.position
+                                        val newPosition = Position(
+                                            currentPosition.x + worldDeltaX,
+                                            detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
+                                            currentPosition.z + worldDeltaZ
+                                        )
+                                        
+                                        // Apply the new position
+                                        modelNode.position = newPosition
+                                        
+                                        Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position:")
+                                        Log.d("ArView", "   From: (${String.format("%.4f", currentPosition.x)}, ${String.format("%.4f", currentPosition.y)}, ${String.format("%.4f", currentPosition.z)})")
+                                        Log.d("ArView", "   To:   (${String.format("%.4f", newPosition.x)}, ${String.format("%.4f", newPosition.y)}, ${String.format("%.4f", newPosition.z)})")
+                                        Log.d("ArView", "   Delta: (${String.format("%.4f", worldDeltaX)}, 0.0000, ${String.format("%.4f", worldDeltaZ)})")
+                                    } catch (e: Exception) {
+                                        Log.e("ArView", "❌ Error applying pan movement to node ${modelNode.name}: ${e.message}", e)
+                                    }
                                     
                                     Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position from ${currentPosition} to: ${newPosition}")
                                     
@@ -879,9 +909,9 @@ class ArView(
                             modelNode?.let { mn ->
                                 Log.d("ArView", "🔄 Two-finger rotation gesture on node ${mn.name}")
                                 
-                                // Enable rotation on the fly
-                                mn.isRotationEditable = true
-                                mn.isTouchable = true
+                                try {
+                                    // Force enable rotation properties using our dedicated method
+                                    forceNodeGestureProperties(mn, enablePan = false, enableRotation = true)
 
                                 // Get current detector rotation in radians
                                 val currentDetectorRotation = detector.rotation
@@ -981,6 +1011,11 @@ class ArView(
                                 currentRotatingNode = null
                                 rotationGestureActive = false
                                 useExternalRotationData = false // Reset external data flag
+                                
+                                // Reset rotation tracking variables
+                                gestureStartRotation = null
+                                lastDetectorRotation = null
+                                Log.d("ArView", "🔄 Reset rotation tracking variables")
                             }
                         }
                     }
@@ -1104,21 +1139,24 @@ class ArView(
     result: MethodChannel.Result,
 ) {
     try {
-        if (this.handlePans || this.handleRotation) {
-            val name = call.argument<String>("name")
-            val newTransformation: ArrayList<Double>? = call.argument<ArrayList<Double>>("transformation")
+        // Remove restriction - allow transformation regardless of gesture settings
+        // This enables programmatic node updates from Flutter
+        val name = call.argument<String>("name")
+        val newTransformation: ArrayList<Double>? = call.argument<ArrayList<Double>>("transformation")
 
-            if (name == null) {
-                result.error("INVALID_ARGUMENT", "Node name is required", null)
-                return
-            }
-            nodesMap[name]?.let { node ->
-                newTransformation?.let { transform ->
-                    if (transform.size != 16) {
-                        result.error("INVALID_TRANSFORMATION", "Transformation must be a 4x4 matrix (16 values)", null)
-                        return
-                    }
+        if (name == null) {
+            result.error("INVALID_ARGUMENT", "Node name is required", null)
+            return
+        }
+        
+        nodesMap[name]?.let { node ->
+            newTransformation?.let { transform ->
+                if (transform.size != 16) {
+                    result.error("INVALID_TRANSFORMATION", "Transformation must be a 4x4 matrix (16 values)", null)
+                    return
+                }
 
+                try {
                     node.apply {
                         transform(
                             position = ScenePosition(
@@ -1140,11 +1178,16 @@ class ArView(
                             )
                         )
                     }
+                    Log.d("ArView", "✅ Successfully applied transform to node $name")
                     result.success(null)
-                } ?: result.error("INVALID_TRANSFORMATION", "Transformation is required", null)
-            } ?: result.error("NODE_NOT_FOUND", "Node with name $name not found", null)
-        }
+                } catch (e: Exception) {
+                    Log.e("ArView", "❌ Error applying transform to node $name: ${e.message}", e)
+                    result.error("TRANSFORM_ERROR", "Failed to apply transformation: ${e.message}", null)
+                }
+            } ?: result.error("INVALID_TRANSFORMATION", "Transformation is required", null)
+        } ?: result.error("NODE_NOT_FOUND", "Node with name $name not found", null)
     } catch (e: Exception) {
+        Log.e("ArView", "❌ Error in handleTransformNode: ${e.message}", e)
         result.error("TRANSFORM_NODE_ERROR", e.message, null)
     }
 }
