@@ -59,6 +59,8 @@ import io.github.sceneview.math.Scale
 import io.github.sceneview.math.colorOf
 import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
+import java.io.File
+import java.net.URL
 import kotlin.math.sqrt
 import kotlin.math.atan2
 
@@ -235,7 +237,7 @@ class ArView(
     
 
     private suspend fun buildModelNode(nodeData: Map<String, Any>): ModelNode? {
-        Log.d(TAG, "🏗️ buildModelNode called with data: ${nodeData.keys}")
+        Log.d(TAG, "🏗️ buildModelNode called with FULL data: $nodeData")
         Log.d(TAG, "🏗️ Node data URI: ${nodeData["uri"]}")
         Log.d(TAG, "🏗️ Node data TYPE: ${nodeData["type"]}")
         Log.d(TAG, "🏗️ Node data NAME: ${nodeData["name"]}")
@@ -248,7 +250,7 @@ class ArView(
         }
         Log.d(TAG, "✅ URI check passed: $fileLocation")
         
-        val nodeType = nodeData["type"] as? Int
+        val nodeType = (nodeData["type"] as? Number)?.toInt()
         if (nodeType == null) {
             Log.e(TAG, "❌ FAILURE POINT 1b: Node type is null or invalid")
             return null
@@ -256,29 +258,37 @@ class ArView(
         Log.d(TAG, "✅ Node type check passed: $nodeType")
         
         when (nodeType) {
-                0 -> { // GLTF2 Model from Flutter asset folder
-                    // Get path to given Flutter asset
-                    val loader = FlutterInjector.instance().flutterLoader()
-                    fileLocation = loader.getLookupKeyForAsset(fileLocation)
-                }
-                1 -> { // GLB Model from the web
-                    fileLocation = fileLocation
-                }
-                2 -> { // fileSystemAppFolderGLB
-                    // Fix: Add proper path resolution for GLB files from app documents directory
-                    val documentsPath = viewContext.getApplicationInfo().dataDir
-                    fileLocation = documentsPath + "/app_flutter/" + nodeData["uri"] as String
-                    Log.d(TAG, "Loading GLB from filesystem: $fileLocation")
-                }
-                3 -> { //fileSystemAppFolderGLTF2
-                    val documentsPath = viewContext.getApplicationInfo().dataDir
-                    fileLocation = documentsPath + "/app_flutter/" + nodeData["uri"] as String
-                    Log.d(TAG, "Loading GLTF2 from filesystem: $fileLocation")
-                }
-                else -> {
-                    Log.e(TAG, "❌ FAILURE POINT 1c: Unsupported node type: $nodeType")
+            0 -> { // GLTF2 Model from Flutter asset folder
+                // Get path to given Flutter asset
+                val loader = FlutterInjector.instance().flutterLoader()
+                fileLocation = loader.getLookupKeyForAsset(fileLocation)
+                Log.d(TAG, "Resolved Flutter asset path: $fileLocation")
+            }
+            1 -> { // GLB Model from the web (NEEDS DOWNLOAD FIRST)
+                Log.d(TAG, "Remote GLB requested: $fileLocation")
+                fileLocation = withContext(Dispatchers.IO) { downloadRemoteGlb(fileLocation!!) }
+                if (fileLocation == null) {
+                    Log.e(TAG, "❌ Remote GLB download failed")
                     return null
+                } else {
+                    Log.d(TAG, "✅ Remote GLB downloaded to: $fileLocation")
                 }
+            }
+            2 -> { // fileSystemAppFolderGLB
+                // Fix: Add proper path resolution for GLB files from app documents directory
+                val documentsPath = viewContext.applicationInfo.dataDir
+                fileLocation = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
+                Log.d(TAG, "Loading GLB from filesystem: $fileLocation")
+            }
+            3 -> { // fileSystemAppFolderGLTF2
+                val documentsPath = viewContext.applicationInfo.dataDir
+                fileLocation = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
+                Log.d(TAG, "Loading GLTF2 from filesystem: $fileLocation")
+            }
+            else -> {
+                Log.e(TAG, "❌ FAILURE POINT 1c: Unsupported node type: $nodeType")
+                return null
+            }
         }
         Log.d(TAG, "✅ File location resolved: $fileLocation")
         
@@ -315,7 +325,8 @@ class ArView(
         
         // Convert to ArrayList<Double> if needed
         val transformationList = try {
-            transformation.map { it as Double }.toMutableList() as ArrayList<Double>
+            transformation.map { (it as? Number)?.toDouble() ?: throw IllegalArgumentException("Non numeric value in transformation: $it") }
+                .toMutableList() as ArrayList<Double>
         } catch (e: Exception) {
             Log.e(TAG, "❌ FAILURE POINT 2b: Failed to convert transformation to ArrayList<Double>: ${e.message}")
             return null
@@ -329,7 +340,7 @@ class ArView(
                 Log.d(TAG, "✅ Model instance loaded successfully")
                 object : ModelNode(
                     modelInstance = modelInstance,
-                    scaleToUnits = transformationList.first().toFloat(),
+                    scaleToUnits = 1.0f, // Avoid using matrix[0] directly as uniform scale
                 ) {
                     init {
                         // Apply the full transformation matrix to properly position the node
@@ -369,7 +380,11 @@ class ArView(
                         }
                         
                         // Set node properties
-                        name = nodeData["name"] as? String
+                        name = (nodeData["name"] as? String) ?: run {
+                            val autoName = "Node_${System.currentTimeMillis()}"
+                            Log.w(TAG, "No name supplied in nodeData, auto-generating: $autoName")
+                            autoName
+                        }
                         
                         // CRITICAL FIX: Set gesture properties based on current gesture settings
                         isPositionEditable = this@ArView.handlePans
