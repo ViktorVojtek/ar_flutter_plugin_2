@@ -235,8 +235,27 @@ class ArView(
     
 
     private suspend fun buildModelNode(nodeData: Map<String, Any>): ModelNode? {
-        var fileLocation = nodeData["uri"] as? String ?: return null
-        when (nodeData["type"] as Int) {
+        Log.d(TAG, "🏗️ buildModelNode called with data: ${nodeData.keys}")
+        Log.d(TAG, "🏗️ Node data URI: ${nodeData["uri"]}")
+        Log.d(TAG, "🏗️ Node data TYPE: ${nodeData["type"]}")
+        Log.d(TAG, "🏗️ Node data NAME: ${nodeData["name"]}")
+        Log.d(TAG, "🏗️ Node data TRANSFORMATION: ${nodeData["transformation"]}")
+        
+        var fileLocation = nodeData["uri"] as? String
+        if (fileLocation == null) {
+            Log.e(TAG, "❌ FAILURE POINT 1: URI is null or invalid")
+            return null
+        }
+        Log.d(TAG, "✅ URI check passed: $fileLocation")
+        
+        val nodeType = nodeData["type"] as? Int
+        if (nodeType == null) {
+            Log.e(TAG, "❌ FAILURE POINT 1b: Node type is null or invalid")
+            return null
+        }
+        Log.d(TAG, "✅ Node type check passed: $nodeType")
+        
+        when (nodeType) {
                 0 -> { // GLTF2 Model from Flutter asset folder
                     // Get path to given Flutter asset
                     val loader = FlutterInjector.instance().flutterLoader()
@@ -257,9 +276,11 @@ class ArView(
                     Log.d(TAG, "Loading GLTF2 from filesystem: $fileLocation")
                 }
                 else -> {
+                    Log.e(TAG, "❌ FAILURE POINT 1c: Unsupported node type: $nodeType")
                     return null
                 }
         }
+        Log.d(TAG, "✅ File location resolved: $fileLocation")
         
         if (fileLocation == null) {
             Log.e(TAG, "File location is null for node type: ${nodeData["type"]}")
@@ -267,7 +288,6 @@ class ArView(
         }
         
         // Check if file exists for filesystem types
-        val nodeType = nodeData["type"] as Int
         if (nodeType == 2 || nodeType == 3) {
             val file = java.io.File(fileLocation)
             if (!file.exists()) {
@@ -284,21 +304,37 @@ class ArView(
             }
         }
         
-        val transformation = nodeData["transformation"] as? ArrayList<Double>
+        val transformation = nodeData["transformation"] as? List<*>
         if (transformation == null) {
+            Log.e(TAG, "❌ FAILURE POINT 2: Transformation data is null or invalid")
+            Log.e(TAG, "❌ Available keys in nodeData: ${nodeData.keys}")
+            Log.e(TAG, "❌ Transformation value: ${nodeData["transformation"]}")
+            Log.e(TAG, "❌ Transformation type: ${nodeData["transformation"]?.javaClass}")
             return null
         }
+        
+        // Convert to ArrayList<Double> if needed
+        val transformationList = try {
+            transformation.map { it as Double }.toMutableList() as ArrayList<Double>
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ FAILURE POINT 2b: Failed to convert transformation to ArrayList<Double>: ${e.message}")
+            return null
+        }
+        
+        Log.d(TAG, "✅ Transformation check passed: ${transformationList.size} elements")
 
         return try {
+            Log.d(TAG, "🚀 Attempting to load model instance from: $fileLocation")
             sceneView.modelLoader.loadModelInstance(fileLocation)?.let { modelInstance ->
+                Log.d(TAG, "✅ Model instance loaded successfully")
                 object : ModelNode(
                     modelInstance = modelInstance,
-                    scaleToUnits = transformation.first().toFloat(),
+                    scaleToUnits = transformationList.first().toFloat(),
                 ) {
                     init {
                         // Apply the full transformation matrix to properly position the node
-                        if (transformation.size >= 16) {
-                            val matrix = transformation.map { it.toFloat() }.toFloatArray()
+                        if (transformationList.size >= 16) {
+                            val matrix = transformationList.map { it.toFloat() }.toFloatArray()
                             
                             // Extract position from transformation matrix (column 4: indices 12, 13, 14)
                             val position = ScenePosition(
@@ -329,7 +365,7 @@ class ArView(
                             
                             Log.d("ArView", "Applied transformation to node $name - Position: (${position.x}, ${position.y}, ${position.z})")
                         } else {
-                            Log.w("ArView", "Invalid transformation matrix size: ${transformation.size}, expected 16")
+                            Log.w("ArView", "Invalid transformation matrix size: ${transformationList.size}, expected 16")
                         }
                         
                         // Set node properties
@@ -352,9 +388,15 @@ class ArView(
                     }
                 }
             } ?: run {
+                Log.e(TAG, "❌ FAILURE POINT 3: Model loading failed - loadModelInstance returned null")
+                Log.e(TAG, "❌ File location: $fileLocation")
+                Log.e(TAG, "❌ File exists: ${java.io.File(fileLocation).exists()}")
                 null
             }
         } catch (e: Exception) {
+            Log.e(TAG, "❌ FAILURE POINT 4: Exception during model building: ${e.message}")
+            Log.e(TAG, "❌ Exception type: ${e.javaClass.simpleName}")
+            Log.e(TAG, "❌ Stack trace:")
             e.printStackTrace()
             null
         }
