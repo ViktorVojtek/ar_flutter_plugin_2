@@ -228,6 +228,8 @@ class ArView(
                 config.apply {
                     depthMode = Config.DepthMode.DISABLED
                     instantPlacementMode = Config.InstantPlacementMode.DISABLED
+                    // Use ENVIRONMENTAL_HDR for proper lighting - this provides the necessary
+                    // lighting information to prevent black models
                     lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     focusMode = Config.FocusMode.AUTO
                     planeFindingMode = Config.PlaneFindingMode.DISABLED
@@ -626,13 +628,16 @@ class ArView(
                         true -> Config.DepthMode.AUTOMATIC
                         else -> Config.DepthMode.DISABLED
                     }
+                    // Revert to ENVIRONMENTAL_HDR for better model lighting
+                    // The black appearance might be due to insufficient lighting information
+                    lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     planeFindingMode = when (argPlaneDetectionConfig) {
                         1 -> Config.PlaneFindingMode.HORIZONTAL
                         2 -> Config.PlaneFindingMode.VERTICAL
                         3 -> Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                         else -> Config.PlaneFindingMode.DISABLED
                     }
-                    Log.d("ArView", "AR Session configured - planeFindingMode: $planeFindingMode, depthMode: $depthMode")
+                    Log.d("ArView", "AR Session configured - planeFindingMode: $planeFindingMode, depthMode: $depthMode, lightEstimationMode: $lightEstimationMode")
                     Log.d("ArView", "argPlaneDetectionConfig received: $argPlaneDetectionConfig")
                 })
             }
@@ -640,6 +645,8 @@ class ArView(
             handleShowWorldOrigin(showWorldOrigin)
             
             sceneView.apply {
+                // Use the original HDR environment but let the AMBIENT_INTENSITY lighting mode
+                // provide more uniform lighting similar to iOS
                 environment = environmentLoader.createHDREnvironment(
                     assetFileLocation = "environments/evening_meadow_2k.hdr"
                 )!!
