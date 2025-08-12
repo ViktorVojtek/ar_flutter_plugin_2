@@ -42,13 +42,22 @@ createManagers(
     BuildContext? context,
     ARViewCreatedCallback? arViewCreatedCallback,
     PlaneDetectionConfig? planeDetectionConfig) {
+  print("🏗️ createManagers called with id: $id");
   if (context == null ||
       arViewCreatedCallback == null ||
       planeDetectionConfig == null) {
+    print("❌ createManagers: Missing required parameters");
     return;
   }
-  arViewCreatedCallback(ARSessionManager(id, context, planeDetectionConfig),
-      ARObjectManager(id), ARAnchorManager(id), ARLocationManager());
+  print("👥 Creating managers with id: $id");
+  final sessionManager = ARSessionManager(id, context, planeDetectionConfig);
+  final objectManager = ARObjectManager(id);
+  final anchorManager = ARAnchorManager(id);
+  final locationManager = ARLocationManager();
+  
+  print("📞 Calling arViewCreatedCallback with managers");
+  arViewCreatedCallback(sessionManager, objectManager, anchorManager, locationManager);
+  print("✅ createManagers completed");
 }
 
 /// Android-specific implementation of [PlatformARView]
@@ -60,8 +69,9 @@ class AndroidARView implements PlatformARView {
 
   @override
   void onPlatformViewCreated(int id) {
-    print("Android platform view created!");
+    print("🔥 Android platform view created with id: $id!");
     createManagers(id, _context, _arViewCreatedCallback, _planeDetectionConfig);
+    print("🔥 Android platform view creation completed!");
   }
 
   @override

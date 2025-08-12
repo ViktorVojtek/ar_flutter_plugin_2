@@ -33,11 +33,14 @@ class ARObjectManager {
   NodeRotationEndHandler? onRotationEnd;
 
   ARObjectManager(int id, {this.debug = false}) {
+    print("🏗️ ARObjectManager constructor called with id: $id");
     _channel = MethodChannel('arobjects_$id');
     _channel.setMethodCallHandler(_platformCallHandler);
+    print("📡 Method channel 'arobjects_$id' set up");
     if (debug) {
       print("ARObjectManager initialized");
     }
+    print("✅ ARObjectManager constructor completed");
   }
 
   Future<void> _platformCallHandler(MethodCall call) {
@@ -163,7 +166,10 @@ class ARObjectManager {
 
   /// Sets up the AR Object Manager
   onInitialize() {
+    print("🎯 ARObjectManager.onInitialize called");
+    print("📤 Calling _channel.invokeMethod('init', {})");
     _channel.invokeMethod<void>('init', {});
+    print("📤 ARObjectManager init method call completed");
   }
 
   /// Add given node to the given anchor of the underlying AR scene (or to its top-level if no anchor is given) and listen to any changes made to its transformation

@@ -135,8 +135,12 @@ class ArView(
 
     private val onSessionMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
+            Log.d(TAG, "📱 Session method called: ${call.method}")
             when (call.method) {
-                "init" -> handleInit(call, result)
+                "init" -> {
+                    Log.d(TAG, "🎯 Session init method called!")
+                    handleInit(call, result)
+                }
                 "showPlanes" -> handleShowPlanes(call, result)
                 "dispose" -> dispose()
                 "getAnchorPose" -> handleGetAnchorPose(call, result)
@@ -144,7 +148,10 @@ class ArView(
                 "snapshot" -> handleSnapshot(result)
                 "disableCamera" -> handleDisableCamera(result)
                 "enableCamera" -> handleEnableCamera(result)
-                else -> result.notImplemented()
+                else -> {
+                    Log.d(TAG, "❌ Session method not implemented: ${call.method}")
+                    result.notImplemented()
+                }
             }
         }
     private fun handleDisableCamera(result: MethodChannel.Result) {
@@ -167,8 +174,10 @@ class ArView(
     }
     private val onObjectMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
+            Log.d(TAG, "📦 Object method called: ${call.method}")
             when (call.method) {
                 "init" -> {
+                    Log.d(TAG, "🎯 Object init method called!")
                     // Initialize the AR object manager
                     result.success(null)
                 }
@@ -209,6 +218,9 @@ class ArView(
         }
 
     init {
+        Log.d(TAG, "🏗️ ArView constructor starting...")
+        Log.d(TAG, "📡 Setting up method channels - session: arsession_$id, object: arobjects_$id, anchor: aranchors_$id")
+        
         sceneView = ARSceneView(
             context = viewContext,
             sharedLifecycle = lifecycle,
@@ -229,9 +241,12 @@ class ArView(
         
         rootLayout.addView(sceneView)
 
+        Log.d(TAG, "📡 Setting up method call handlers...")
         sessionChannel.setMethodCallHandler(onSessionMethodCall)
         objectChannel.setMethodCallHandler(onObjectMethodCall)
         anchorChannel.setMethodCallHandler(onAnchorMethodCall)
+        Log.d(TAG, "✅ Method call handlers set up successfully")
+        Log.d(TAG, "🏗️ ArView constructor completed")
     }
 
     
@@ -258,11 +273,10 @@ class ArView(
         Log.d(TAG, "✅ Node type check passed: $nodeType")
         
         when (nodeType) {
-            0 -> { // GLTF2 Model from Flutter asset folder
-                // Get path to given Flutter asset
-                val loader = FlutterInjector.instance().flutterLoader()
-                fileLocation = loader.getLookupKeyForAsset(fileLocation)
-                Log.d(TAG, "Resolved Flutter asset path: $fileLocation")
+            0 -> { // GLTF2 Model from Android assets folder
+                // Use Android assets directly for models
+                fileLocation = "file:///android_asset/$fileLocation"
+                Log.d(TAG, "Resolved Android asset path: $fileLocation")
             }
             1 -> { // GLB Model from the web (NEEDS DOWNLOAD FIRST)
                 Log.d(TAG, "Remote GLB requested: $fileLocation")
@@ -271,19 +285,25 @@ class ArView(
                     Log.e(TAG, "❌ Remote GLB download failed")
                     return null
                 } else {
-                    Log.d(TAG, "✅ Remote GLB downloaded to: $fileLocation")
+                    // Convert filesystem path to file:// URI for ModelLoader
+                    fileLocation = "file://$fileLocation"
+                    Log.d(TAG, "✅ Remote GLB downloaded and converted to URI: $fileLocation")
                 }
             }
             2 -> { // fileSystemAppFolderGLB
                 // Fix: Add proper path resolution for GLB files from app documents directory
                 val documentsPath = viewContext.applicationInfo.dataDir
-                fileLocation = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
-                Log.d(TAG, "Loading GLB from filesystem: $fileLocation")
+                val rawPath = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
+                // Convert filesystem path to file:// URI for ModelLoader
+                fileLocation = "file://$rawPath"
+                Log.d(TAG, "Loading GLB from filesystem as URI: $fileLocation")
             }
             3 -> { // fileSystemAppFolderGLTF2
                 val documentsPath = viewContext.applicationInfo.dataDir
-                fileLocation = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
-                Log.d(TAG, "Loading GLTF2 from filesystem: $fileLocation")
+                val rawPath = documentsPath + "/app_flutter/" + (nodeData["uri"] as String)
+                // Convert filesystem path to file:// URI for ModelLoader
+                fileLocation = "file://$rawPath"
+                Log.d(TAG, "Loading GLTF2 from filesystem as URI: $fileLocation")
             }
             else -> {
                 Log.e(TAG, "❌ FAILURE POINT 1c: Unsupported node type: $nodeType")
@@ -299,9 +319,14 @@ class ArView(
         
         // Check if file exists for filesystem types
         if (nodeType == 2 || nodeType == 3) {
-            val file = java.io.File(fileLocation)
+            // Extract raw filesystem path for file existence check
+            val rawPath = when {
+                fileLocation!!.startsWith("file://") -> fileLocation.substring(7) // Remove "file://" prefix
+                else -> fileLocation
+            }
+            val file = java.io.File(rawPath)
             if (!file.exists()) {
-                Log.e(TAG, "File does not exist: $fileLocation")
+                Log.e(TAG, "File does not exist: $rawPath")
                 Log.d(TAG, "File absolute path: ${file.absolutePath}")
                 Log.d(TAG, "File parent directory: ${file.parentFile?.absolutePath}")
                 Log.d(TAG, "Parent directory exists: ${file.parentFile?.exists()}")
@@ -310,9 +335,10 @@ class ArView(
                 }
                 return null
             } else {
-                Log.d(TAG, "File exists: $fileLocation (${file.length()} bytes)")
+                Log.d(TAG, "File exists: $rawPath (${file.length()} bytes)")
             }
         }
+        // For downloaded files (type 1), the file existence check is already done in downloadRemoteGlb
         
         val transformation = nodeData["transformation"] as? List<*>
         if (transformation == null) {
@@ -901,27 +927,27 @@ class ArView(
                                         // Force enable properties using our dedicated method
                                         forceNodeGestureProperties(modelNode, enablePan = true, enableRotation = false)
                                         
-                                        // Get camera transformation for world-relative movement
-                                        val cameraNode = sceneView.cameraNode
-                                        val cameraRotationY = cameraNode.worldRotation.y
+                                        // ULTRA-SIMPLIFIED APPROACH: Direct 1:1 mapping
+                                        // This approach directly maps screen movements to world movements
+                                        // without complex camera calculations
                                         
-                                        // Scale down the movement for more precise control
-                                        val moveScale = 0.0005f // Reduced from 0.001f for finer control
-                                        val rawDeltaX = -distance.x * moveScale
-                                        val rawDeltaZ = -distance.y * moveScale
+                                        val moveScale = 0.002f // Adjust sensitivity
                                         
-                                        // Apply camera-relative movement (rotate movement vector by camera Y rotation)
-                                        val cosY = kotlin.math.cos(cameraRotationY)
-                                        val sinY = kotlin.math.sin(cameraRotationY)
-                                        val worldDeltaX = rawDeltaX * cosY - rawDeltaZ * sinY
-                                        val worldDeltaZ = rawDeltaX * sinY + rawDeltaZ * cosY
+                                        // Direct mapping with corrected X-axis direction
+                                        val worldMoveX = -distance.x * moveScale  // Screen left/right -> World right/left (INVERTED to fix direction)
+                                        val worldMoveZ = -distance.y * moveScale // Screen up/down -> World back/forward (inverted)
+                                        
+                                        Log.d("ArView", "🎯 FIXED Pan gesture:")
+                                        Log.d("ArView", "   Screen movement: (${String.format("%.4f", distance.x)}, ${String.format("%.4f", distance.y)})")
+                                        Log.d("ArView", "   Fixed world movement: (${String.format("%.4f", worldMoveX)}, ${String.format("%.4f", worldMoveZ)})")
+                                        Log.d("ArView", "   Note: X-axis INVERTED to fix left/right direction")
                                         
                                         // Apply movement to current position
                                         val currentPosition = modelNode.position
                                         val newPosition = Position(
-                                            currentPosition.x + worldDeltaX,
-                                            detectedPlaneY ?: currentPosition.y, // Lock to plane Y or keep current Y if no plane detected
-                                            currentPosition.z + worldDeltaZ
+                                            currentPosition.x + worldMoveX,
+                                            detectedPlaneY ?: currentPosition.y, // Keep Y locked to plane
+                                            currentPosition.z + worldMoveZ
                                         )
                                         
                                         // Apply the new position
@@ -930,7 +956,7 @@ class ArView(
                                         Log.d("ArView", "✅ SUCCESSFULLY updated node ${modelNode.name} position:")
                                         Log.d("ArView", "   From: (${String.format("%.4f", currentPosition.x)}, ${String.format("%.4f", currentPosition.y)}, ${String.format("%.4f", currentPosition.z)})")
                                         Log.d("ArView", "   To:   (${String.format("%.4f", newPosition.x)}, ${String.format("%.4f", newPosition.y)}, ${String.format("%.4f", newPosition.z)})")
-                                        Log.d("ArView", "   Delta: (${String.format("%.4f", worldDeltaX)}, 0.0000, ${String.format("%.4f", worldDeltaZ)})")
+                                        Log.d("ArView", "   Delta: (${String.format("%.4f", worldMoveX)}, 0.0000, ${String.format("%.4f", worldMoveZ)})")
                                     } catch (e: Exception) {
                                         Log.e("ArView", "❌ Error applying pan movement to node ${modelNode.name}: ${e.message}", e)
                                     }
@@ -2048,5 +2074,54 @@ class ArView(
     // Temporary simple normalizeAngle function (to be removed)
     private fun normalizeAngle(angle: Float): Float {
         return angle % (2 * Math.PI.toFloat())
+    }
+
+    // Download remote GLB file and return local path
+    private suspend fun downloadRemoteGlb(url: String): String? {
+        return try {
+            Log.d(TAG, "📥 Starting download of remote GLB: $url")
+            
+            // Create HTTP connection
+            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 30000 // 30 seconds
+            connection.readTimeout = 30000 // 30 seconds
+            
+            val responseCode = connection.responseCode
+            Log.d(TAG, "📡 HTTP Response Code: $responseCode")
+            
+            if (responseCode != java.net.HttpURLConnection.HTTP_OK) {
+                Log.e(TAG, "❌ HTTP Error: $responseCode")
+                connection.disconnect()
+                return null
+            }
+            
+            // Get file name from URL
+            val fileName = url.substring(url.lastIndexOf('/') + 1)
+            Log.d(TAG, "📄 Downloaded file name: $fileName")
+            
+            // Create local file in cache directory
+            val cacheDir = viewContext.cacheDir
+            val localFile = java.io.File(cacheDir, fileName)
+            
+            // Download the file
+            connection.inputStream.use { input ->
+                localFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            connection.disconnect()
+            
+            val localPath = localFile.absolutePath
+            Log.d(TAG, "✅ GLB downloaded successfully to: $localPath")
+            Log.d(TAG, "📦 File size: ${localFile.length()} bytes")
+            
+            localPath
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to download remote GLB: ${e.message}", e)
+            null
+        }
     }
 }

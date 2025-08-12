@@ -40,11 +40,14 @@ class ARSessionManager {
 
   ARSessionManager(int id, this.buildContext, this.planeDetectionConfig,
       {this.debug = false}) {
+    print("🏗️ ARSessionManager constructor called with id: $id");
     _channel = MethodChannel('arsession_$id');
     _channel.setMethodCallHandler(_platformCallHandler);
+    print("📡 Method channel 'arsession_$id' set up");
     if (debug) {
       print("ARSessionManager initialized");
     }
+    print("✅ ARSessionManager constructor completed");
   }
 
   /// Returns the camera pose in Matrix4 format with respect to the world coordinate system of the [ARView]
@@ -248,6 +251,8 @@ class ARSessionManager {
     bool handlePans = false, // nodes are not draggable by default
     bool handleRotation = false, // nodes can not be rotated by default
   }) {
+    print("🎯 ARSessionManager.onInitialize called");
+    print("📤 Calling _channel.invokeMethod('init', ...)");
     _channel.invokeMethod<void>('init', {
       'showAnimatedGuide': showAnimatedGuide,
       'showFeaturePoints': showFeaturePoints,
@@ -259,6 +264,7 @@ class ARSessionManager {
       'handlePans': handlePans,
       'handleRotation': handleRotation,
     });
+    print("📤 ARSessionManager init method call completed");
   }
 
 
