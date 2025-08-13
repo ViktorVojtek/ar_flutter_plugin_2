@@ -12,30 +12,6 @@ import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:vector_math/vector_math_64.dart' as vector_math;
 
-// Model types enum for different 3D models
-enum ModelType {
-  localPointCloud,
-  duckWeb,
-  characterWeb,
-}
-
-// Model configuration class
-class ModelConfig {
-  final String name;
-  final String uri;
-  final NodeType nodeType;
-  final vector_math.Vector3 scale;
-  final vector_math.Vector3 position;
-  
-  const ModelConfig({
-    required this.name,
-    required this.uri,
-    required this.nodeType,
-    required this.scale,
-    required this.position,
-  });
-}
-
 void main() {
   runApp(MyApp());
 }
@@ -53,8 +29,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// Copy the ObjectGestures class from examples/object_gestures.dart
-// Remove the FlutterFlow-specific imports and modify as needed
 class ObjectGestures extends StatefulWidget {
   @override
   State<ObjectGestures> createState() => _ObjectGesturesState();
@@ -67,49 +41,6 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   List<ARNode> nodes = [];
   List<ARAnchor> anchors = [];
-  
-  // Model selection state
-  ModelType _selectedModel = ModelType.localPointCloud;
-  
-  // Model configurations
-  static final Map<ModelType, ModelConfig> _modelConfigs = {
-    ModelType.localPointCloud: ModelConfig(
-      name: "Point Cloud (Local)",
-      uri: "models/point_cloud.glb",
-      nodeType: NodeType.localGLTF2,
-      scale: vector_math.Vector3(0.5, 0.5, 0.5),
-      position: vector_math.Vector3(0.0, 0.1, 0.0),
-    ),
-    ModelType.duckWeb: ModelConfig(
-      name: "Duck (Internet)",
-      uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
-      nodeType: NodeType.webGLB,
-      scale: vector_math.Vector3(0.2, 0.2, 0.2),
-      position: vector_math.Vector3(0.0, 0.0, 0.0),
-    ),
-    ModelType.characterWeb: ModelConfig(
-      name: "Avocado (Internet)",
-      uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb",
-      nodeType: NodeType.webGLB,
-      scale: vector_math.Vector3(5.0, 5.0, 5.0),
-      position: vector_math.Vector3(0.0, 0.0, 0.0),
-    ),
-  };
-  
-  // Method to select model type
-  void _selectModel(ModelType modelType) {
-    setState(() {
-      _selectedModel = modelType;
-    });
-    debugPrint("AR_DEBUG: 🎨 Selected model: ${_modelConfigs[modelType]?.name}");
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Selected: ${_modelConfigs[modelType]?.name}"),
-        duration: Duration(seconds: 1),
-      )
-    );
-  }
 
   @override
   void dispose() {
@@ -121,7 +52,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AR Model Placement - Select & Tap'),
+        title: const Text('AR Avocado Placement - Tap to Place'),
       ),
       body: Stack(
         children: [
@@ -134,51 +65,18 @@ class _ObjectGesturesState extends State<ObjectGestures> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                // Model selection buttons
+                // Only remove everything button
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: () => _selectModel(ModelType.localPointCloud),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _selectedModel == ModelType.localPointCloud 
-                          ? Colors.green 
-                          : Colors.blue,
-                      ),
-                      child: Text("Point Cloud\n(Local)"),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _selectModel(ModelType.duckWeb),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _selectedModel == ModelType.duckWeb 
-                          ? Colors.green 
-                          : Colors.blue,
-                      ),
-                      child: Text("Duck\n(Internet)"),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => _selectModel(ModelType.characterWeb),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _selectedModel == ModelType.characterWeb 
-                          ? Colors.green 
-                          : Colors.blue,
-                      ),
-                      child: Text("Character\n(Internet)"),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 10),
-                // Remove everything button
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     ElevatedButton(
                       onPressed: onRemoveEverything,
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: Text("Remove Everything")
+                      child: Text("Remove All Avocados")
                     ),
                   ]
                 ),
+                SizedBox(height: 20),
               ]
             ),
           )
@@ -234,18 +132,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   Future<void> onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
     debugPrint("AR_DEBUG: 🎯 Plane tapped! Hit test results: ${hitTestResults.length}");
-    
-    // Get the selected model configuration
-    final modelConfig = _modelConfigs[_selectedModel];
-    if (modelConfig == null) {
-      debugPrint("AR_DEBUG: ❌ No model configuration found for selected model");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("No model configuration found"), backgroundColor: Colors.red)
-      );
-      return;
-    }
-    
-    debugPrint("AR_DEBUG: 🎨 Using model: ${modelConfig.name}");
+    debugPrint("AR_DEBUG: 🥑 Placing Avocado model...");
     
     // Find the first plane hit result
     ARHitTestResult? planeHitTestResult;
@@ -271,17 +158,17 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         this.anchors.add(newAnchor);
         debugPrint("AR_DEBUG: ✅ Anchor added successfully, total anchors: ${anchors.length}");
         
-        // Create node using selected model configuration
+        // Create Avocado node with fixed configuration
         var newNode = ARNode(
-          type: modelConfig.nodeType,
-          uri: modelConfig.uri,
-          scale: modelConfig.scale,
-          position: modelConfig.position,
+          type: NodeType.webGLB,
+          uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb",
+          scale: vector_math.Vector3(5.0, 5.0, 5.0),
+          position: vector_math.Vector3(0.0, 0.0, 0.0),
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
         );
         
-        debugPrint("AR_DEBUG: 🌟 Creating ${modelConfig.name} node...");
-        debugPrint("AR_DEBUG: 📊 Model details - URI: ${modelConfig.uri}, Type: ${modelConfig.nodeType}, Scale: ${modelConfig.scale}");
+        debugPrint("AR_DEBUG: 🥑 Creating Avocado node...");
+        debugPrint("AR_DEBUG: 📊 Avocado details - URI: Avocado.glb, Type: webGLB, Scale: (5.0, 5.0, 5.0)");
         
         // Add the node to the anchor
         String? nodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
@@ -290,20 +177,20 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         
         if (nodeId != null) {
           this.nodes.add(newNode);
-          debugPrint("AR_DEBUG: ✅ Model added successfully with ID: $nodeId, total nodes: ${nodes.length}");
+          debugPrint("AR_DEBUG: ✅ Avocado added successfully with ID: $nodeId, total nodes: ${nodes.length}");
           
           // Show success message to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("${modelConfig.name} placed! ID: $nodeId"), 
-              duration: Duration(seconds: 3),
+              content: Text("🥑 Avocado placed! ID: $nodeId"), 
+              duration: Duration(seconds: 2),
               backgroundColor: Colors.green,
             )
           );
         } else {
-          debugPrint("AR_DEBUG: ❌ Failed to add model to anchor");
+          debugPrint("AR_DEBUG: ❌ Failed to add Avocado to anchor");
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Failed to add ${modelConfig.name}"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
+            SnackBar(content: Text("Failed to place Avocado"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
           );
         }
       } else {
