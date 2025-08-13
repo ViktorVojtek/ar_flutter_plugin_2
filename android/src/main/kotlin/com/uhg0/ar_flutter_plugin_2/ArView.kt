@@ -84,7 +84,7 @@ class ArView(
     private val anchorChannel: MethodChannel = MethodChannel(messenger, "aranchors_$id")
     private val nodesMap = mutableMapOf<String, ModelNode>()
     private var planeCount = 0
-    private var selectedNode: Node? = null
+    // private var selectedNode: Node? = null  // Unused - remove per patch instructions
     private val detectedPlanes = mutableSetOf<Plane>()
     private val anchorNodesMap = mutableMapOf<String, AnchorNode>()
     private var showAnimatedGuide = true
@@ -100,20 +100,23 @@ class ArView(
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
     
     // Velocity-based rotation tracking variables (like iOS)
-    private var rotationVelocity: Float? = null
+    // private var rotationVelocity: Float? = null  // Unused - remove per patch instructions
     private var rotationGestureActive: Boolean = false
     private var currentRotatingNode: ModelNode? = null
     private var tappedPlaneAnchorAlignment: PlaneAlignment = PlaneAlignment.HORIZONTAL
     
     // External rotation data support
     private var useExternalRotationData: Boolean = false
-    private var externalRotationVelocity: Float? = null
+    // private var externalRotationVelocity: Float? = null  // Unused - remove per patch instructions
     
     enum class PlaneAlignment {
         HORIZONTAL, VERTICAL
     }
     
     private var currentPlaneAlignment: PlaneAlignment = PlaneAlignment.HORIZONTAL
+    
+    // Helper functions for degrees conversion
+    private fun radToDeg(rad: Float) = Math.toDegrees(rad.toDouble()).toFloat()
     
     // Temporarily keep old variables for compilation (to be removed)
     private var gestureStartRotation: Float? = null
@@ -124,8 +127,8 @@ class ArView(
     private var panGestureActive = false
     
     // iOS-inspired gesture state tracking for better reliability
-    private var panGestureStarted = false
-    private var rotationGestureStarted = false
+    // private var panGestureStarted = false  // Unused - remove per patch instructions  
+    // private var rotationGestureStarted = false  // Unused - remove per patch instructions
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -228,8 +231,6 @@ class ArView(
                 config.apply {
                     depthMode = Config.DepthMode.DISABLED
                     instantPlacementMode = Config.InstantPlacementMode.DISABLED
-                    // Use ENVIRONMENTAL_HDR for proper lighting - this provides the necessary
-                    // lighting information to prevent black models
                     lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     focusMode = Config.FocusMode.AUTO
                     planeFindingMode = Config.PlaneFindingMode.DISABLED
@@ -390,9 +391,9 @@ class ArView(
                             
                             // Extract rotation from transformation matrix
                             val rotation = SceneRotation(
-                                x = atan2(matrix[6], matrix[10]),
-                                y = atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10])),
-                                z = atan2(matrix[1], matrix[0])
+                                x = radToDeg(atan2(matrix[6], matrix[10])),
+                                y = radToDeg(atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10]))),
+                                z = radToDeg(atan2(matrix[1], matrix[0]))
                             )
                             
                             // Apply the transformation to the node
@@ -468,6 +469,13 @@ class ArView(
                             if (this@ArView.handlePans || this@ArView.handleRotation) {
                                 Log.d("ArView", "Adding gesture-enabled node directly to scene (bypassing anchor)")
                                 sceneView.addChildNode(node)
+                                
+                                // Re-assert gesture flags one frame after adding nodes for stability
+                                sceneView.post {
+                                    node.isTouchable = true
+                                    node.isPositionEditable = handlePans
+                                    node.isRotationEditable = handleRotation
+                                }
                                 
                                 // Apply anchor's world position to the node instead of parenting it
                                 val anchorWorldPosition = anchorNode.worldPosition
@@ -628,16 +636,13 @@ class ArView(
                         true -> Config.DepthMode.AUTOMATIC
                         else -> Config.DepthMode.DISABLED
                     }
-                    // Revert to ENVIRONMENTAL_HDR for better model lighting
-                    // The black appearance might be due to insufficient lighting information
-                    lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     planeFindingMode = when (argPlaneDetectionConfig) {
                         1 -> Config.PlaneFindingMode.HORIZONTAL
                         2 -> Config.PlaneFindingMode.VERTICAL
                         3 -> Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                         else -> Config.PlaneFindingMode.DISABLED
                     }
-                    Log.d("ArView", "AR Session configured - planeFindingMode: $planeFindingMode, depthMode: $depthMode, lightEstimationMode: $lightEstimationMode")
+                    Log.d("ArView", "AR Session configured - planeFindingMode: $planeFindingMode, depthMode: $depthMode")
                     Log.d("ArView", "argPlaneDetectionConfig received: $argPlaneDetectionConfig")
                 })
             }
@@ -645,8 +650,6 @@ class ArView(
             handleShowWorldOrigin(showWorldOrigin)
             
             sceneView.apply {
-                // Use the original HDR environment but let the AMBIENT_INTENSITY lighting mode
-                // provide more uniform lighting similar to iOS
                 environment = environmentLoader.createHDREnvironment(
                     assetFileLocation = "environments/evening_meadow_2k.hdr"
                 )!!
@@ -837,6 +840,18 @@ class ArView(
                                             try {
                                                 val result = serializeARCoreHitResult(hitResult)
                                                 Log.d("ArView", "🎯 Serialized hit result: type=${result["type"]}, distance=${result["distance"]}")
+                                                
+                                                // Set tappedPlaneAnchorAlignment based on plane type detected
+                                                val trackable = hitResult.trackable
+                                                if (trackable is Plane) {
+                                                    tappedPlaneAnchorAlignment = if (trackable.type == Plane.Type.VERTICAL) {
+                                                        PlaneAlignment.VERTICAL
+                                                    } else {
+                                                        PlaneAlignment.HORIZONTAL
+                                                    }
+                                                    Log.d("ArView", "🎯 Updated tappedPlaneAnchorAlignment to: $tappedPlaneAnchorAlignment")
+                                                }
+                                                
                                                 result
                                             } catch (e: Exception) {
                                                 Log.e("ArView", "❌ Error serializing individual hit result", e)
@@ -1032,25 +1047,33 @@ class ArView(
                                             delta += (2 * Math.PI).toFloat()
                                         }
                                         
-                                        // Filter out unreasonably large deltas (likely gesture jumps) 
-                                        val deltaDegreesAbs = Math.abs(Math.toDegrees(delta.toDouble()).toFloat())
-                                        if (deltaDegreesAbs > 45.0f) {
-                                            Log.w("ArView", "⚠️ Large rotation delta detected: ${Math.toDegrees(delta.toDouble()).toFloat()}°, allowing but clamping")
-                                            // Clamp the delta to prevent massive jumps
-                                            val maxDelta = Math.toRadians(45.0).toFloat()
-                                            delta = if (delta > 0) maxDelta else -maxDelta
-                                        }
+                                        // Convert delta to degrees for consistent handling
+                                        val deltaDeg = radToDeg(delta)
                                         
-                                        // Apply delta directly to current Y rotation (horizontal plane rotation)
-                                        val currentRotation = mn.rotation
-                                        val newYaw = currentRotation.y + delta
-                                        mn.rotation = Rotation(currentRotation.x, newYaw, currentRotation.z)
+                                        // Filter out unreasonably large deltas (likely gesture jumps) 
+                                        val deltaDegreesAbs = Math.abs(deltaDeg)
+                                        if (deltaDegreesAbs > 45.0f) {
+                                            Log.w("ArView", "⚠️ Large rotation delta detected: ${deltaDeg}°, allowing but clamping")
+                                            // Clamp the delta to prevent massive jumps
+                                            val maxDelta = 45.0f
+                                            val clampedDeltaDeg = if (deltaDeg > 0) maxDelta else -maxDelta
+                                            
+                                            // Apply clamped delta directly to current Y rotation (horizontal plane rotation)
+                                            val currentRotation = mn.rotation
+                                            val newYaw = currentRotation.y + clampedDeltaDeg
+                                            mn.rotation = Rotation(currentRotation.x, newYaw, currentRotation.z)
+                                        } else {
+                                            // Apply delta directly to current Y rotation (horizontal plane rotation)
+                                            val currentRotation = mn.rotation
+                                            val newYaw = currentRotation.y + deltaDeg
+                                            mn.rotation = Rotation(currentRotation.x, newYaw, currentRotation.z)
+                                        }
                                         
                                         // Update tracking
                                         lastDetectorRotation = currentDetectorRotation
                                         
                                         Log.d("ArView", "✅ Applied rotation delta ${Math.toDegrees(delta.toDouble()).toFloat()}° (${delta} rad)")
-                                        Log.d("ArView", "   Node ${mn.name} rotation: ${Math.toDegrees(currentRotation.y.toDouble()).toFloat()}° -> ${Math.toDegrees(newYaw.toDouble()).toFloat()}°")
+                                        Log.d("ArView", "   Node ${mn.name} rotation updated to: ${mn.rotation.y}°")
                                         
                                         // Send change event with node name for consistency  
                                         mn.name?.let { nodeName ->
@@ -1167,6 +1190,14 @@ class ArView(
                 val node = buildModelNode(nodeData)
                 if (node != null) {
                     sceneView.addChildNode(node)
+                    
+                    // Re-assert gesture flags one frame after adding nodes for stability
+                    sceneView.post {
+                        node.isTouchable = true
+                        node.isPositionEditable = handlePans
+                        node.isRotationEditable = handleRotation
+                    }
+                    
                     node.name?.let { nodeName ->
                         nodesMap[nodeName] = node
                         Log.d("ArView", "Added ModelNode to nodesMap (direct): $nodeName, total nodes: ${nodesMap.size}")
@@ -1258,11 +1289,11 @@ class ArView(
                                 z = transform[14].toFloat()
                             ),
                             rotation = SceneRotation(
-                                x = atan2(transform[6].toFloat(), transform[10].toFloat()),
-                                y = atan2(-transform[2].toFloat(), 
-                                    sqrt(transform[6].toFloat() * transform[6].toFloat() + 
-                                    transform[10].toFloat() * transform[10].toFloat())),
-                                z = atan2(transform[1].toFloat(), transform[0].toFloat())
+                                x = radToDeg(atan2(transform[6].toFloat(), transform[10].toFloat())),
+                                y = radToDeg(atan2(-transform[2].toFloat(),
+                                    sqrt(transform[6].toFloat() * transform[6].toFloat() +
+                                         transform[10].toFloat() * transform[10].toFloat()))),
+                                z = radToDeg(atan2(transform[1].toFloat(), transform[0].toFloat()))
                             ),
                             scale = SceneScale(
                                 x = sqrt((transform[0] * transform[0] + transform[1] * transform[1] + transform[2] * transform[2]).toFloat()),
@@ -1315,24 +1346,24 @@ class ArView(
                 }
                 "changed" -> {
                     if (useExternalRotationData && rotationGestureActive && currentRotatingNode == node) {
-                        // Apply velocity-based rotation like iOS: velocity * 0.01 * -1
-                        val scaledVelocity = (velocity * 0.01 * -1).toFloat()
+                        // Apply velocity-based rotation like iOS: velocity * 0.01 * -1, convert to degrees
+                        val stepDeg = radToDeg((velocity * 0.01 * -1).toFloat())
                         
                         // Apply rotation based on plane alignment
                         val currentRotation = node.rotation
                         val newRotation = when (tappedPlaneAnchorAlignment) {
                             PlaneAlignment.HORIZONTAL -> {
                                 // Rotate around Y axis for horizontal planes
-                                Rotation(currentRotation.x, currentRotation.y + scaledVelocity, currentRotation.z)
+                                Rotation(currentRotation.x, currentRotation.y + stepDeg, currentRotation.z)
                             }
                             PlaneAlignment.VERTICAL -> {
                                 // Rotate around Z axis for vertical planes  
-                                Rotation(currentRotation.x, currentRotation.y, currentRotation.z + scaledVelocity)
+                                Rotation(currentRotation.x, currentRotation.y, currentRotation.z + stepDeg)
                             }
                         }
                         
                         node.rotation = newRotation
-                        Log.d("ArView", "✅ Applied external rotation velocity ${velocity} -> scaled: ${scaledVelocity} to node $nodeName")
+                        Log.d("ArView", "✅ Applied external rotation velocity ${velocity} -> scaled degrees: ${stepDeg} to node $nodeName")
                         objectChannel.invokeMethod("onRotationChange", nodeName)
                     }
                 }
@@ -2087,6 +2118,20 @@ class ArView(
     private suspend fun downloadRemoteGlb(url: String): String? {
         return try {
             Log.d(TAG, "📥 Starting download of remote GLB: $url")
+            Log.d(TAG, "🌐 Network diagnostics - checking connectivity...")
+            
+            // Check if we can resolve DNS first
+            try {
+                val host = java.net.URL(url).host
+                Log.d(TAG, "🔍 Attempting DNS resolution for: $host")
+                val address = java.net.InetAddress.getByName(host)
+                Log.d(TAG, "✅ DNS resolved: $host -> ${address.hostAddress}")
+            } catch (dnsEx: Exception) {
+                Log.e(TAG, "❌ DNS resolution failed for github.com: ${dnsEx.message}")
+                Log.e(TAG, "💡 This indicates network/DNS issues with your current WiFi")
+                Log.e(TAG, "💡 Try switching to mobile data or different WiFi network")
+                return null
+            }
             
             // Create HTTP connection
             val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -2128,6 +2173,11 @@ class ArView(
             
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to download remote GLB: ${e.message}", e)
+            Log.e(TAG, "💡 Network troubleshooting for new WiFi location:")
+            Log.e(TAG, "   - Try mobile data instead of WiFi")
+            Log.e(TAG, "   - Check if WiFi has captive portal (browser login)")
+            Log.e(TAG, "   - Corporate/hotel WiFi may block downloads")
+            Log.e(TAG, "   - Try different WiFi network if available")
             null
         }
     }
