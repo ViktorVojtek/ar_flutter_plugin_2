@@ -65,7 +65,20 @@ class ArModelBuilder: NSObject {
 
         do {
             let sceneSource = try GLTFSceneSource(named: modelPath)
-            scene = try sceneSource.scene()
+            
+            // Add nil check for sceneSource
+            guard let validSceneSource = sceneSource else {
+                print("GLTFSceneSource initialization failed for asset: \(modelPath)")
+                return nil
+            }
+            
+            // Safely get the scene
+            do {
+                scene = try validSceneSource.scene()
+            } catch {
+                print("Failed to load scene from GLTF asset \(modelPath): \(error.localizedDescription)")
+                return nil
+            }
 
             for child in scene.rootNode.childNodes {
                 child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
@@ -81,7 +94,7 @@ class ArModelBuilder: NSObject {
 
             return node
         } catch {
-            print("\(error.localizedDescription)")
+            print("Error creating GLTFSceneSource for \(modelPath): \(error.localizedDescription)")
             return nil
         }
     }
@@ -94,7 +107,20 @@ class ArModelBuilder: NSObject {
 
         do {
             let sceneSource = try GLTFSceneSource(path: modelPath)
-            scene = try sceneSource.scene()
+            
+            // Add nil check for sceneSource
+            guard let validSceneSource = sceneSource else {
+                print("GLTFSceneSource initialization failed for file: \(modelPath)")
+                return nil
+            }
+            
+            // Safely get the scene
+            do {
+                scene = try validSceneSource.scene()
+            } catch {
+                print("Failed to load scene from GLTF file \(modelPath): \(error.localizedDescription)")
+                return nil
+            }
 
             for child in scene.rootNode.childNodes {
                 child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
@@ -110,7 +136,7 @@ class ArModelBuilder: NSObject {
 
             return node
         } catch {
-            print("\(error.localizedDescription)")
+            print("Error creating GLTFSceneSource for \(modelPath): \(error.localizedDescription)")
             return nil
         }
     }
@@ -123,7 +149,20 @@ class ArModelBuilder: NSObject {
 
         do {
             let sceneSource = try GLTFSceneSource(path: modelPath)
-            scene = try sceneSource.scene()
+            
+            // Add nil check for sceneSource
+            guard let validSceneSource = sceneSource else {
+                print("GLTFSceneSource initialization failed for GLB file: \(modelPath)")
+                return nil
+            }
+            
+            // Safely get the scene
+            do {
+                scene = try validSceneSource.scene()
+            } catch {
+                print("Failed to load scene from GLB file \(modelPath): \(error.localizedDescription)")
+                return nil
+            }
 
             for child in scene.rootNode.childNodes {
                 child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
@@ -139,7 +178,7 @@ class ArModelBuilder: NSObject {
 
             return node
         } catch {
-            print("\(error.localizedDescription)")
+            print("Error creating GLTFSceneSource for GLB \(modelPath): \(error.localizedDescription)")
             return nil
         }
     }
@@ -168,7 +207,34 @@ class ArModelBuilder: NSObject {
 
                         do {
                             let sceneSource = GLTFSceneSource(url: targetURL)
-                            let scene = try sceneSource.scene()
+                            
+                            // Add nil check and better error handling
+                            guard let sceneSource = sceneSource else {
+                                print("GLTFSceneSource initialization failed - file might be corrupted or invalid")
+                                node = nil
+                                promise(.success(node))
+                                return
+                            }
+                            
+                            // Safely try to get the scene with proper error handling
+                            let scene: SCNScene
+                            do {
+                                scene = try sceneSource.scene()
+                            } catch {
+                                print("Failed to load scene from GLB file: \(error.localizedDescription)")
+                                print("This might be due to corrupted download or invalid GLB format")
+                                node = nil
+                                promise(.success(node))
+                                return
+                            }
+                            
+                            // Ensure scene has content
+                            guard !scene.rootNode.childNodes.isEmpty else {
+                                print("GLB scene loaded but contains no child nodes")
+                                node = nil
+                                promise(.success(node))
+                                return
+                            }
 
                             for child in scene.rootNode.childNodes {
                                 child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
@@ -186,7 +252,7 @@ class ArModelBuilder: NSObject {
                             node?.worldOrientation = worldRotation*/
 
                         } catch {
-                            print("\(error.localizedDescription)")
+                            print("Unexpected error during GLB processing: \(error.localizedDescription)")
                             node = nil
                         }
                         
