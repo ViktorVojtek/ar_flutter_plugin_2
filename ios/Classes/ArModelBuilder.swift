@@ -66,15 +66,9 @@ class ArModelBuilder: NSObject {
         do {
             let sceneSource = try GLTFSceneSource(named: modelPath)
             
-            // Add nil check for sceneSource
-            guard let validSceneSource = sceneSource else {
-                print("GLTFSceneSource initialization failed for asset: \(modelPath)")
-                return nil
-            }
-            
-            // Safely get the scene
+            // Safely get the scene with proper error handling
             do {
-                scene = try validSceneSource.scene()
+                scene = try sceneSource.scene()
             } catch {
                 print("Failed to load scene from GLTF asset \(modelPath): \(error.localizedDescription)")
                 return nil
@@ -108,15 +102,9 @@ class ArModelBuilder: NSObject {
         do {
             let sceneSource = try GLTFSceneSource(path: modelPath)
             
-            // Add nil check for sceneSource
-            guard let validSceneSource = sceneSource else {
-                print("GLTFSceneSource initialization failed for file: \(modelPath)")
-                return nil
-            }
-            
-            // Safely get the scene
+            // Safely get the scene with proper error handling
             do {
-                scene = try validSceneSource.scene()
+                scene = try sceneSource.scene()
             } catch {
                 print("Failed to load scene from GLTF file \(modelPath): \(error.localizedDescription)")
                 return nil
@@ -150,15 +138,9 @@ class ArModelBuilder: NSObject {
         do {
             let sceneSource = try GLTFSceneSource(path: modelPath)
             
-            // Add nil check for sceneSource
-            guard let validSceneSource = sceneSource else {
-                print("GLTFSceneSource initialization failed for GLB file: \(modelPath)")
-                return nil
-            }
-            
-            // Safely get the scene
+            // Safely get the scene with proper error handling
             do {
-                scene = try validSceneSource.scene()
+                scene = try sceneSource.scene()
             } catch {
                 print("Failed to load scene from GLB file \(modelPath): \(error.localizedDescription)")
                 return nil
@@ -207,14 +189,6 @@ class ArModelBuilder: NSObject {
 
                         do {
                             let sceneSource = GLTFSceneSource(url: targetURL)
-                            
-                            // Add nil check and better error handling
-                            guard let sceneSource = sceneSource else {
-                                print("GLTFSceneSource initialization failed - file might be corrupted or invalid")
-                                node = nil
-                                promise(.success(node))
-                                return
-                            }
                             
                             // Safely try to get the scene with proper error handling
                             let scene: SCNScene
