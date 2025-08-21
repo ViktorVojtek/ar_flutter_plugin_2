@@ -5,6 +5,61 @@ import ARKit
 import Combine
 import ARCoreCloudAnchors
 
+// Resource management data structures for deep memory cleanup
+class ResourceHandle {
+    let nodeId: String
+    let node: SCNNode
+    var textures: [Any] = []
+    var materials: [SCNMaterial] = []
+    var geometries: [SCNGeometry] = []
+    let assetKey: String?
+    
+    init(nodeId: String, node: SCNNode, assetKey: String? = nil) {
+        self.nodeId = nodeId
+        self.node = node
+        self.assetKey = assetKey
+        
+        // Collect all materials and textures from the node hierarchy
+        collectResources(from: node)
+    }
+    
+    private func collectResources(from node: SCNNode) {
+        if let geometry = node.geometry {
+            geometries.append(geometry)
+            materials.append(contentsOf: geometry.materials)
+            
+            for material in geometry.materials {
+                // Collect textures from all material properties
+                if let diffuse = material.diffuse.contents { textures.append(diffuse) }
+                if let specular = material.specular.contents { textures.append(specular) }
+                if let normal = material.normal.contents { textures.append(normal) }
+                if let emission = material.emission.contents { textures.append(emission) }
+                if let roughness = material.roughness.contents { textures.append(roughness) }
+                if let metalness = material.metalness.contents { textures.append(metalness) }
+            }
+        }
+        
+        // Recursively collect from child nodes
+        for child in node.childNodes {
+            collectResources(from: child)
+        }
+    }
+}
+
+class CachedAsset {
+    let uri: String
+    let rootNode: SCNNode
+    let refCount: Int
+    let creationTime: TimeInterval
+    
+    init(uri: String, rootNode: SCNNode, refCount: Int = 1) {
+        self.uri = uri
+        self.rootNode = rootNode
+        self.refCount = refCount
+        self.creationTime = Date().timeIntervalSince1970
+    }
+}
+
 class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureRecognizerDelegate, ARSessionDelegate {
     let sceneView: ARSCNView
     let coachingView: ARCoachingOverlayView
@@ -16,6 +71,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     var customPlaneTexturePath: String? = nil
     private var trackedPlanes = [UUID: (SCNNode, SCNNode)]()
     let modelBuilder = ArModelBuilder()
+    
+    // Deep memory cleanup resource management
+    private var resourceHandles: [String: ResourceHandle] = [:]
+    private var assetCache: [String: CachedAsset] = [:]
+    private let maxCacheAge: TimeInterval = 300.0 // 5 minutes
+    private let loadingQueue = DispatchQueue(label: "ar.model.loading", qos: .userInitiated)
     
     var cancellableCollection = Set<AnyCancellable>() //Used to store all cancellables in (needed for working with Futures)
     var anchorCollection = [String: ARAnchor]() //Used to bookkeep all anchors created by Flutter calls
@@ -128,6 +189,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 }
                 result(nil)
                 break
+            case "softResetSession":
+                let removeAnchors = arguments?["removeExistingAnchors"] as? Bool ?? true
+                let resetTracking = arguments?["resetTracking"] as? Bool ?? true
+                let success = softResetSession(removeAnchors: removeAnchors, resetTracking: resetTracking)
+                result(success)
+                break
             default:
                 result(FlutterMethodNotImplemented)
                 break
@@ -158,6 +225,32 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 if let name = arguments!["name"] as? String {
                     sceneView.scene.rootNode.childNode(withName: name, recursively: true)?.removeFromParentNode()
                 }
+                break
+            case "removeNodeDeep":
+                if let nodeId = arguments!["nodeId"] as? String {
+                    let success = removeNodeDeep(nodeId: nodeId)
+                    result(success)
+                } else {
+                    result(false)
+                }
+                break
+            case "purgeCaches":
+                let success = purgeCaches()
+                result(success)
+                break
+            case "createNodeFromAsset":
+                if let uri = arguments!["uri"] as? String,
+                   let transformMatrix = arguments!["transformMatrix"] as? [Double] {
+                    createNodeFromAsset(uri: uri, transformMatrix: transformMatrix) { nodeName in
+                        result(nodeName)
+                    }
+                } else {
+                    result(nil)
+                }
+                break
+            case "getMemoryInfo":
+                let memoryInfo = getMemoryInfo()
+                result(memoryInfo)
                 break
             case "transformationChanged":
                 if let name = arguments!["name"] as? String, let transform = arguments!["transformation"] as? Array<NSNumber> {
@@ -416,6 +509,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
+                                        if let nodeId = nodeName {
+                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                                        }
                                         promise(.success(nodeName))
                                     } else {
                                         promise(.success(nil))
@@ -427,6 +523,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
+                            if let nodeId = nodeName {
+                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                            }
                             promise(.success(nodeName))
                         }
                     } else {
@@ -448,6 +547,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                         if let anchor = self.anchorCollection[anchorName]{
                                             // Attach node to the top-level node of the specified anchor
                                             self.sceneView.node(for: anchor)?.addChildNode(node)
+                                            if let nodeId = nodeName {
+                                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                                            }
                                             promise(.success(nodeName))
                                         } else {
                                             promise(.success(nil))
@@ -459,6 +561,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                             } else {
                                 // Attach to top-level node of the scene
                                 self.sceneView.scene.rootNode.addChildNode(node)
+                                if let nodeId = nodeName {
+                                    self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                                }
                                 promise(.success(nodeName))
                             }
                         } else {
@@ -482,6 +587,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
+                                        if let nodeId = nodeName {
+                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                                        }
                                         promise(.success(nodeName))
                                     } else {
                                         promise(.success(nil))
@@ -493,6 +601,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
+                            if let nodeId = nodeName {
+                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                            }
                             promise(.success(nodeName))
                         }
                     } else {
@@ -515,6 +626,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
+                                        if let nodeId = nodeName {
+                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                                        }
                                         promise(.success(nodeName))
                                     } else {
                                         promise(.success(nil))
@@ -526,6 +640,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
+                            if let nodeId = nodeName {
+                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
+                            }
                             promise(.success(nodeName))
                         }
                     } else {
@@ -866,6 +983,248 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             return "vertical"
         @unknown default:
             return "unknown"
+        }
+    }
+    
+    // ========================================
+    // DEEP MEMORY CLEANUP IMPLEMENTATION
+    // ========================================
+    
+    private func removeNodeDeep(nodeId: String) -> Bool {
+        print("🗑️ Deep removing node: \(nodeId)")
+        
+        // 1) Get resource handle
+        guard let resourceHandle = resourceHandles.removeValue(forKey: nodeId) else {
+            print("⚠️ Resource handle not found for node: \(nodeId)")
+            // Still try to remove from scene if it exists
+            if let node = sceneView.scene.rootNode.childNode(withName: nodeId, recursively: true) {
+                node.removeFromParentNode()
+                print("✅ Node removed from scene (without resource handle): \(nodeId)")
+                return true
+            }
+            return false
+        }
+        
+        // 2) Remove from scene
+        resourceHandle.node.removeFromParentNode()
+        
+        // 3) Deep destroy resources
+        // Clear material references to help with memory cleanup
+        for geometry in resourceHandle.geometries {
+            geometry.materials.removeAll()
+        }
+        
+        // Clear texture references
+        for material in resourceHandle.materials {
+            material.diffuse.contents = nil
+            material.specular.contents = nil
+            material.normal.contents = nil
+            material.emission.contents = nil
+            material.roughness.contents = nil
+            material.metalness.contents = nil
+        }
+        
+        // Update shared asset cache if applicable
+        if let assetKey = resourceHandle.assetKey {
+            if let cachedAsset = assetCache[assetKey] {
+                let newRefCount = cachedAsset.refCount - 1
+                if newRefCount <= 0 {
+                    assetCache.removeValue(forKey: assetKey)
+                    print("🗑️ Removed asset from cache: \(assetKey)")
+                } else {
+                    // Update ref count (simplified - in real implementation you'd need atomic operations)
+                    assetCache[assetKey] = CachedAsset(uri: cachedAsset.uri, rootNode: cachedAsset.rootNode, refCount: newRefCount)
+                    print("🔢 Asset refCount for \(assetKey): \(newRefCount)")
+                }
+            }
+        }
+        
+        print("✅ Deep node removal completed: \(nodeId)")
+        return true
+    }
+    
+    private func purgeCaches() -> Bool {
+        print("🧹 Purging all caches")
+        
+        let cacheSize = assetCache.count
+        assetCache.removeAll()
+        print("🗑️ Cleared asset cache (\(cacheSize) items)")
+        
+        let handleCount = resourceHandles.count
+        resourceHandles.removeAll()
+        print("🗑️ Cleared resource handles (\(handleCount) items)")
+        
+        print("✅ Cache purging completed")
+        return true
+    }
+    
+    private func softResetSession(removeAnchors: Bool, resetTracking: Bool) -> Bool {
+        print("🔄 Soft resetting AR session - removeAnchors: \(removeAnchors), resetTracking: \(resetTracking)")
+        
+        var options: ARSession.RunOptions = []
+        if removeAnchors { 
+            options.insert(.removeExistingAnchors)
+            // Also clear our anchor collection
+            anchorCollection.removeAll()
+            print("🗑️ Cleared anchor collection")
+        }
+        if resetTracking { 
+            options.insert(.resetTracking) 
+            print("🔄 Reset tracking enabled")
+        }
+        
+        DispatchQueue.main.async {
+            self.sceneView.session.pause()
+            print("⏸️ AR session paused")
+            
+            // Short delay to ensure session is fully paused
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.sceneView.session.run(self.configuration, options: options)
+                print("▶️ AR session resumed with reset options")
+            }
+        }
+        
+        print("✅ Soft reset session completed")
+        return true
+    }
+    
+    private func createNodeFromAsset(uri: String, transformMatrix: [Double], completion: @escaping (String?) -> Void) {
+        print("🔄 Creating shared node from asset: \(uri)")
+        
+        loadingQueue.async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            
+            var node: SCNNode?
+            var shouldCache = false
+            
+            // Check if asset is already cached
+            if let cachedAsset = self.assetCache[uri] {
+                // Clone the cached node
+                node = cachedAsset.rootNode.clone()
+                let newRefCount = cachedAsset.refCount + 1
+                self.assetCache[uri] = CachedAsset(uri: cachedAsset.uri, rootNode: cachedAsset.rootNode, refCount: newRefCount)
+                print("♻️ Reusing cached asset: \(uri) (refCount: \(newRefCount))")
+            } else {
+                // Load new asset - determine type from URI
+                if uri.hasPrefix("http://") || uri.hasPrefix("https://") {
+                    // Web asset
+                    node = self.modelBuilder.makeNodeFromWebGlb(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelURL: uri, transformation: nil)
+                        .sink(receiveCompletion: { _ in }, receiveValue: { webNode in
+                            if let webNode = webNode {
+                                shouldCache = true
+                                node = webNode
+                            }
+                        }).store(in: &self.cancellableCollection) as? SCNNode
+                } else if uri.contains("/") {
+                    // File system asset
+                    let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                    let documentsDirectory = paths[0]
+                    let targetPath = documentsDirectory.appendingPathComponent(uri).path
+                    
+                    if uri.hasSuffix(".glb") {
+                        node = self.modelBuilder.makeNodeFromFileSystemGLB(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelPath: targetPath, transformation: nil)
+                    } else {
+                        node = self.modelBuilder.makeNodeFromFileSystemGltf(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelPath: targetPath, transformation: nil)
+                    }
+                    shouldCache = true
+                } else {
+                    // Flutter asset
+                    let key = FlutterDartProject.lookupKey(forAsset: uri)
+                    node = self.modelBuilder.makeNodeFromGltf(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelPath: key, transformation: nil)
+                    shouldCache = true
+                }
+                
+                if let node = node, shouldCache {
+                    self.assetCache[uri] = CachedAsset(uri: uri, rootNode: node)
+                    print("💾 Cached new asset: \(uri)")
+                }
+            }
+            
+            DispatchQueue.main.async {
+                guard let finalNode = node else {
+                    print("❌ Failed to load model instance from: \(uri)")
+                    completion(nil)
+                    return
+                }
+                
+                // Apply transformation matrix
+                if transformMatrix.count >= 16 {
+                    let matrix = transformMatrix.map { Float($0) }
+                    
+                    // Create SCNMatrix4 from the transformation matrix
+                    let transform = SCNMatrix4(
+                        m11: matrix[0], m12: matrix[1], m13: matrix[2], m14: matrix[3],
+                        m21: matrix[4], m22: matrix[5], m23: matrix[6], m24: matrix[7],
+                        m31: matrix[8], m32: matrix[9], m33: matrix[10], m34: matrix[11],
+                        m41: matrix[12], m42: matrix[13], m43: matrix[14], m44: matrix[15]
+                    )
+                    finalNode.transform = transform
+                }
+                
+                // Set node name
+                let nodeName = "SharedAsset_\(Date().timeIntervalSince1970)"
+                finalNode.name = nodeName
+                
+                // Add to scene
+                self.sceneView.scene.rootNode.addChildNode(finalNode)
+                
+                // Track resource handle
+                let resourceHandle = ResourceHandle(nodeId: nodeName, node: finalNode, assetKey: uri)
+                self.resourceHandles[nodeName] = resourceHandle
+                
+                print("✅ Shared node added to scene: \(nodeName)")
+                completion(nodeName)
+            }
+        }
+    }
+    
+    private func getMemoryInfo() -> [String: Any] {
+        var memoryInfo: [String: Any] = [:]
+        
+        // Get memory usage information
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            memoryInfo["residentSizeMB"] = Double(info.resident_size) / 1048576.0
+            memoryInfo["virtualSizeMB"] = Double(info.virtual_size) / 1048576.0
+        } else {
+            memoryInfo["memoryError"] = "Unable to get memory info"
+        }
+        
+        // Add cache statistics
+        memoryInfo["activeNodes"] = resourceHandles.count
+        memoryInfo["cachedAssets"] = assetCache.count
+        memoryInfo["resourceHandles"] = resourceHandles.count
+        
+        return memoryInfo
+    }
+    
+    // Update existing addNode methods to track resource handles
+    private func trackResourceHandle(for node: SCNNode, nodeId: String, assetKey: String? = nil) {
+        let resourceHandle = ResourceHandle(nodeId: nodeId, node: node, assetKey: assetKey)
+        resourceHandles[nodeId] = resourceHandle
+        print("📝 Tracking resource handle for node: \(nodeId)")
+    }
+    
+    // Cleanup old cached assets (call periodically)
+    private func cleanupOldAssets() {
+        let currentTime = Date().timeIntervalSince1970
+        
+        for (key, asset) in assetCache {
+            if asset.refCount <= 0 && (currentTime - asset.creationTime) > maxCacheAge {
+                assetCache.removeValue(forKey: key)
+                print("🧹 Cleaned up old asset: \(key)")
+            }
         }
     }
 }

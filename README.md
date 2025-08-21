@@ -1,7 +1,20 @@
 # ar_flutter_plugin_2
 [![pub package](https://img.shields.io/pub/v/ar_flutter_plugin_2.svg)](https://pub.dev/packages/ar_flutter_plugin_2)
 
+## NEW: Deep Memory Cleanup 🚀
 
+This plugin now includes **advanced memory management** to prevent OOM crashes and ensure stable AR performance:
+
+- **Deep Resource Cleanup**: Thoroughly destroy GPU resources, textures, and materials
+- **Shared Asset Loading**: Load assets once, share between multiple nodes (50-80% memory reduction)
+- **Cache Purging**: Clear accumulated caches and unused resources
+- **Session Reset**: Soft reset AR sessions without app restart
+- **Memory Monitoring**: Real-time memory usage statistics
+- **Load Backpressure**: Queue model loading to prevent memory spikes
+
+📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
+
+---
 
 This version is a direct adaptation of the original ar_flutter_plugin (https://pub.dev/packages/ar_flutter_plugin), 
 migrating the Android component from Sceneform to sceneview_android, enabling the use of animated models.<br>

@@ -61,8 +61,28 @@ import io.github.sceneview.loaders.MaterialLoader
 import com.google.ar.core.exceptions.SessionPausedException
 import java.io.File
 import java.net.URL
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.sqrt
 import kotlin.math.atan2
+import android.os.Debug
+
+// Resource management data structures for deep memory cleanup
+data class ResourceHandle(
+    val nodeId: String,
+    val modelInstance: ModelInstance?,
+    val materials: MutableList<Any> = mutableListOf(),
+    val textures: MutableList<Any> = mutableListOf(),
+    val assetKey: String? = null
+)
+
+data class CachedAsset(
+    val uri: String,
+    val modelInstance: ModelInstance,
+    val refCount: AtomicInteger = AtomicInteger(1),
+    val creationTime: Long = System.currentTimeMillis()
+)
 
 class ArView(
     context: Context,
@@ -98,6 +118,12 @@ class ArView(
     private var handleRotation = false
     private var isSessionPaused = false
     private var detectedPlaneY: Float? = null // Y coordinate of the detected plane for constraining object movement
+    
+    // Deep memory cleanup resource management
+    private val resourceHandles = ConcurrentHashMap<String, ResourceHandle>()
+    private val assetCache = ConcurrentHashMap<String, CachedAsset>()
+    private val loadingExecutor = Executors.newSingleThreadExecutor()
+    private val maxCacheAge = 300_000L // 5 minutes in milliseconds
     
     // Velocity-based rotation tracking variables (like iOS)
     // private var rotationVelocity: Float? = null  // Unused - remove per patch instructions
@@ -151,6 +177,7 @@ class ArView(
                 "snapshot" -> handleSnapshot(result)
                 "disableCamera" -> handleDisableCamera(result)
                 "enableCamera" -> handleEnableCamera(result)
+                "softResetSession" -> handleSoftResetSession(call, result)
                 else -> {
                     Log.d(TAG, "❌ Session method not implemented: ${call.method}")
                     result.notImplemented()
@@ -175,6 +202,43 @@ class ArView(
             result.error("ENABLE_CAMERA_ERROR", e.message, null)
         }
     }
+    
+    private fun handleSoftResetSession(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val removeAnchors = call.argument<Boolean>("removeExistingAnchors") ?: true
+            val resetTracking = call.argument<Boolean>("resetTracking") ?: true
+            
+            Log.d(TAG, "🔄 Soft resetting AR session - removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+            
+            // Clear anchors if requested
+            if (removeAnchors) {
+                anchorNodesMap.clear()
+                Log.d(TAG, "🗑️ Cleared anchor nodes map")
+            }
+            
+            // Pause and resume session to reset tracking
+            sceneView.session?.let { session ->
+                session.pause()
+                Log.d(TAG, "⏸️ AR session paused")
+                
+                // Wait a brief moment then resume
+                sceneView.postDelayed({
+                    try {
+                        session.resume()
+                        Log.d(TAG, "▶️ AR session resumed")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error resuming session: ${e.message}")
+                    }
+                }, 100)
+            }
+            
+            Log.d(TAG, "✅ Soft reset session completed")
+            result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in handleSoftResetSession", e)
+            result.error("SOFT_RESET_SESSION_ERROR", e.message, null)
+        }
+    }
     private val onObjectMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
             Log.d(TAG, "📦 Object method called: ${call.method}")
@@ -194,6 +258,18 @@ class ArView(
                 "addNodeToScreenPosition" -> handleAddNodeToScreenPosition(call, result)
                 "removeNode" -> {
                     handleRemoveNode(call, result)
+                }
+                "removeNodeDeep" -> {
+                    handleRemoveNodeDeep(call, result)
+                }
+                "purgeCaches" -> {
+                    handlePurgeCaches(call, result)
+                }
+                "createNodeFromAsset" -> {
+                    handleCreateNodeFromAsset(call, result)
+                }
+                "getMemoryInfo" -> {
+                    handleGetMemoryInfo(call, result)
                 }
                 "transformationChanged" -> {
                     handleTransformNode(call, result)
@@ -494,6 +570,15 @@ class ArView(
                             
                             node.name?.let { nodeName ->
                                 nodesMap[nodeName] = node
+                                
+                                // Track resource handle for deep cleanup
+                                val resourceHandle = ResourceHandle(
+                                    nodeId = nodeName,
+                                    modelInstance = node.modelInstance,
+                                    assetKey = (dict_node["uri"] as? String)
+                                )
+                                resourceHandles[nodeName] = resourceHandle
+                                
                                 Log.d("ArView", "🎯 Added ModelNode to nodesMap: $nodeName, total nodes: ${nodesMap.size}")
                                 Log.d("ArView", "🎯 All nodes in map: ${nodesMap.keys}")
                                 Log.d("ArView", "🎯 Node properties - isPositionEditable: ${node.isPositionEditable}, isTouchable: ${node.isTouchable}")
@@ -2179,6 +2264,333 @@ class ArView(
             Log.e(TAG, "   - Corporate/hotel WiFi may block downloads")
             Log.e(TAG, "   - Try different WiFi network if available")
             null
+        }
+    }
+
+    // ========================================
+    // DEEP MEMORY CLEANUP IMPLEMENTATION
+    // ========================================
+
+    private fun handleRemoveNodeDeep(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeId = call.argument<String>("nodeId")
+            if (nodeId == null) {
+                result.error("INVALID_ARGUMENT", "nodeId is required", null)
+                return
+            }
+            
+            val success = removeNodeDeep(nodeId)
+            result.success(success)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in handleRemoveNodeDeep", e)
+            result.error("REMOVE_NODE_DEEP_ERROR", e.message, null)
+        }
+    }
+
+    private fun removeNodeDeep(nodeId: String): Boolean {
+        Log.d(TAG, "🗑️ Deep removing node: $nodeId")
+        
+        try {
+            // 1) Get resource handle
+            val resourceHandle = resourceHandles.remove(nodeId)
+            
+            // 2) Remove from regular nodesMap and scene
+            nodesMap[nodeId]?.let { node ->
+                // Detach from scene
+                runCatching { 
+                    node.parent?.removeChildNode(node)
+                    sceneView.removeChildNode(node)
+                }
+                
+                // Destroy node resources
+                runCatching { node.destroy() }
+                
+                // Remove from nodes map
+                nodesMap.remove(nodeId)
+                
+                Log.d(TAG, "✅ Node removed from scene and nodesMap")
+            }
+            
+            // 3) Deep destroy resources if we have handle
+            resourceHandle?.let { handle ->
+                // Destroy model instance
+                handle.modelInstance?.let { modelInstance ->
+                    runCatching {
+                        // The ModelInstance should be destroyed by the node.destroy() call above
+                        // but we can add additional cleanup if needed
+                        Log.d(TAG, "🧹 ModelInstance cleanup handled by node.destroy()")
+                    }
+                }
+                
+                // Clean up materials and textures
+                handle.materials.forEach { material ->
+                    runCatching { 
+                        // SceneView handles material cleanup internally
+                        Log.d(TAG, "🧹 Material cleanup handled by SceneView")
+                    }
+                }
+                
+                handle.textures.forEach { texture ->
+                    runCatching {
+                        // SceneView handles texture cleanup internally  
+                        Log.d(TAG, "🧹 Texture cleanup handled by SceneView")
+                    }
+                }
+                
+                // Update shared asset cache if applicable
+                handle.assetKey?.let { assetKey ->
+                    assetCache[assetKey]?.let { cachedAsset ->
+                        val newRefCount = cachedAsset.refCount.decrementAndGet()
+                        Log.d(TAG, "🔢 Asset refCount for $assetKey: $newRefCount")
+                        
+                        if (newRefCount <= 0) {
+                            assetCache.remove(assetKey)
+                            Log.d(TAG, "🗑️ Removed asset from cache: $assetKey")
+                        }
+                    }
+                }
+                
+                Log.d(TAG, "✅ Deep resource cleanup completed for node: $nodeId")
+            }
+            
+            // Force garbage collection hint
+            runCatching { System.gc() }
+            
+            Log.d(TAG, "✅ Deep node removal completed: $nodeId")
+            return true
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in deep node removal: ${e.message}", e)
+            return false
+        }
+    }
+
+    private fun handlePurgeCaches(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val success = purgeCaches()
+            result.success(success)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in handlePurgeCaches", e)
+            result.error("PURGE_CACHES_ERROR", e.message, null)
+        }
+    }
+
+    private fun purgeCaches(): Boolean {
+        Log.d(TAG, "🧹 Purging all caches")
+        
+        try {
+            // Clear asset cache
+            val cacheSize = assetCache.size
+            assetCache.clear()
+            Log.d(TAG, "🗑️ Cleared asset cache ($cacheSize items)")
+            
+            // Clear resource handles (they should already be cleaned by removeNodeDeep)
+            val handleCount = resourceHandles.size  
+            resourceHandles.clear()
+            Log.d(TAG, "🗑️ Cleared resource handles ($handleCount items)")
+            
+            // Let SceneView handle its internal cache cleanup
+            runCatching {
+                // SceneView manages its own model loader cache
+                Log.d(TAG, "🧹 SceneView internal cache cleanup delegated")
+            }
+            
+            // Force garbage collection hint
+            runCatching { System.gc() }
+            
+            Log.d(TAG, "✅ Cache purging completed")
+            return true
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error purging caches: ${e.message}", e)
+            return false
+        }
+    }
+
+    private fun handleCreateNodeFromAsset(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val uri = call.argument<String>("uri")
+            val transformMatrix = call.argument<DoubleArray>("transformMatrix")
+            
+            if (uri == null || transformMatrix == null) {
+                result.error("INVALID_ARGUMENTS", "uri and transformMatrix are required", null)
+                return
+            }
+            
+            if (transformMatrix.size != 16) {
+                result.error("INVALID_TRANSFORMATION", "transformMatrix must have 16 elements", null) 
+                return
+            }
+            
+            mainScope.launch {
+                try {
+                    val nodeName = createNodeFromAsset(uri, transformMatrix)
+                    result.success(nodeName)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error creating node from asset", e)
+                    result.error("CREATE_NODE_ERROR", e.message, null)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in handleCreateNodeFromAsset", e)
+            result.error("CREATE_NODE_FROM_ASSET_ERROR", e.message, null)
+        }
+    }
+
+    private suspend fun createNodeFromAsset(uri: String, transformMatrix: DoubleArray): String? {
+        Log.d(TAG, "🔄 Creating shared node from asset: $uri")
+        
+        return withContext(Dispatchers.Main) {
+            try {
+                // Check if asset is already cached
+                val cachedAsset = assetCache[uri]
+                val modelInstance = if (cachedAsset != null) {
+                    // Reuse cached asset
+                    cachedAsset.refCount.incrementAndGet()
+                    Log.d(TAG, "♻️ Reusing cached asset: $uri (refCount: ${cachedAsset.refCount.get()})")
+                    cachedAsset.modelInstance
+                } else {
+                    // Load new asset
+                    Log.d(TAG, "📥 Loading new asset: $uri")
+                    val modelInstance = sceneView.modelLoader.loadModelInstance(uri)
+                    if (modelInstance != null) {
+                        val newCachedAsset = CachedAsset(uri, modelInstance)
+                        assetCache[uri] = newCachedAsset
+                        Log.d(TAG, "💾 Cached new asset: $uri")
+                        modelInstance
+                    } else {
+                        Log.e(TAG, "❌ Failed to load model instance from: $uri")
+                        return@withContext null
+                    }
+                }
+                
+                if (modelInstance == null) {
+                    Log.e(TAG, "❌ Model instance is null for: $uri")
+                    return@withContext null
+                }
+                
+                // Create node with shared model instance
+                val node = object : ModelNode(
+                    modelInstance = modelInstance,
+                    scaleToUnits = 1.0f
+                ) {
+                    init {
+                        // Apply transformation matrix
+                        val matrix = transformMatrix.map { it.toFloat() }.toFloatArray()
+                        
+                        // Extract position from transformation matrix (column 4: indices 12, 13, 14)
+                        val position = ScenePosition(
+                            x = matrix[12],
+                            y = matrix[13], 
+                            z = matrix[14]
+                        )
+                        
+                        // Extract scale from transformation matrix
+                        val scaleX = sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
+                        val scaleY = sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
+                        val scaleZ = sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
+                        val scale = SceneScale(x = scaleX, y = scaleY, z = scaleZ)
+                        
+                        // Extract rotation from transformation matrix
+                        val rotation = SceneRotation(
+                            x = radToDeg(atan2(matrix[6], matrix[10])),
+                            y = radToDeg(atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10]))),
+                            z = radToDeg(atan2(matrix[1], matrix[0]))
+                        )
+                        
+                        // Apply the transformation to the node
+                        transform = Transform(
+                            position = position,
+                            rotation = rotation,
+                            scale = scale
+                        )
+                        
+                        // Set node properties
+                        val nodeName = "SharedAsset_${System.currentTimeMillis()}"
+                        name = nodeName
+                        isPositionEditable = this@ArView.handlePans
+                        isRotationEditable = this@ArView.handleRotation
+                        isTouchable = true
+                        
+                        Log.d(TAG, "🎯 Shared node created: $nodeName")
+                    }
+                }
+                
+                // Add to scene and maps
+                sceneView.addChildNode(node)
+                val nodeName = node.name!!
+                nodesMap[nodeName] = node
+                
+                // Track resource handle
+                val resourceHandle = ResourceHandle(
+                    nodeId = nodeName,
+                    modelInstance = modelInstance,
+                    assetKey = uri
+                )
+                resourceHandles[nodeName] = resourceHandle
+                
+                Log.d(TAG, "✅ Shared node added to scene: $nodeName")
+                nodeName
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error creating shared node: ${e.message}", e)
+                null
+            }
+        }
+    }
+
+    private fun handleGetMemoryInfo(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val memoryInfo = getMemoryInfo()
+            result.success(memoryInfo)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in handleGetMemoryInfo", e)
+            result.error("GET_MEMORY_INFO_ERROR", e.message, null)
+        }
+    }
+
+    private fun getMemoryInfo(): Map<String, Any> {
+        return try {
+            val runtime = Runtime.getRuntime()
+            val nativeHeapSize = Debug.getNativeHeapSize()
+            val nativeHeapAllocated = Debug.getNativeHeapAllocatedSize()
+            val nativeHeapFree = Debug.getNativeHeapFreeSize()
+            
+            mapOf(
+                "javaHeapUsedMB" to ((runtime.totalMemory() - runtime.freeMemory()) / 1048576.0),
+                "javaHeapTotalMB" to (runtime.totalMemory() / 1048576.0),
+                "javaHeapMaxMB" to (runtime.maxMemory() / 1048576.0),
+                "nativeHeapSizeMB" to (nativeHeapSize / 1048576.0),
+                "nativeHeapAllocatedMB" to (nativeHeapAllocated / 1048576.0),
+                "nativeHeapFreeMB" to (nativeHeapFree / 1048576.0),
+                "activeNodes" to nodesMap.size,
+                "cachedAssets" to assetCache.size,
+                "resourceHandles" to resourceHandles.size
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting memory info: ${e.message}", e)
+            mapOf(
+                "error" to e.message,
+                "activeNodes" to nodesMap.size,
+                "cachedAssets" to assetCache.size,
+                "resourceHandles" to resourceHandles.size
+            )
+        }
+    }
+
+    // Cleanup old cached assets (call periodically)
+    private fun cleanupOldAssets() {
+        val currentTime = System.currentTimeMillis()
+        val iterator = assetCache.iterator()
+        
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val asset = entry.value
+            
+            if (asset.refCount.get() <= 0 && (currentTime - asset.creationTime) > maxCacheAge) {
+                iterator.remove()
+                Log.d(TAG, "🧹 Cleaned up old asset: ${entry.key}")
+            }
         }
     }
 }

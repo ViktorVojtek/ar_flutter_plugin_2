@@ -113,7 +113,8 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     
     // Remove all nodes first
     for (var node in nodes) {
-      await this.arObjectManager!.removeNode(node);
+      // await this.arObjectManager!.removeNode(node);
+      await this.arObjectManager!.removeNodeDeep(node.name);
     }
     nodes.clear();
     
@@ -162,8 +163,8 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         var newNode = ARNode(
           type: NodeType.webGLB,
           uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb",
-          scale: vector_math.Vector3(5.0, 5.0, 5.0),
-          position: vector_math.Vector3(0.0, 0.0, 0.0),
+          scale: vector_math.Vector3(1.0, 1.0, 1.0),
+          position: vector_math.Vector3(0.0, 0.0, -0.5),
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
         );
         

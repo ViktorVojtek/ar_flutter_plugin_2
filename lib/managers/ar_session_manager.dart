@@ -283,4 +283,20 @@ class ARSessionManager {
     final result = await _channel.invokeMethod<Uint8List>('snapshot');
     return MemoryImage(result!);
   }
+
+  /// Pause and re-run AR session with reset flags (anchors cleared, tracking reset)
+  Future<bool> softResetSession({bool removeExistingAnchors = true, bool resetTracking = true}) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('softResetSession', {
+        'removeExistingAnchors': removeExistingAnchors,
+        'resetTracking': resetTracking,
+      });
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in softResetSession: $e');
+      }
+      return false;
+    }
+  }
 }

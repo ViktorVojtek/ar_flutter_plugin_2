@@ -200,4 +200,62 @@ class ARObjectManager {
   removeNode(ARNode node) {
     _channel.invokeMethod<String>('removeNode', {'name': node.name});
   }
+
+  /// Deep-destroy native + GPU resources for this node
+  Future<bool> removeNodeDeep(String nodeId) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('removeNodeDeep', {'nodeId': nodeId});
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in removeNodeDeep: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Purge GLTF/material/texture caches on the native side
+  Future<bool> purgeCaches() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('purgeCaches', {});
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in purgeCaches: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Create node that SHARES already-decoded asset by URI (no duplicate decode)
+  Future<String?> createNodeFromAsset({
+    required String uri,
+    required Float64List transformMatrix,
+  }) async {
+    try {
+      final result = await _channel.invokeMethod<String>('createNodeFromAsset', {
+        'uri': uri,
+        'transformMatrix': transformMatrix,
+      });
+      return result;
+    } catch (e) {
+      if (debug) {
+        print('Error in createNodeFromAsset: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Optional: expose memory info for diagnostics
+  Future<Map<String, dynamic>> getMemoryInfo() async {
+    try {
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getMemoryInfo', {});
+      return Map<String, dynamic>.from(result ?? {});
+    } catch (e) {
+      if (debug) {
+        print('Error in getMemoryInfo: $e');
+      }
+      return {};
+    }
+  }
 }
