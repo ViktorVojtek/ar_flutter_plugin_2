@@ -717,8 +717,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     }
                 }
                 if (nodeHitResults.count != 0 && panningNode != nil) {
-                    panningNodeCurrentWorldLocation = panningNode!.worldPosition
-                    DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: self.panningNode!.name)} // Chaining of Array and Set is used to remove duplicates
+                    panningNodeCurrentWorldLocation = panningNode?.worldPosition
+                    if let panningNodeName = panningNode?.name {
+                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: panningNodeName)}
+                    }
                     return
                 }
             }
@@ -741,7 +743,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     let posZ = result.worldTransform.columns.3.z
                     panNode.worldPosition = SCNVector3(posX, posY, posZ)
                 }
-                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanChange", arguments: panNode.name)}
+                if let panNodeName = panNode.name {
+                    DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanChange", arguments: panNodeName)}
+                }
             }
         }
         // State Ended
@@ -779,7 +783,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     }
                 }
                 if (nodeHitResults.count != 0 && panningNode != nil) {
-                    DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: self.panningNode!.name)} // Chaining of Array and Set is used to remove duplicates
+                    if let panNodeName = panningNode?.name {
+                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: panNodeName)}
+                    }
                     return
                 }
             }
@@ -803,7 +809,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     rotation = SCNQuaternion(x: 0, y: 0, z: 1, w: nodeRotation.w+Float(r2)) // quickest way to convert screen into world positions (meters)
                 }
                 panNode.rotation = rotation
-                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationChange", arguments: panNode.name)}
+                if let panNodeName = panNode.name {
+                    DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationChange", arguments: panNodeName)}
+                }
             }
 
             // update position of panning node if it has been created
