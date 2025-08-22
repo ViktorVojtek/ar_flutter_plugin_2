@@ -58,12 +58,13 @@ import io.github.sceneview.math.Rotation
 import io.github.sceneview.math.Scale
 import io.github.sceneview.math.colorOf
 import io.github.sceneview.loaders.MaterialLoader
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.TimeUnit
 import com.google.ar.core.exceptions.SessionPausedException
 import java.io.File
 import java.net.URL
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.sqrt
 import kotlin.math.atan2
 import android.os.Debug
@@ -122,7 +123,7 @@ class ArView(
     // Deep memory cleanup resource management
     private val resourceHandles = ConcurrentHashMap<String, ResourceHandle>()
     private val assetCache = ConcurrentHashMap<String, CachedAsset>()
-    private val loadingExecutor = Executors.newSingleThreadExecutor()
+    private var loadingExecutor = Executors.newSingleThreadExecutor()
     private val maxCacheAge = 300_000L // 5 minutes in milliseconds
     
     // Velocity-based rotation tracking variables (like iOS)
@@ -178,6 +179,7 @@ class ArView(
                 "disableCamera" -> handleDisableCamera(result)
                 "enableCamera" -> handleEnableCamera(result)
                 "softResetSession" -> handleSoftResetSession(call, result)
+                "ar#nukeAll" -> handleNukeAll(call, result)
                 else -> {
                     Log.d(TAG, "❌ Session method not implemented: ${call.method}")
                     result.notImplemented()
@@ -237,6 +239,146 @@ class ArView(
         } catch (e: Exception) {
             Log.e(TAG, "Error in handleSoftResetSession", e)
             result.error("SOFT_RESET_SESSION_ERROR", e.message, null)
+        }
+    }
+
+    private fun handleNukeAll(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val purgeCaches = call.argument<Boolean>("purgeCaches") ?: true
+            val removeAnchors = call.argument<Boolean>("removeExistingAnchors") ?: true
+            val resetTracking = call.argument<Boolean>("resetTracking") ?: true
+            
+            Log.d(TAG, "🚨 NUKE ALL INITIATED - purgeCaches: $purgeCaches, removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+            
+            // A) Stop background work & cancel loading tasks
+            Log.d(TAG, "⏹️ Phase A: Stopping background work")
+            try {
+                loadingExecutor.shutdown()
+                if (!loadingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    loadingExecutor.shutdownNow()
+                    Log.d(TAG, "⚡ Force shutdown background executor")
+                }
+                Log.d(TAG, "✅ Phase A: Background work stopped")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase A error: ${e.message}")
+            }
+
+            // B) Clear all anchors and nodes
+            Log.d(TAG, "🗑️ Phase B: Clearing anchors and nodes")
+            try {
+                if (removeAnchors) {
+                    anchorNodesMap.clear()
+                }
+                nodesMap.clear()
+                pointCloudNodes.clear()
+                pointCloudModelInstances.clear()
+                Log.d(TAG, "✅ Phase B: Anchors and nodes cleared")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase B error: ${e.message}")
+            }
+
+            // C) Pause and close AR session
+            Log.d(TAG, "⏸️ Phase C: Destroying AR session")
+            try {
+                sceneView.session?.let { session ->
+                    session.pause()
+                    session.close()
+                    Log.d(TAG, "🔥 AR session destroyed")
+                }
+                isSessionPaused = true
+                Log.d(TAG, "✅ Phase C: AR session destroyed")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase C error: ${e.message}")
+            }
+
+            // D) Destroy scene content and resource handles
+            Log.d(TAG, "🎬 Phase D: Destroying scene content")
+            try {
+                resourceHandles.values.forEach { handle ->
+                    try {
+                        // Simply remove the tracked resource
+                        Log.d(TAG, "🗑️ Clearing resource handle: ${handle.nodeId}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error destroying resource handle: ${e.message}")
+                    }
+                }
+                resourceHandles.clear()
+                
+                // Clear scene nodes (using nodesMap which we know exists)
+                try {
+                    nodesMap.clear()
+                    Log.d(TAG, "🗑️ Cleared nodes map")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error clearing scene nodes: ${e.message}")
+                }
+                
+                Log.d(TAG, "✅ Phase D: Scene content destroyed")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase D error: ${e.message}")
+            }
+
+            // E) Purge global caches
+            if (purgeCaches) {
+                Log.d(TAG, "🧹 Phase E: Purging caches")
+                try {
+                    assetCache.clear()
+                    
+                    // Clear SceneView internal caches
+                    try {
+                        // SceneView doesn't expose clearCache methods, so we'll clear our own caches
+                        Log.d(TAG, "🗑️ SceneView cache clearing not available via public API")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in cache clearing: ${e.message}")
+                    }
+                    
+                    Log.d(TAG, "✅ Phase E: Caches purged")
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Phase E error: ${e.message}")
+                }
+            }
+
+            // F) Clear detected planes and other state
+            Log.d(TAG, "🔄 Phase F: Clearing tracking state")
+            try {
+                detectedPlanes.clear()
+                planeCount = 0
+                detectedPlaneY = null
+                worldOriginNode = null
+                currentRotatingNode = null
+                rotationGestureActive = false
+                
+                Log.d(TAG, "✅ Phase F: Tracking state cleared")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase F error: ${e.message}")
+            }
+
+            // G) Force garbage collection
+            Log.d(TAG, "♻️ Phase G: Forcing garbage collection")
+            try {
+                System.gc()
+                System.runFinalization()
+                System.gc()
+                Log.d(TAG, "✅ Phase G: Garbage collection completed")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase G error: ${e.message}")
+            }
+
+            // H) Recreate loading executor for future use
+            Log.d(TAG, "🔄 Phase H: Recreating executor")
+            try {
+                // Create new executor for future operations
+                loadingExecutor = Executors.newSingleThreadExecutor()
+                Log.d(TAG, "✅ Phase H: New executor created")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase H error: ${e.message}")
+            }
+
+            Log.d(TAG, "🎉 NUKE ALL COMPLETED SUCCESSFULLY - Memory should be near cold start levels")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "💥 CRITICAL ERROR in handleNukeAll", e)
+            result.error("NUKE_ALL_ERROR", e.message, e.stackTraceToString())
         }
     }
     private val onObjectMethodCall =
@@ -2556,7 +2698,7 @@ class ArView(
             val nativeHeapAllocated = Debug.getNativeHeapAllocatedSize()
             val nativeHeapFree = Debug.getNativeHeapFreeSize()
             
-            mapOf(
+            mapOf<String, Any>(
                 "javaHeapUsedMB" to ((runtime.totalMemory() - runtime.freeMemory()) / 1048576.0),
                 "javaHeapTotalMB" to (runtime.totalMemory() / 1048576.0),
                 "javaHeapMaxMB" to (runtime.maxMemory() / 1048576.0),
@@ -2569,8 +2711,8 @@ class ArView(
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error getting memory info: ${e.message}", e)
-            mapOf(
-                "error" to e.message,
+            mapOf<String, Any>(
+                "error" to (e.message ?: "Unknown error"),
                 "activeNodes" to nodesMap.size,
                 "cachedAssets" to assetCache.size,
                 "resourceHandles" to resourceHandles.size

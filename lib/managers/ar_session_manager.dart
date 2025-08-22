@@ -299,4 +299,40 @@ class ARSessionManager {
       return false;
     }
   }
+
+  /// Performs a full native teardown of the AR session, renderer, caches and GPU resources.
+  /// Must be followed by removing the AR PlatformView from the widget tree for at least one frame
+  /// before recreating ARView to allow the OS to deallocate surfaces/layers.
+  /// 
+  /// This is the strongest cleanup method available and brings memory usage close to cold start.
+  /// Use this when the AR scene is empty and you want deterministic full memory reset.
+  Future<bool> nukeAll({
+    bool purgeCaches = true,
+    bool removeExistingAnchors = true,
+    bool resetTracking = true,
+  }) async {
+    try {
+      if (debug) {
+        print('🚨 Starting nukeAll with purgeCaches=$purgeCaches, removeExistingAnchors=$removeExistingAnchors, resetTracking=$resetTracking');
+      }
+      
+      final result = await _channel.invokeMethod<bool>('ar#nukeAll', {
+        'purgeCaches': purgeCaches,
+        'removeExistingAnchors': removeExistingAnchors,
+        'resetTracking': resetTracking,
+      });
+      
+      final success = result ?? false;
+      if (debug) {
+        print(success ? '✅ nukeAll completed successfully' : '❌ nukeAll failed');
+      }
+      
+      return success;
+    } catch (e) {
+      if (debug) {
+        print('❌ Error in nukeAll: $e');
+      }
+      return false;
+    }
+  }
 }

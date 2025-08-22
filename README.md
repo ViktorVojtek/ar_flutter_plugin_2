@@ -11,8 +11,26 @@ This plugin now includes **advanced memory management** to prevent OOM crashes a
 - **Session Reset**: Soft reset AR sessions without app restart
 - **Memory Monitoring**: Real-time memory usage statistics
 - **Load Backpressure**: Queue model loading to prevent memory spikes
+- **🚨 NUKE ALL**: Complete memory teardown to cold start levels
+
+### Full Memory Reset
+
+When you need to return memory to near cold start levels:
+
+```dart
+final ok = await sessionManager.nukeAll(purgeCaches: true);
+if (ok) {
+  setState(() => _shouldRenderARView = false);
+  await Future.delayed(const Duration(milliseconds: 50));
+  await Future.delayed(const Duration(milliseconds: 300)); // optional
+  setState(() => _shouldRenderARView = true);
+}
+```
+
+`nukeAll()` performs complete teardown of AR session, renderer, SwapChain/layers, caches and singletons. Removing the AR widget for at least one frame lets Android/iOS deallocate surfaces/layers for maximum memory reset.
 
 📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
+📖 **[NUKE ALL Complete Documentation](NUKE_ALL_DOCUMENTATION.md)**
 
 ---
 

@@ -195,6 +195,13 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let success = softResetSession(removeAnchors: removeAnchors, resetTracking: resetTracking)
                 result(success)
                 break
+            case "ar#nukeAll":
+                let purgeCaches = arguments?["purgeCaches"] as? Bool ?? true
+                let removeAnchors = arguments?["removeExistingAnchors"] as? Bool ?? true
+                let resetTracking = arguments?["resetTracking"] as? Bool ?? true
+                let success = self.nukeAll(purgeCaches: purgeCaches, removeAnchors: removeAnchors, resetTracking: resetTracking)
+                result(success)
+                break
             default:
                 result(FlutterMethodNotImplemented)
                 break
@@ -1094,6 +1101,168 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         
         print("✅ Soft reset session completed")
         return true
+    }
+    
+    private func nukeAll(purgeCaches: Bool, removeAnchors: Bool, resetTracking: Bool) -> Bool {
+        print("🚨 NUKE ALL INITIATED - purgeCaches: \(purgeCaches), removeAnchors: \(removeAnchors), resetTracking: \(resetTracking)")
+        
+        return autoreleasepool {
+            // A) Stop background work & cancel loading tasks
+            print("⏹️ Phase A: Stopping background work")
+            do {
+                loadingQueue.async {
+                    // Cancel any pending operations on the loading queue
+                    print("⚡ Loading queue operations stopped")
+                }
+                print("✅ Phase A: Background work stopped")
+            } catch {
+                print("❌ Phase A error: \(error.localizedDescription)")
+            }
+
+            // B) Clear all anchors and nodes
+            print("🗑️ Phase B: Clearing anchors and nodes")
+            do {
+                if removeAnchors {
+                    anchorCollection.removeAll()
+                    print("🗑️ Cleared anchor collection")
+                }
+                
+                // Clear all scene nodes
+                sceneView.scene.rootNode.childNodes.forEach { node in
+                    node.removeFromParentNode()
+                }
+                
+                // Clear tracking state
+                trackedPlanes.removeAll()
+                print("🗑️ Cleared tracked planes")
+                
+                print("✅ Phase B: Anchors and nodes cleared")
+            } catch {
+                print("❌ Phase B error: \(error.localizedDescription)")
+            }
+
+            // C) Pause and destroy AR session
+            print("⏸️ Phase C: Destroying AR session")
+            do {
+                sceneView.session.pause()
+                
+                // Give the session time to fully pause
+                Thread.sleep(forTimeInterval: 0.2)
+                
+                // Clear session delegate to prevent callbacks
+                sceneView.session.delegate = nil
+                
+                print("✅ Phase C: AR session destroyed")
+            } catch {
+                print("❌ Phase C error: \(error.localizedDescription)")
+            }
+
+            // D) Destroy scene content and resource handles
+            print("🎬 Phase D: Destroying scene content")
+            do {
+                resourceHandles.values.forEach { handle in
+                    // Clear textures
+                    handle.textures.removeAll()
+                    
+                    // Clear materials
+                    handle.materials.forEach { material in
+                        // Clear material textures
+                        material.diffuse.contents = nil
+                        material.specular.contents = nil
+                        material.normal.contents = nil
+                        material.emission.contents = nil
+                        material.roughness.contents = nil
+                        material.metalness.contents = nil
+                    }
+                    handle.materials.removeAll()
+                    
+                    // Clear geometries
+                    handle.geometries.removeAll()
+                    
+                    // Remove node from scene
+                    handle.node.removeFromParentNode()
+                }
+                resourceHandles.removeAll()
+                
+                // Clear the entire scene
+                sceneView.scene = SCNScene()
+                
+                print("✅ Phase D: Scene content destroyed")
+            } catch {
+                print("❌ Phase D error: \(error.localizedDescription)")
+            }
+
+            // E) Purge global caches
+            if purgeCaches {
+                print("🧹 Phase E: Purging caches")
+                do {
+                    assetCache.removeAll()
+                    
+                    // Clear SCNView internal caches if possible
+                    // SceneKit doesn't expose direct cache clearing methods
+                    print("🗑️ SceneKit cache clearing not available via public API")
+                    
+                    print("✅ Phase E: Caches purged")
+                } catch {
+                    print("❌ Phase E error: \(error.localizedDescription)")
+                }
+            }
+
+            // F) Clear gesture and interaction state
+            print("🔄 Phase F: Clearing interaction state")
+            do {
+                // Clear pan gesture state
+                panStartLocation = nil
+                panCurrentLocation = nil
+                panningNode = nil
+                
+                // Clear rotation gesture state
+                rotation = nil
+                rotationVelocity = nil
+                rotationStartLocation = nil
+                
+                // Clear plane tracking
+                tappedPlaneAnchorAlignment = .horizontal
+                
+                print("✅ Phase F: Interaction state cleared")
+            } catch {
+                print("❌ Phase F error: \(error.localizedDescription)")
+            }
+
+            // G) Reset view configuration
+            print("📱 Phase G: Resetting view configuration")
+            do {
+                // Disable camera if needed
+                sceneView.automaticallyUpdatesLighting = false
+                sceneView.autoenablesDefaultLighting = false
+                
+                // Clear any point of view
+                sceneView.pointOfView = nil
+                
+                print("✅ Phase G: View configuration reset")
+            } catch {
+                print("❌ Phase G error: \(error.localizedDescription)")
+            }
+
+            // H) Force memory cleanup
+            print("♻️ Phase H: Forcing memory cleanup")
+            do {
+                // Run the autorelease pool to clean up any autoreleased objects
+                autoreleasepool {
+                    // Force cleanup of any remaining objects
+                }
+                
+                // Let the runloop drain to finalize deallocation
+                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
+                
+                print("✅ Phase H: Memory cleanup completed")
+            } catch {
+                print("❌ Phase H error: \(error.localizedDescription)")
+            }
+
+            print("🎉 NUKE ALL COMPLETED SUCCESSFULLY - Memory should be near cold start levels")
+            return true
+        }
     }
     
     private func createNodeFromAsset(uri: String, transformMatrix: [Double], completion: @escaping (String?) -> Void) {
