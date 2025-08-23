@@ -335,4 +335,19 @@ class ARSessionManager {
       return false;
     }
   }
+
+  /// Debug method to check what native resources are still alive after nukeAll.
+  /// Helps identify what's preventing full memory release.
+  /// Returns a map with resource status information.
+  Future<Map<String, dynamic>?> getPluginState() async {
+    try {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('ar#getPluginState');
+      return result?.map((key, value) => MapEntry(key.toString(), value));
+    } catch (e) {
+      if (debug) {
+        print('❌ Error getting plugin state: $e');
+      }
+      return null;
+    }
+  }
 }

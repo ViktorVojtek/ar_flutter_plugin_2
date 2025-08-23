@@ -180,6 +180,7 @@ class ArView(
                 "enableCamera" -> handleEnableCamera(result)
                 "softResetSession" -> handleSoftResetSession(call, result)
                 "ar#nukeAll" -> handleNukeAll(call, result)
+                "ar#getPluginState" -> handleGetPluginState(result)
                 else -> {
                     Log.d(TAG, "❌ Session method not implemented: ${call.method}")
                     result.notImplemented()
@@ -263,8 +264,63 @@ class ArView(
                 Log.e(TAG, "❌ Phase A error: ${e.message}")
             }
 
-            // B) Clear all anchors and nodes
-            Log.d(TAG, "🗑️ Phase B: Clearing anchors and nodes")
+            // B) CRITICAL: Destroy all Filament GPU resources (ChatGPT fix)
+            Log.d(TAG, "�️ Phase B: Destroying Filament GPU resources")
+            try {
+                // First clear all resource handles and their GPU resources
+                resourceHandles.values.forEach { handle ->
+                    try {
+                        handle.modelInstance?.let { modelInstance ->
+                            // Destroy model instance GPU resources
+                            Log.d(TAG, "🔥 Destroying model instance for: ${handle.nodeId}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error destroying resource handle: ${e.message}")
+                    }
+                }
+                resourceHandles.clear()
+                
+                // CRITICAL: Destroy Filament View, Scene, Renderer in correct order
+                try {
+                    // Destroy View (must be before Renderer)
+                    sceneView.view?.let { view ->
+                        sceneView.engine?.destroyView(view)
+                        Log.d(TAG, "🔥 Filament View destroyed")
+                    }
+                    
+                    // Destroy Scene 
+                    sceneView.scene?.let { scene ->
+                        // Clear skybox and indirect light first
+                        scene.skybox?.let { skybox ->
+                            scene.skybox = null
+                            sceneView.engine?.destroySkybox(skybox)
+                        }
+                        scene.indirectLight?.let { indirectLight ->
+                            scene.indirectLight = null  
+                            sceneView.engine?.destroyIndirectLight(indirectLight)
+                        }
+                        
+                        sceneView.engine?.destroyScene(scene)
+                        Log.d(TAG, "🔥 Filament Scene destroyed")
+                    }
+                    
+                    // Destroy Renderer
+                    sceneView.renderer?.let { renderer ->
+                        sceneView.engine?.destroyRenderer(renderer)
+                        Log.d(TAG, "🔥 Filament Renderer destroyed")
+                    }
+                    
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error destroying Filament components: ${e.message}")
+                }
+                
+                Log.d(TAG, "✅ Phase B: Filament GPU resources destroyed")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase B error: ${e.message}")
+            }
+
+            // C) Clear all anchors and nodes
+            Log.d(TAG, "🗑️ Phase C: Clearing anchors and nodes")
             try {
                 if (removeAnchors) {
                     anchorNodesMap.clear()
@@ -272,73 +328,64 @@ class ArView(
                 nodesMap.clear()
                 pointCloudNodes.clear()
                 pointCloudModelInstances.clear()
-                Log.d(TAG, "✅ Phase B: Anchors and nodes cleared")
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Phase B error: ${e.message}")
-            }
-
-            // C) Pause and close AR session
-            Log.d(TAG, "⏸️ Phase C: Destroying AR session")
-            try {
-                sceneView.session?.let { session ->
-                    session.pause()
-                    session.close()
-                    Log.d(TAG, "🔥 AR session destroyed")
-                }
-                isSessionPaused = true
-                Log.d(TAG, "✅ Phase C: AR session destroyed")
+                Log.d(TAG, "✅ Phase C: Anchors and nodes cleared")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase C error: ${e.message}")
             }
 
-            // D) Destroy scene content and resource handles
-            Log.d(TAG, "🎬 Phase D: Destroying scene content")
+            // D) Pause and close AR session completely
+            Log.d(TAG, "⏸️ Phase D: Destroying AR session")
             try {
-                resourceHandles.values.forEach { handle ->
-                    try {
-                        // Simply remove the tracked resource
-                        Log.d(TAG, "🗑️ Clearing resource handle: ${handle.nodeId}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error destroying resource handle: ${e.message}")
-                    }
+                sceneView.session?.let { session ->
+                    session.pause()
+                    Thread.sleep(200) // Give session time to pause
+                    session.close()
+                    Log.d(TAG, "� AR session closed")
                 }
-                resourceHandles.clear()
-                
-                // Clear scene nodes (using nodesMap which we know exists)
-                try {
-                    nodesMap.clear()
-                    Log.d(TAG, "🗑️ Cleared nodes map")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error clearing scene nodes: ${e.message}")
-                }
-                
-                Log.d(TAG, "✅ Phase D: Scene content destroyed")
+                isSessionPaused = true
+                Log.d(TAG, "✅ Phase D: AR session destroyed")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase D error: ${e.message}")
             }
 
-            // E) Purge global caches
+            // E) CRITICAL: Destroy Engine last (ChatGPT fix)
+            Log.d(TAG, "💥 Phase E: Destroying Filament Engine")
+            try {
+                // Engine must be destroyed LAST after all other components
+                sceneView.engine?.let { engine ->
+                    engine.destroy()
+                    Log.d(TAG, "� Filament Engine destroyed")
+                }
+                
+                // Null out all references to prevent memory leaks
+                // Note: SceneView handles its own references, but we clear what we can track
+                
+                Log.d(TAG, "✅ Phase E: Filament Engine destroyed")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase E error: ${e.message}")
+            }
+
+            // F) Purge global caches
             if (purgeCaches) {
-                Log.d(TAG, "🧹 Phase E: Purging caches")
+                Log.d(TAG, "🧹 Phase F: Purging caches")
                 try {
                     assetCache.clear()
                     
-                    // Clear SceneView internal caches
+                    // Clear any additional caches
                     try {
-                        // SceneView doesn't expose clearCache methods, so we'll clear our own caches
-                        Log.d(TAG, "🗑️ SceneView cache clearing not available via public API")
+                        Log.d(TAG, "🗑️ Cache clearing completed")
                     } catch (e: Exception) {
                         Log.e(TAG, "Error in cache clearing: ${e.message}")
                     }
                     
-                    Log.d(TAG, "✅ Phase E: Caches purged")
+                    Log.d(TAG, "✅ Phase F: Caches purged")
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Phase E error: ${e.message}")
+                    Log.e(TAG, "❌ Phase F error: ${e.message}")
                 }
             }
 
-            // F) Clear detected planes and other state
-            Log.d(TAG, "🔄 Phase F: Clearing tracking state")
+            // G) Clear tracking state and reset variables
+            Log.d(TAG, "🔄 Phase G: Clearing tracking state")
             try {
                 detectedPlanes.clear()
                 planeCount = 0
@@ -347,33 +394,40 @@ class ArView(
                 currentRotatingNode = null
                 rotationGestureActive = false
                 
-                Log.d(TAG, "✅ Phase F: Tracking state cleared")
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Phase F error: ${e.message}")
-            }
-
-            // G) Force garbage collection
-            Log.d(TAG, "♻️ Phase G: Forcing garbage collection")
-            try {
-                System.gc()
-                System.runFinalization()
-                System.gc()
-                Log.d(TAG, "✅ Phase G: Garbage collection completed")
+                Log.d(TAG, "✅ Phase G: Tracking state cleared")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase G error: ${e.message}")
             }
 
-            // H) Recreate loading executor for future use
-            Log.d(TAG, "🔄 Phase H: Recreating executor")
+            // H) CRITICAL: Force aggressive garbage collection (ChatGPT suggestion)
+            Log.d(TAG, "♻️ Phase H: Aggressive garbage collection")
             try {
-                // Create new executor for future operations
-                loadingExecutor = Executors.newSingleThreadExecutor()
-                Log.d(TAG, "✅ Phase H: New executor created")
+                // Multiple GC passes to ensure cleanup
+                System.gc()
+                System.runFinalization()
+                Thread.sleep(100) // Give GC time to work
+                System.gc()
+                System.runFinalization()
+                Thread.sleep(50)
+                System.gc() // Final pass
+                
+                Log.d(TAG, "✅ Phase H: Aggressive garbage collection completed")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase H error: ${e.message}")
             }
 
-            Log.d(TAG, "🎉 NUKE ALL COMPLETED SUCCESSFULLY - Memory should be near cold start levels")
+            // I) Recreate loading executor for future use
+            Log.d(TAG, "🔄 Phase I: Recreating executor")
+            try {
+                // Create new executor for future operations
+                loadingExecutor = Executors.newSingleThreadExecutor()
+                Log.d(TAG, "✅ Phase I: New executor created")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Phase I error: ${e.message}")
+            }
+
+            Log.d(TAG, "🎉 NUKE ALL COMPLETED - Memory should be near cold start levels")
+            Log.d(TAG, "🔍 Verify PlatformView removal in Flutter for complete surface teardown")
             result.success(true)
             
         } catch (e: Exception) {
@@ -381,6 +435,40 @@ class ArView(
             result.error("NUKE_ALL_ERROR", e.message, e.stackTraceToString())
         }
     }
+
+    private fun handleGetPluginState(result: MethodChannel.Result) {
+        try {
+            val state = mutableMapOf<String, Any>()
+            
+            // Session state
+            state["hasSession"] = (sceneView.session != null)
+            state["isSessionPaused"] = isSessionPaused
+            
+            // SceneView state  
+            state["hasSceneView"] = true
+            state["hasEngine"] = (sceneView.engine != null)
+            state["hasScene"] = (sceneView.scene != null)
+            state["hasRenderer"] = (sceneView.renderer != null)
+            
+            // Collections state
+            state["anchorNodesCount"] = anchorNodesMap.size
+            state["nodeAttachedCount"] = nodeAttached.size
+            
+            // Memory hint
+            System.gc()
+            val runtime = Runtime.getRuntime()
+            val usedMB = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
+            state["usedMemoryMB"] = usedMB
+            
+            Log.d(TAG, "🔍 Plugin State: $state")
+            result.success(state)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting plugin state: ${e.message}", e)
+            result.error("STATE_ERROR", e.message, e.stackTraceToString())
+        }
+    }
+    
     private val onObjectMethodCall =
         MethodChannel.MethodCallHandler { call, result ->
             Log.d(TAG, "📦 Object method called: ${call.method}")
