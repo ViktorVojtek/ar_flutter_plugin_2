@@ -452,7 +452,7 @@ class ArView(
             
             // Collections state
             state["anchorNodesCount"] = anchorNodesMap.size
-            state["nodeAttachedCount"] = nodeAttached.size
+            state["nodeAttachedCount"] = nodesMap.size
             
             // Memory hint
             System.gc()

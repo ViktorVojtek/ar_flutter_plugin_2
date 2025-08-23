@@ -1131,7 +1131,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 sceneView.delegate = nil
                 
                 // ARSCNView specific teardown
-                sceneView.scene = nil
+                sceneView.scene = SCNScene() // Create empty scene instead of nil
                 sceneView.isPlaying = false
                 
                 // Force SceneKit resource release
@@ -1155,7 +1155,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 }
                 
                 // Clear all scene nodes BEFORE destroying scene
-                sceneView.scene?.rootNode.childNodes.forEach { node in
+                sceneView.scene.rootNode.childNodes.forEach { node in
                     node.removeFromParentNode()
                 }
                 
@@ -1297,19 +1297,21 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         var state: [String: Any] = [:]
         
         // Session state
-        state["hasSession"] = (self.sceneView?.session != nil)
-        state["isSessionPaused"] = !(self.sceneView?.session.isRunning ?? false)
+        state["hasSession"] = true // sceneView is non-optional, so session exists
+        
+        // Check session running state safely 
+        state["isSessionPaused"] = (sceneView.session.configuration == nil)
         
         // SceneView state
-        state["hasSceneView"] = (self.sceneView != nil)
-        state["hasScene"] = (self.sceneView?.scene != nil)
+        state["hasSceneView"] = true // sceneView is non-optional
+        state["hasScene"] = (sceneView.scene != nil)
         
-        // Collections state
-        state["anchorsCount"] = self.anchors.count
-        state["nodeAttachedCount"] = self.nodeAttached.count
+        // Collections state - use proper property names
+        state["anchorsCount"] = self.anchorCollection.count
+        state["nodeAttachedCount"] = self.resourceHandles.count
         
         // Memory hint
-        let memInfo = mach_task_basic_info()
+        var memInfo = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         let kerr: kern_return_t = withUnsafeMutablePointer(to: &memInfo) {
             $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
