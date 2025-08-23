@@ -399,19 +399,41 @@ class ArView(
                 Log.e(TAG, "❌ Phase G error: ${e.message}")
             }
 
-            // H) CRITICAL: Force aggressive garbage collection (ChatGPT suggestion)
-            Log.d(TAG, "♻️ Phase H: Aggressive garbage collection")
+            // H) CRITICAL: System memory pressure and aggressive garbage collection
+            Log.d(TAG, "💥 Phase H: System memory pressure simulation")
             try {
-                // Multiple GC passes to ensure cleanup
-                System.gc()
-                System.runFinalization()
-                Thread.sleep(100) // Give GC time to work
-                System.gc()
-                System.runFinalization()
+                // Multiple aggressive garbage collection passes with system pressure
+                for (pass in 1..5) {
+                    // Simulate memory pressure by forcing GC
+                    System.gc()
+                    System.runFinalization()
+                    
+                    // Request low memory callback to force cleanup
+                    if (pass == 1) {
+                        try {
+                            // Simulate memory pressure through activity
+                            val activity = context as? android.app.Activity
+                            activity?.runOnUiThread {
+                                // Trigger memory cleanup callbacks
+                                Runtime.getRuntime().gc()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not trigger activity memory cleanup: ${e.message}")
+                        }
+                    }
+                    
+                    // Sleep between passes to allow cleanup
+                    Thread.sleep(100)
+                    
+                    Log.d(TAG, "🧹 GC pass $pass completed")
+                }
+                
+                // Force final finalization
+                System.runFinalization() 
                 Thread.sleep(50)
                 System.gc() // Final pass
                 
-                Log.d(TAG, "✅ Phase H: Aggressive garbage collection completed")
+                Log.d(TAG, "✅ Phase H: System memory pressure simulation completed")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase H error: ${e.message}")
             }

@@ -1280,8 +1280,30 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     // Second cleanup pass
                 }
                 
+                // CRITICAL: System memory pressure simulation
+                for pass in 0..<3 {
+                    autoreleasepool {
+                        // Force system memory cleanup
+                        malloc_zone_pressure_relief(nil, 0)
+                        
+                        // Simulate memory warning to force system cleanup  
+                        if pass == 0 {
+                            NotificationCenter.default.post(
+                                name: UIApplication.didReceiveMemoryWarningNotification,
+                                object: UIApplication.shared
+                            )
+                        }
+                        
+                        // Clear URLSession cache
+                        URLCache.shared.removeAllCachedResponses()
+                        
+                        // Drain run loop between passes
+                        CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
+                    }
+                }
+                
                 // Final runloop drain
-                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
+                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.1, false)
                 
                 print("✅ Phase H: Aggressive memory cleanup completed")
             } catch {

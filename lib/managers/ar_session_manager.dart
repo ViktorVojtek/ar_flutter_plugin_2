@@ -316,6 +316,28 @@ class ARSessionManager {
         print('🚨 Starting nukeAll with purgeCaches=$purgeCaches, removeExistingAnchors=$removeExistingAnchors, resetTracking=$resetTracking');
       }
       
+      // CRITICAL: First ensure all AR objects are removed from the scene
+      // This is often the missing step that causes memory retention
+      if (debug) {
+        print('🗑️ Pre-nuke: Removing all AR objects from scene');
+      }
+      
+      try {
+        // Force remove all objects first
+        await _channel.invokeMethod<void>('removeAllObjects');
+        
+        // Small delay to ensure objects are removed
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (debug) {
+          print('✅ All AR objects removed from scene');
+        }
+      } catch (e) {
+        if (debug) {
+          print('⚠️ Warning: Could not remove all objects: $e (continuing with nukeAll)');
+        }
+      }
+      
       final result = await _channel.invokeMethod<bool>('ar#nukeAll', {
         'purgeCaches': purgeCaches,
         'removeExistingAnchors': removeExistingAnchors,
