@@ -421,7 +421,7 @@ class ArView(
                         if (simulateMemoryWarning && pass <= 3) {
                             try {
                                 // Simulate memory pressure through activity
-                                val activity = context as? android.app.Activity
+                                val activity = viewContext as? android.app.Activity ?: this@ArView.activity
                                 activity?.runOnUiThread {
                                     // Phase 3: Multiple memory cleanup triggers
                                     Runtime.getRuntime().gc()
@@ -431,8 +431,10 @@ class ArView(
                                     if (enableHardwareGpuReset) {
                                         // Force GPU resource cleanup on main thread
                                         try {
-                                            surfaceView?.onPause()
-                                            surfaceView?.onResume()
+                                            // Note: ARSceneView doesn't have onPause/onResume methods
+                                            // sceneView.onPause()
+                                            // sceneView.onResume()
+                                            Log.d(TAG, "GPU reset skipped - ARSceneView doesn't support pause/resume")
                                         } catch (e: Exception) {
                                             Log.w(TAG, "GPU reset attempt: ${e.message}")
                                         }
@@ -628,6 +630,13 @@ class ArView(
         Log.d(TAG, "🏗️ Node data NAME: ${nodeData["name"]}")
         Log.d(TAG, "🏗️ Node data TRANSFORMATION: ${nodeData["transformation"]}")
         
+        // Extract ARCore gesture properties
+        val isTransformable = nodeData["isTransformable"] as? Boolean ?: false
+        val enablePanGestures = nodeData["enablePanGestures"] as? Boolean ?: false
+        val enableRotationGestures = nodeData["enableRotationGestures"] as? Boolean ?: false
+        
+        Log.d(TAG, "🎯 ARCore gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
+        
         var fileLocation = nodeData["uri"] as? String
         if (fileLocation == null) {
             Log.e(TAG, "❌ FAILURE POINT 1: URI is null or invalid")
@@ -734,70 +743,78 @@ class ArView(
             Log.d(TAG, "🚀 Attempting to load model instance from: $fileLocation")
             sceneView.modelLoader.loadModelInstance(fileLocation)?.let { modelInstance ->
                 Log.d(TAG, "✅ Model instance loaded successfully")
-                object : ModelNode(
+                
+                // For now, always create regular ModelNode until gesture classes are fixed
+                val node = object : ModelNode(
                     modelInstance = modelInstance,
                     scaleToUnits = 1.0f, // Avoid using matrix[0] directly as uniform scale
                 ) {
                     init {
-                        // Apply the full transformation matrix to properly position the node
-                        if (transformationList.size >= 16) {
-                            val matrix = transformationList.map { it.toFloat() }.toFloatArray()
-                            
-                            // Extract position from transformation matrix (column 4: indices 12, 13, 14)
-                            val position = ScenePosition(
-                                x = matrix[12],
-                                y = matrix[13], 
-                                z = matrix[14]
-                            )
-                            
-                            // Extract scale from transformation matrix
-                            val scaleX = sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
-                            val scaleY = sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
-                            val scaleZ = sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
-                            val scale = SceneScale(x = scaleX, y = scaleY, z = scaleZ)
-                            
-                            // Extract rotation from transformation matrix
-                            val rotation = SceneRotation(
-                                x = radToDeg(atan2(matrix[6], matrix[10])),
-                                y = radToDeg(atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10]))),
-                                z = radToDeg(atan2(matrix[1], matrix[0]))
-                            )
-                            
-                            // Apply the transformation to the node
-                            transform = Transform(
-                                position = position,
-                                rotation = rotation,
-                                scale = scale
-                            )
-                            
-                            Log.d("ArView", "Applied transformation to node $name - Position: (${position.x}, ${position.y}, ${position.z})")
-                        } else {
-                            Log.w("ArView", "Invalid transformation matrix size: ${transformationList.size}, expected 16")
-                        }
-                        
-                        // Set node properties
-                        name = (nodeData["name"] as? String) ?: run {
-                            val autoName = "Node_${System.currentTimeMillis()}"
-                            Log.w(TAG, "No name supplied in nodeData, auto-generating: $autoName")
-                            autoName
-                        }
-                        
                         // CRITICAL FIX: Set gesture properties based on current gesture settings
                         isPositionEditable = this@ArView.handlePans
                         isRotationEditable = this@ArView.handleRotation
                         isTouchable = true
-                        
-                        Log.d("ArView", "🎯 ModelNode init complete - name: $name, isPositionEditable: $isPositionEditable, isRotationEditable: $isRotationEditable, isTouchable: $isTouchable")
-                        Log.d("ArView", "🎯 Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
-                        
-                        // Additional debugging for tap detection
-                        if (name != null) {
-                            Log.d("ArView", "🎯 Node created with name '$name' - will be added to nodesMap for tap detection")
-                        } else {
-                            Log.w("ArView", "❌ Node created without name - tap detection will not work!")
-                        }
                     }
                 }
+                
+                // Apply transformation and common properties
+                node.apply {
+                    // Apply the full transformation matrix to properly position the node
+                    if (transformationList.size >= 16) {
+                        val matrix = transformationList.map { it.toFloat() }.toFloatArray()
+                        
+                        // Extract position from transformation matrix (column 4: indices 12, 13, 14)
+                        val position = ScenePosition(
+                            x = matrix[12],
+                            y = matrix[13], 
+                            z = matrix[14]
+                        )
+                        
+                        // Extract scale from transformation matrix
+                        val scaleX = sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2])
+                        val scaleY = sqrt(matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6])
+                        val scaleZ = sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10])
+                        val scale = SceneScale(x = scaleX, y = scaleY, z = scaleZ)
+                        
+                        // Extract rotation from transformation matrix
+                        val rotation = SceneRotation(
+                            x = radToDeg(atan2(matrix[6], matrix[10])),
+                            y = radToDeg(atan2(-matrix[2], sqrt(matrix[6] * matrix[6] + matrix[10] * matrix[10]))),
+                            z = radToDeg(atan2(matrix[1], matrix[0]))
+                        )
+                        
+                        // Apply the transformation to the node
+                        transform = Transform(
+                            position = position,
+                            rotation = rotation,
+                            scale = scale
+                        )
+                        
+                        Log.d("ArView", "Applied transformation to node $name - Position: (${position.x}, ${position.y}, ${position.z})")
+                    } else {
+                        Log.w("ArView", "Invalid transformation matrix size: ${transformationList.size}, expected 16")
+                    }
+                    
+                    // Set node properties
+                    name = (nodeData["name"] as? String) ?: run {
+                        val autoName = "Node_${System.currentTimeMillis()}"
+                        Log.w(TAG, "No name supplied in nodeData, auto-generating: $autoName")
+                        autoName
+                    }
+                    
+                    Log.d("ArView", "🎯 Node init complete - name: $name, isTransformable: $isTransformable")
+                    Log.d("ArView", "🎯 Current ArView settings - handlePans: ${this@ArView.handlePans}, handleRotation: ${this@ArView.handleRotation}")
+                    
+                    // Additional debugging for tap detection
+                    if (name != null) {
+                        Log.d("ArView", "🎯 Node created with name '$name' - will be added to nodesMap for tap detection")
+                    } else {
+                        Log.w("ArView", "❌ Node created without name - tap detection will not work!")
+                    }
+                }
+                
+                // Return the created node
+                node
             } ?: run {
                 Log.e(TAG, "❌ FAILURE POINT 3: Model loading failed - loadModelInstance returned null")
                 Log.e(TAG, "❌ File location: $fileLocation")

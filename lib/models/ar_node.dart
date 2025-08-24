@@ -21,6 +21,9 @@ class ARNode {
     Vector3? eulerAngles,
     Matrix4? transformation,
     Map<String, dynamic>? data,
+    this.isTransformable = false,
+    this.enablePanGestures = false,
+    this.enableRotationGestures = false,
   })  : name = name ?? UniqueKey().toString(),
         transformNotifier = ValueNotifier(createTransformMatrix(
             transformation, position, scale, rotation, eulerAngles)),
@@ -94,6 +97,15 @@ class ARNode {
   /// Holds any data attached to the node, especially useful when uploading serialized nodes to the cloud. This data is not shared with the underlying platform
   Map<String, dynamic>? data;
 
+  /// Whether this node should use TransformableNode for gesture support (ARCore integration)
+  final bool isTransformable;
+
+  /// Whether pan gestures are enabled for this node (requires isTransformable = true)
+  final bool enablePanGestures;
+
+  /// Whether rotation gestures are enabled for this node (requires isTransformable = true)
+  final bool enableRotationGestures;
+
   static const _matrixValueNotifierConverter = MatrixValueNotifierConverter();
 
   Map<String, dynamic> toMap() => <String, dynamic>{
@@ -103,6 +115,9 @@ class ARNode {
             _matrixValueNotifierConverter.toJson(transformNotifier),
         'name': name,
         'data': data,
+        'isTransformable': isTransformable,
+        'enablePanGestures': enablePanGestures,
+        'enableRotationGestures': enableRotationGestures,
       }..removeWhere((String k, dynamic v) => v == null);
 
   static ARNode fromMap(Map<String, dynamic> map) {
@@ -111,7 +126,10 @@ class ARNode {
         uri: map["uri"] as String,
         name: map["name"] as String,
         transformation: MatrixConverter().fromJson(map["transformation"]),
-        data: Map<String, dynamic>.from(map["data"]));
+        data: Map<String, dynamic>.from(map["data"] ?? {}),
+        isTransformable: map["isTransformable"] as bool? ?? false,
+        enablePanGestures: map["enablePanGestures"] as bool? ?? false,
+        enableRotationGestures: map["enableRotationGestures"] as bool? ?? false);
   }
 }
 

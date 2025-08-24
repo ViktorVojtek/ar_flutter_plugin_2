@@ -15,6 +15,9 @@ typedef NodeRotationStartHandler = void Function(String node);
 typedef NodeRotationChangeHandler = void Function(String node);
 typedef NodeRotationEndHandler = void Function(String node, Matrix4 transform);
 
+/// ARCore-style gesture callback for transformed nodes
+typedef NodeTransformedHandler = void Function(String nodeName, Vector3 position, Vector4 rotation);
+
 /// Manages the all node-related actions of an [ARView]
 class ARObjectManager {
   /// Platform channel used for communication from and to [ARObjectManager]
@@ -31,6 +34,9 @@ class ARObjectManager {
   NodeRotationStartHandler? onRotationStart;
   NodeRotationChangeHandler? onRotationChange;
   NodeRotationEndHandler? onRotationEnd;
+
+  /// ARCore-style gesture callback for when a transformable node is moved via gestures
+  NodeTransformedHandler? onNodeTransformed;
 
   ARObjectManager(int id, {this.debug = false}) {
     print("🏗️ ARObjectManager constructor called with id: $id");
@@ -152,6 +158,46 @@ class ARObjectManager {
           }
           // You can add a callback here for empty space taps if needed
           // For example: onEmptySpaceTap?.call();
+          break;
+        case 'onNodeTransformed':
+          if (onNodeTransformed != null) {
+            if (debug) {
+              print('[ARObjectManager] Received onNodeTransformed callback');
+            }
+            try {
+              final args = call.arguments;
+              if (args != null && args is Map) {
+                final Map<String, dynamic> argsMap = Map<String, dynamic>.from(args);
+                final String nodeName = argsMap['nodeName'] as String;
+                
+                final List positionList = argsMap['position'] as List;
+                final Vector3 position = Vector3(
+                  (positionList[0] as num).toDouble(),
+                  (positionList[1] as num).toDouble(), 
+                  (positionList[2] as num).toDouble()
+                );
+                
+                final List rotationList = argsMap['rotation'] as List;
+                final Vector4 rotation = Vector4(
+                  (rotationList[0] as num).toDouble(),
+                  (rotationList[1] as num).toDouble(),
+                  (rotationList[2] as num).toDouble(),
+                  (rotationList[3] as num).toDouble()
+                );
+                
+                if (debug) {
+                  print('[ARObjectManager] Node $nodeName transformed - Position: $position, Rotation: $rotation');
+                }
+                onNodeTransformed!(nodeName, position, rotation);
+              }
+            } catch (e) {
+              if (debug) {
+                print('[ARObjectManager] Error handling onNodeTransformed: $e');
+              }
+            }
+          } else if (debug) {
+            print('[ARObjectManager] WARNING: onNodeTransformed callback received but no handler set!');
+          }
           break;
         default:
           if (debug) {
