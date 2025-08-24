@@ -48,18 +48,4 @@ class GestureTransformableNode(
             onNodeTransformed?.invoke(nodeName)
         }
     }
-    
-    /**
-     * Enhanced touch handling for better gesture responsiveness
-     */
-    override fun onTouch(motionEvent: android.view.MotionEvent?): Boolean {
-        // Let SceneView handle the actual gesture processing, but with enhanced priority
-        val handled = super.onTouch(motionEvent)
-        
-        if (handled) {
-            Log.d(TAG, "🎯 Enhanced gesture processing for node: $name")
-        }
-        
-        return handled
-    }
 }
