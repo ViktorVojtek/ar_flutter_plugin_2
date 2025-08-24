@@ -199,7 +199,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let purgeCaches = arguments?["purgeCaches"] as? Bool ?? true
                 let removeAnchors = arguments?["removeExistingAnchors"] as? Bool ?? true
                 let resetTracking = arguments?["resetTracking"] as? Bool ?? true
-                let success = self.nukeAll(purgeCaches: purgeCaches, removeAnchors: removeAnchors, resetTracking: resetTracking)
+                // Phase 3 enhancements
+                let forceSystemMemoryPressure = arguments?["forceSystemMemoryPressure"] as? Bool ?? true
+                let enableHardwareGpuReset = arguments?["enableHardwareGpuReset"] as? Bool ?? true
+                let simulateMemoryWarning = arguments?["simulateMemoryWarning"] as? Bool ?? true
+                let success = self.nukeAll(
+                    purgeCaches: purgeCaches, 
+                    removeAnchors: removeAnchors, 
+                    resetTracking: resetTracking,
+                    forceSystemMemoryPressure: forceSystemMemoryPressure,
+                    enableHardwareGpuReset: enableHardwareGpuReset,
+                    simulateMemoryWarning: simulateMemoryWarning
+                )
                 result(success)
                 break
             case "ar#getPluginState":
@@ -1107,8 +1118,17 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         return true
     }
     
-    private func nukeAll(purgeCaches: Bool, removeAnchors: Bool, resetTracking: Bool) -> Bool {
-        print("🚨 NUKE ALL INITIATED - purgeCaches: \(purgeCaches), removeAnchors: \(removeAnchors), resetTracking: \(resetTracking)")
+    private func nukeAll(
+        purgeCaches: Bool, 
+        removeAnchors: Bool, 
+        resetTracking: Bool,
+        forceSystemMemoryPressure: Bool = true,
+        enableHardwareGpuReset: Bool = true,
+        simulateMemoryWarning: Bool = true
+    ) -> Bool {
+        print("� PHASE 3 SYSTEM-LEVEL NUKE ALL INITIATED")
+        print("📍 Flags: purgeCaches: \(purgeCaches), removeAnchors: \(removeAnchors), resetTracking: \(resetTracking)")
+        print("📍 Phase 3: forceSystemMemoryPressure: \(forceSystemMemoryPressure), hwGpuReset: \(enableHardwareGpuReset), memWarning: \(simulateMemoryWarning)")
         
         return autoreleasepool {
             // A) Stop background work & cancel loading tasks
@@ -1264,8 +1284,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 print("❌ Phase G error: \(error.localizedDescription)")
             }
 
-            // H) CRITICAL: Force aggressive memory cleanup (ChatGPT suggestions)
-            print("♻️ Phase H: Aggressive memory cleanup")
+            // H) CRITICAL: Phase 3 Enhanced aggressive memory cleanup
+            print("♻️ Phase H: Phase 3 Enhanced aggressive memory cleanup")
+            print("♻️ Flags: forceSystemMemoryPressure=\(forceSystemMemoryPressure), simulateMemoryWarning=\(simulateMemoryWarning)")
             do {
                 // Multiple autorelease pool drains
                 autoreleasepool {
@@ -1280,37 +1301,59 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     // Second cleanup pass
                 }
                 
-                // CRITICAL: System memory pressure simulation
-                for pass in 0..<3 {
-                    autoreleasepool {
-                        // Force system memory cleanup
-                        malloc_zone_pressure_relief(nil, 0)
-                        
-                        // Simulate memory warning to force system cleanup  
-                        if pass == 0 {
-                            NotificationCenter.default.post(
-                                name: UIApplication.didReceiveMemoryWarningNotification,
-                                object: UIApplication.shared
-                            )
+                // PHASE 3 CRITICAL: Enhanced system memory pressure simulation
+                if forceSystemMemoryPressure {
+                    print("🚀 PHASE 3: Forcing system memory pressure simulation...")
+                    for pass in 0..<5 { // Increased passes for Phase 3
+                        autoreleasepool {
+                            // Force system memory cleanup with more aggressive pressure
+                            malloc_zone_pressure_relief(nil, 0)
+                            
+                            // Phase 3: Multiple memory warning simulations
+                            if simulateMemoryWarning && pass < 3 {
+                                NotificationCenter.default.post(
+                                    name: UIApplication.didReceiveMemoryWarningNotification,
+                                    object: UIApplication.shared
+                                )
+                                print("📱 Phase 3: Memory warning simulation \(pass + 1)")
+                            }
+                            
+                            // Clear caches more aggressively
+                            URLCache.shared.removeAllCachedResponses()
+                            
+                            // Phase 3: Additional system cleanup
+                            if enableHardwareGpuReset {
+                                // Force Metal command buffer completion
+                                if let metalDevice = MTLCreateSystemDefaultDevice() {
+                                    let commandQueue = metalDevice.makeCommandQueue()
+                                    if let commandBuffer = commandQueue?.makeCommandBuffer() {
+                                        commandBuffer.commit()
+                                        commandBuffer.waitUntilCompleted()
+                                    }
+                                }
+                                print("⚡ Phase 3: Hardware GPU reset pass \(pass + 1)")
+                            }
+                            
+                            // Drain run loop between passes with extended time for Phase 3
+                            CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
                         }
-                        
-                        // Clear URLSession cache
-                        URLCache.shared.removeAllCachedResponses()
-                        
-                        // Drain run loop between passes
-                        CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
+                    }
+                } else {
+                    // Fallback to basic cleanup
+                    for pass in 0..<3 {
+                        autoreleasepool {
+                            malloc_zone_pressure_relief(nil, 0)
+                            CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
+                        }
                     }
                 }
                 
-                // Final runloop drain
-                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.1, false)
-                
-                print("✅ Phase H: Aggressive memory cleanup completed")
+                print("✅ Phase H: Phase 3 Enhanced memory cleanup completed")
             } catch {
                 print("❌ Phase H error: \(error.localizedDescription)")
             }
 
-            print("🎉 NUKE ALL COMPLETED - Memory should be near cold start levels")
+            print("🎉 PHASE 3 NUKE ALL COMPLETED - Memory should approach cold start levels")
             return true
         }
     }

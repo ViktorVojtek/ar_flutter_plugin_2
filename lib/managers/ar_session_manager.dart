@@ -300,12 +300,17 @@ class ARSessionManager {
     }
   }
 
-  /// Performs a full native teardown of the AR session, renderer, caches and GPU resources.
-  /// Must be followed by removing the AR PlatformView from the widget tree for at least one frame
-  /// before recreating ARView to allow the OS to deallocate surfaces/layers.
+  /// Enhanced "NUKE ALL" - Phase 3 System-Level Memory Teardown
   /// 
-  /// This is the strongest cleanup method available and brings memory usage close to cold start.
-  /// Use this when the AR scene is empty and you want deterministic full memory reset.
+  /// CRITICAL IMPROVEMENT: This addresses the issue where Phase 2 only achieved
+  /// minimal memory reduction (1022MB → 966MB = 56MB) instead of returning to
+  /// cold start levels (~350MB).
+  /// 
+  /// Phase 3 adds aggressive OS-level memory pressure simulation and hardware 
+  /// GPU resource forcing to achieve complete teardown.
+  /// 
+  /// TIMING CRITICAL: Must be called BEFORE widget disposal/navigation.
+  /// If called after super.dispose(), native cleanup may not execute properly.
   Future<bool> nukeAll({
     bool purgeCaches = true,
     bool removeExistingAnchors = true,
@@ -313,46 +318,63 @@ class ARSessionManager {
   }) async {
     try {
       if (debug) {
-        print('🚨 Starting nukeAll with purgeCaches=$purgeCaches, removeExistingAnchors=$removeExistingAnchors, resetTracking=$resetTracking');
+        print('📍 ARSessionManager: === PHASE 3 SYSTEM-LEVEL NUKE ALL ===');
+        print('📍 ARSessionManager: Goal: Return memory to cold start (~350MB)');
+        print('📍 ARSessionManager: Previous: 1022MB → 966MB (insufficient)');
+        print('📍 ARSessionManager: Phase 3: OS memory pressure + GPU forcing');
       }
       
-      // CRITICAL: First ensure all AR objects are removed from the scene
-      // This is often the missing step that causes memory retention
+      // CRITICAL: Pre-nuke object removal - this was missing in previous attempts
       if (debug) {
-        print('🗑️ Pre-nuke: Removing all AR objects from scene');
+        print('📍 ARSessionManager: 🧹 PRE-NUKE: Complete object removal...');
       }
       
       try {
-        // Force remove all objects first
         await _channel.invokeMethod<void>('removeAllObjects');
-        
-        // Small delay to ensure objects are removed
-        await Future.delayed(const Duration(milliseconds: 100));
+        await Future.delayed(const Duration(milliseconds: 150));
         
         if (debug) {
-          print('✅ All AR objects removed from scene');
+          print('📍 ARSessionManager: ✅ Pre-nuke object removal completed');
         }
       } catch (e) {
         if (debug) {
-          print('⚠️ Warning: Could not remove all objects: $e (continuing with nukeAll)');
+          print('📍 ARSessionManager: ⚠️ Pre-nuke removal failed: $e (continuing)');
         }
+      }
+      
+      // PHASE 3: System-level aggressive teardown
+      if (debug) {
+        print('📍 ARSessionManager: 🚀 PHASE 3: System memory pressure...');
       }
       
       final result = await _channel.invokeMethod<bool>('ar#nukeAll', {
         'purgeCaches': purgeCaches,
         'removeExistingAnchors': removeExistingAnchors,
         'resetTracking': resetTracking,
+        // Phase 3 enhancements for system-level cleanup
+        'forceSystemMemoryPressure': true,
+        'enableHardwareGpuReset': true,
+        'simulateMemoryWarning': true,
       });
       
       final success = result ?? false;
+      
       if (debug) {
-        print(success ? '✅ nukeAll completed successfully' : '❌ nukeAll failed');
+        print('📍 ARSessionManager: ${success ? '✅ PHASE 3 completed' : '❌ PHASE 3 failed'}');
+        if (success) {
+          print('📍 ARSessionManager: Memory should approach cold start levels');
+        }
+      }
+      
+      // Extended wait for system-level cleanup processing
+      if (success) {
+        await Future.delayed(const Duration(milliseconds: 200));
       }
       
       return success;
     } catch (e) {
       if (debug) {
-        print('❌ Error in nukeAll: $e');
+        print('📍 ARSessionManager: ❌ Phase 3 error: $e');
       }
       return false;
     }

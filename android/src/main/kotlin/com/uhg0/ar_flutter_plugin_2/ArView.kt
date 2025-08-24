@@ -248,8 +248,14 @@ class ArView(
             val purgeCaches = call.argument<Boolean>("purgeCaches") ?: true
             val removeAnchors = call.argument<Boolean>("removeExistingAnchors") ?: true
             val resetTracking = call.argument<Boolean>("resetTracking") ?: true
+            // Phase 3 enhancements
+            val forceSystemMemoryPressure = call.argument<Boolean>("forceSystemMemoryPressure") ?: true
+            val enableHardwareGpuReset = call.argument<Boolean>("enableHardwareGpuReset") ?: true
+            val simulateMemoryWarning = call.argument<Boolean>("simulateMemoryWarning") ?: true
             
-            Log.d(TAG, "🚨 NUKE ALL INITIATED - purgeCaches: $purgeCaches, removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+            Log.d(TAG, "� PHASE 3 SYSTEM-LEVEL NUKE ALL INITIATED")
+            Log.d(TAG, "📍 Flags: purgeCaches: $purgeCaches, removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+            Log.d(TAG, "📍 Phase 3: forceSystemMemoryPressure: $forceSystemMemoryPressure, hwGpuReset: $enableHardwareGpuReset, memWarning: $simulateMemoryWarning")
             
             // A) Stop background work & cancel loading tasks
             Log.d(TAG, "⏹️ Phase A: Stopping background work")
@@ -399,41 +405,74 @@ class ArView(
                 Log.e(TAG, "❌ Phase G error: ${e.message}")
             }
 
-            // H) CRITICAL: System memory pressure and aggressive garbage collection
-            Log.d(TAG, "💥 Phase H: System memory pressure simulation")
+            // H) CRITICAL: Phase 3 Enhanced system memory pressure simulation
+            Log.d(TAG, "💥 Phase H: Phase 3 Enhanced system memory pressure simulation")
+            Log.d(TAG, "💥 Flags: forceSystemMemoryPressure=$forceSystemMemoryPressure, simulateMemoryWarning=$simulateMemoryWarning")
             try {
-                // Multiple aggressive garbage collection passes with system pressure
-                for (pass in 1..5) {
-                    // Simulate memory pressure by forcing GC
-                    System.gc()
-                    System.runFinalization()
-                    
-                    // Request low memory callback to force cleanup
-                    if (pass == 1) {
-                        try {
-                            // Simulate memory pressure through activity
-                            val activity = context as? android.app.Activity
-                            activity?.runOnUiThread {
-                                // Trigger memory cleanup callbacks
-                                Runtime.getRuntime().gc()
+                if (forceSystemMemoryPressure) {
+                    Log.d(TAG, "🚀 PHASE 3: Enhanced memory pressure simulation...")
+                    // Increased passes for Phase 3 aggressive cleanup
+                    for (pass in 1..8) {
+                        // Simulate memory pressure by forcing GC with more aggressive approach
+                        System.gc()
+                        System.runFinalization()
+                        
+                        // Phase 3: Multiple memory pressure simulations
+                        if (simulateMemoryWarning && pass <= 3) {
+                            try {
+                                // Simulate memory pressure through activity
+                                val activity = context as? android.app.Activity
+                                activity?.runOnUiThread {
+                                    // Phase 3: Multiple memory cleanup triggers
+                                    Runtime.getRuntime().gc()
+                                    System.runFinalization()
+                                    
+                                    // Additional Phase 3 cleanup
+                                    if (enableHardwareGpuReset) {
+                                        // Force GPU resource cleanup on main thread
+                                        try {
+                                            surfaceView?.onPause()
+                                            surfaceView?.onResume()
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "GPU reset attempt: ${e.message}")
+                                        }
+                                    }
+                                }
+                                Log.d(TAG, "📱 Phase 3: Memory warning simulation $pass")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Phase 3 memory cleanup attempt: ${e.message}")
                             }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not trigger activity memory cleanup: ${e.message}")
                         }
+                        
+                        // Phase 3: Extended cleanup cycles
+                        if (enableHardwareGpuReset && pass % 3 == 0) {
+                            Log.d(TAG, "⚡ Phase 3: Hardware cleanup cycle $pass")
+                            // Additional system-level cleanup
+                            System.runFinalization()
+                        }
+                        
+                        // Extended sleep for Phase 3 to allow deeper cleanup
+                        Thread.sleep(if (pass <= 3) 150 else 100)
+                        
+                        Log.d(TAG, "🧹 Phase 3 GC pass $pass completed")
                     }
-                    
-                    // Sleep between passes to allow cleanup
-                    Thread.sleep(100)
-                    
-                    Log.d(TAG, "🧹 GC pass $pass completed")
+                } else {
+                    // Fallback to basic cleanup
+                    for (pass in 1..5) {
+                        System.gc()
+                        System.runFinalization()
+                        Thread.sleep(100)
+                        Log.d(TAG, "🧹 Basic GC pass $pass completed")
+                    }
                 }
                 
-                // Force final finalization
+                // Phase 3: Final extended cleanup sequence
                 System.runFinalization() 
-                Thread.sleep(50)
+                Thread.sleep(100) // Extended wait for Phase 3
                 System.gc() // Final pass
+                Thread.sleep(50)
                 
-                Log.d(TAG, "✅ Phase H: System memory pressure simulation completed")
+                Log.d(TAG, "✅ Phase H: Phase 3 Enhanced memory pressure simulation completed")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Phase H error: ${e.message}")
             }
@@ -448,7 +487,7 @@ class ArView(
                 Log.e(TAG, "❌ Phase I error: ${e.message}")
             }
 
-            Log.d(TAG, "🎉 NUKE ALL COMPLETED - Memory should be near cold start levels")
+            Log.d(TAG, "🎉 PHASE 3 NUKE ALL COMPLETED - Memory should approach cold start levels")
             Log.d(TAG, "🔍 Verify PlatformView removal in Flutter for complete surface teardown")
             result.success(true)
             
