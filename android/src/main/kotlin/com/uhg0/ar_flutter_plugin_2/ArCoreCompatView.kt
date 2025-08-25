@@ -218,6 +218,8 @@ class ArCoreCompatView(
                 }
             }
             "addNodeToPlaneAnchor" -> handleAddNodeToPlaneAnchor(call, result)
+            "removeNode" -> handleRemoveNode(call, result)
+            "removeNodeDeep" -> handleRemoveNodeDeep(call, result)
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
             else -> result.notImplemented()
@@ -398,13 +400,13 @@ class ArCoreCompatView(
             
             // First try to get scale from direct scale property
             val scaleData = nodeData["scale"] as? List<*>
-            Log.d(TAG, "🔍🔍🔍 DEBUG: scaleData = $scaleData")
-            Log.d(TAG, "🔍🔍🔍 DEBUG: nodeData.keys = ${nodeData.keys}")
+            android.util.Log.d("SCALE_DEBUG", "🔍🔍🔍 DEBUG: scaleData = $scaleData")
+            android.util.Log.d("SCALE_DEBUG", "🔍🔍🔍 DEBUG: nodeData.keys = ${nodeData.keys}")
             if (scaleData != null && scaleData.size == 3) {
                 scaleX = (scaleData[0] as? Number)?.toFloat() ?: 1.0f
                 scaleY = (scaleData[1] as? Number)?.toFloat() ?: 1.0f
                 scaleZ = (scaleData[2] as? Number)?.toFloat() ?: 1.0f
-                Log.d(TAG, "✅✅✅ Scale from direct property: ($scaleX, $scaleY, $scaleZ)")
+                android.util.Log.d("SCALE_DEBUG", "✅✅✅ Scale from direct property: ($scaleX, $scaleY, $scaleZ)")
             } else {
                 // Fallback: Extract scale from transformation matrix
                 val nodeTransformation = nodeData["transformation"] as? List<*>
@@ -520,8 +522,8 @@ class ArCoreCompatView(
                         
                         // Apply the scale from Flutter to the node
                         transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
-                        Log.d(TAG, "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
-                        Log.d(TAG, "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
+                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
+                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
                         // Add the node as a child of the anchor
                         transformableNode.setParent(anchorNode)
@@ -546,6 +548,70 @@ class ArCoreCompatView(
         } catch (e: Exception) {
             Log.e(TAG, "❌ Exception in handleAddNodeToPlaneAnchor: ${e.message}", e)
             result.error("GENERAL_ERROR", e.message ?: "Unknown error", null)
+        }
+    }
+
+    private fun handleRemoveNode(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            val nodeName = arguments?.get("name") as? String
+            
+            if (nodeName != null) {
+                val node = nodesMap[nodeName]
+                if (node != null) {
+                    Log.d(TAG, "🗑️ Removing node by name: $nodeName")
+                    node.setParent(null) // Remove from scene
+                    nodesMap.remove(nodeName)
+                    result.success(true)
+                } else {
+                    Log.w(TAG, "⚠️ Node not found for removal: $nodeName")
+                    result.success(false)
+                }
+            } else {
+                Log.w(TAG, "⚠️ Node name not provided for removal")
+                result.success(false)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error removing node: ${e.message}")
+            result.error("REMOVE_NODE_ERROR", e.message ?: "Unknown error", null)
+        }
+    }
+
+    private fun handleRemoveNodeDeep(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            val nodeId = arguments?.get("nodeId") as? String
+            
+            if (nodeId != null) {
+                val node = nodesMap[nodeId]
+                if (node != null) {
+                    Log.d(TAG, "🗑️ Deep removing node with ID: $nodeId")
+                    
+                    // Remove from scene graph
+                    node.setParent(null)
+                    
+                    // If it's a TransformableNode, disable it
+                    if (node is TransformableNode) {
+                        node.isEnabled = false
+                        node.renderable = null
+                    }
+                    
+                    // Remove from our tracking
+                    nodesMap.remove(nodeId)
+                    
+                    Log.d(TAG, "✅ Successfully removed node: $nodeId")
+                    result.success(true)
+                } else {
+                    Log.w(TAG, "⚠️ Node not found for deep removal: $nodeId")
+                    result.success(false)
+                }
+            } else {
+                Log.w(TAG, "⚠️ Node ID not provided for deep removal")
+                result.success(false)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in deep node removal: ${e.message}")
+            result.error("REMOVE_NODE_DEEP_ERROR", e.message ?: "Unknown error", null)
         }
     }
 

@@ -2,6 +2,7 @@
 
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:vector_math/vector_math_64.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'dart:math' as math;
@@ -108,18 +109,23 @@ class ARNode {
 
   static const _matrixValueNotifierConverter = MatrixValueNotifierConverter();
 
-  Map<String, dynamic> toMap() => <String, dynamic>{
+  Map<String, dynamic> toMap() {
+    final scaleArray = [scale.x, scale.y, scale.z];
+    debugPrint("🔍 ARNode.toMap() - Scale being sent: $scaleArray");
+    
+    return <String, dynamic>{
         'type': type.index,
         'uri': uri,
         'transformation':
             _matrixValueNotifierConverter.toJson(transformNotifier),
-        'scale': [scale.x, scale.y, scale.z], // Add direct scale access
+        'scale': scaleArray, // Add direct scale access
         'name': name,
         'data': data,
         'isTransformable': isTransformable,
         'enablePanGestures': enablePanGestures,
         'enableRotationGestures': enableRotationGestures,
       }..removeWhere((String k, dynamic v) => v == null);
+  }
 
   static ARNode fromMap(Map<String, dynamic> map) {
     return ARNode(

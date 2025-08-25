@@ -41,6 +41,9 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   List<ARNode> nodes = [];
   List<ARAnchor> anchors = [];
+  
+  // Store mapping of node to its ID for removal
+  Map<ARNode, String> nodeToIdMap = {};
 
   @override
   void dispose() {
@@ -72,7 +75,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
                     ElevatedButton(
                       onPressed: onRemoveEverything,
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: Text("Remove All Avocados")
+                      child: Text("Remove All Ducks")
                     ),
                   ]
                 ),
@@ -112,16 +115,24 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   Future<void> onRemoveEverything() async {
     debugPrint("AR_DEBUG: 🧹 Removing all objects and anchors...");
+    debugPrint("AR_DEBUG: 🧹 Current nodes: ${nodes.length}, nodeToIdMap: ${nodeToIdMap.length}");
     
-    // Remove all nodes first
+    // Remove all nodes first using the stored IDs
     for (var node in nodes) {
-      // await this.arObjectManager!.removeNode(node);
-      await this.arObjectManager!.removeNodeDeep(node.name);
+      String? nodeId = nodeToIdMap[node];
+      if (nodeId != null) {
+        debugPrint("AR_DEBUG: 🧹 Removing node with ID: $nodeId");
+        await this.arObjectManager!.removeNodeDeep(nodeId);
+      } else {
+        debugPrint("AR_DEBUG: ⚠️ Node ID not found for removal: ${node.name}");
+      }
     }
     nodes.clear();
+    nodeToIdMap.clear(); // Clear the ID mapping as well
     
     // Then remove all anchors
     for (var anchor in anchors) {
+      debugPrint("AR_DEBUG: 🧹 Removing anchor: ${anchor.name}");
       await this.arAnchorManager!.removeAnchor(anchor);
     }
     anchors.clear();
@@ -136,7 +147,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   Future<void> onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
     print("🎯🎯🎯 FLUTTER: onPlaneOrPointTapped called with ${hitTestResults.length} results");
     debugPrint("AR_DEBUG: 🎯 Plane tapped! Hit test results: ${hitTestResults.length}");
-    debugPrint("AR_DEBUG: 🥑 Placing Avocado model...");
+    debugPrint("AR_DEBUG: � Placing Duck model...");
     
     // Find the first plane hit result
     ARHitTestResult? planeHitTestResult;
@@ -162,11 +173,11 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         this.anchors.add(newAnchor);
         debugPrint("AR_DEBUG: ✅ Anchor added successfully, total anchors: ${anchors.length}");
         
-        // Create Avocado node with gesture support enabled
+        // Create Duck node with gesture support enabled (better Filament compatibility than Avocado)
         var newNode = ARNode(
           type: NodeType.webGLB,
-          uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb",
-          scale: vector_math.Vector3(3.0, 3.0, 3.0),
+          uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
+          scale: vector_math.Vector3(0.05, 0.05, 0.05), // Larger scale for visibility
           position: vector_math.Vector3(0.0, 0.0, -0.5),
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
           isTransformable: true,        // Enable transformations
@@ -174,8 +185,8 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           enableRotationGestures: true, // Enable rotation gestures
         );
         
-        debugPrint("AR_DEBUG: 🥑 Creating Avocado node...");
-        debugPrint("AR_DEBUG: 📊 Avocado details - URI: Avocado.glb, Type: webGLB, Scale: (10.0, 10.0, 10.0)");
+        debugPrint("AR_DEBUG: � Creating Duck node...");
+        debugPrint("AR_DEBUG: 📊 Duck details - URI: Duck.glb, Type: webGLB, Scale: (5.0, 5.0, 5.0)");
         
         // Add the node to the anchor
         String? nodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
@@ -184,20 +195,22 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         
         if (nodeId != null) {
           this.nodes.add(newNode);
-          debugPrint("AR_DEBUG: ✅ Avocado added successfully with ID: $nodeId, total nodes: ${nodes.length}");
+          this.nodeToIdMap[newNode] = nodeId; // Store the mapping for removal
+          debugPrint("AR_DEBUG: ✅ Duck added successfully with ID: $nodeId, total nodes: ${nodes.length}");
+          debugPrint("AR_DEBUG: 📝 Stored node ID mapping for removal: $nodeId");
           
           // Show success message to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("🥑 Avocado placed! ID: $nodeId"), 
+              content: Text("� Duck placed! ID: $nodeId"), 
               duration: Duration(seconds: 2),
               backgroundColor: Colors.green,
             )
           );
         } else {
-          debugPrint("AR_DEBUG: ❌ Failed to add Avocado to anchor");
+          debugPrint("AR_DEBUG: ❌ Failed to add Duck to anchor");
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Failed to place Avocado"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
+            SnackBar(content: Text("Failed to place Duck"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
           );
         }
       } else {
