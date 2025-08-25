@@ -398,11 +398,13 @@ class ArCoreCompatView(
             
             // First try to get scale from direct scale property
             val scaleData = nodeData["scale"] as? List<*>
+            Log.d(TAG, "🔍🔍🔍 DEBUG: scaleData = $scaleData")
+            Log.d(TAG, "🔍🔍🔍 DEBUG: nodeData.keys = ${nodeData.keys}")
             if (scaleData != null && scaleData.size == 3) {
                 scaleX = (scaleData[0] as? Number)?.toFloat() ?: 1.0f
                 scaleY = (scaleData[1] as? Number)?.toFloat() ?: 1.0f
                 scaleZ = (scaleData[2] as? Number)?.toFloat() ?: 1.0f
-                Log.d(TAG, "📏 Scale from direct property: ($scaleX, $scaleY, $scaleZ)")
+                Log.d(TAG, "✅✅✅ Scale from direct property: ($scaleX, $scaleY, $scaleZ)")
             } else {
                 // Fallback: Extract scale from transformation matrix
                 val nodeTransformation = nodeData["transformation"] as? List<*>
@@ -518,7 +520,8 @@ class ArCoreCompatView(
                         
                         // Apply the scale from Flutter to the node
                         transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
-                        Log.d(TAG, "🎯 Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
+                        Log.d(TAG, "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
+                        Log.d(TAG, "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
                         // Add the node as a child of the anchor
                         transformableNode.setParent(anchorNode)
