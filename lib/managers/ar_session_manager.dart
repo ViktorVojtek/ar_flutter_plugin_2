@@ -153,58 +153,65 @@ class ARSessionManager {
           }
           break;
         case 'onPlaneOrPointTap':
-          if (onPlaneOrPointTap != null) {
-            try {
-              // Handle arguments more flexibly to avoid casting issues
-              final arguments = call.arguments;
-              if (debug) {
-                print('🎯 Received onPlaneOrPointTap arguments: $arguments');
-                print('🎯 Arguments type: ${arguments.runtimeType}');
+          print('🎯🎯🎯 FLUTTER: onPlaneOrPointTap method called!');
+          try {
+            print('🎯🎯🎯 FLUTTER: Processing callback...');
+            // Handle arguments more flexibly to avoid casting issues
+            final arguments = call.arguments;
+            print('🎯 Received onPlaneOrPointTap arguments: $arguments');
+            print('🎯 Arguments type: ${arguments.runtimeType}');
+            
+            if (arguments != null && arguments is List) {
+              final rawHitTestResults = arguments;
+              print('🎯 Raw hit test results count: ${rawHitTestResults.length}');
+              for (int i = 0; i < rawHitTestResults.length; i++) {
+                print('🎯 Hit result $i: ${rawHitTestResults[i]}');
+                print('🎯 Hit result $i type: ${rawHitTestResults[i].runtimeType}');
               }
               
-              if (arguments != null && arguments is List) {
-                final rawHitTestResults = arguments;
-                if (debug) {
-                  print('🎯 Raw hit test results count: ${rawHitTestResults.length}');
-                  for (int i = 0; i < rawHitTestResults.length; i++) {
-                    print('🎯 Hit result $i: ${rawHitTestResults[i]}');
-                    print('🎯 Hit result $i type: ${rawHitTestResults[i].runtimeType}');
-                  }
-                }
-                
-                final serializedHitTestResults = rawHitTestResults
-                    .map((hitTestResult) {
-                      if (debug) {
-                        print('🎯 Converting hit result: $hitTestResult');
-                      }
-                      return Map<String, dynamic>.from(hitTestResult);
-                    })
-                    .toList();
+              final serializedHitTestResults = rawHitTestResults
+                  .map((hitTestResult) {
+                    print('🎯 Converting hit result: $hitTestResult');
+                    final hitMap = Map<String, dynamic>.from(hitTestResult as Map);
                     
-                if (debug) {
-                  print('🎯 Serialized hit test results: $serializedHitTestResults');
-                }
-                
-                final hitTestResults = serializedHitTestResults.map((e) {
-                  if (debug) {
-                    print('🎯 Creating ARHitTestResult from: $e');
-                  }
-                  return ARHitTestResult.fromJson(e);
-                }).toList();
-                
-                if (debug) {
-                  print('🎯 Final hit test results count: ${hitTestResults.length}');
-                }
-                
-                onPlaneOrPointTap(hitTestResults);
-              }
-            } catch (e) {
-              if (debug) {
-                print('❌ Error in onPlaneOrPointTap: $e');
-                print('Arguments: ${call.arguments}');
-                print('Arguments type: ${call.arguments.runtimeType}');
-              }
+                    // Transform Android data structure to match ARHitTestResult.fromJson expectations
+                    final pose = hitMap['pose'];
+                    final plane = hitMap['plane'];
+                    
+                    if (pose != null && plane != null) {
+                      final poseMap = Map<String, dynamic>.from(pose as Map);
+                      final planeMap = Map<String, dynamic>.from(plane as Map);
+                      
+                      final matrix = poseMap['matrix'] as List<dynamic>?;
+                      final planeType = planeMap['type'] as String?;
+                      
+                      return {
+                        'type': planeType == 'horizontal' ? 1 : 1, // 1 = ARHitTestResultType.plane
+                        'distance': 0.0, // We could calculate this from the matrix if needed
+                        'worldTransform': matrix,
+                      };
+                    }
+                    
+                    // Fallback - return original data
+                    return hitMap;
+                  })
+                  .toList();
+                  
+              print('🎯 Serialized hit test results: $serializedHitTestResults');
+              
+              final hitTestResults = serializedHitTestResults.map((e) {
+                print('🎯 Creating ARHitTestResult from: $e');
+                return ARHitTestResult.fromJson(e);
+              }).toList();
+              
+              print('🎯 Final hit test results count: ${hitTestResults.length}');
+              
+              onPlaneOrPointTap(hitTestResults);
             }
+          } catch (e) {
+            print('❌ Error in onPlaneOrPointTap: $e');
+            print('Arguments: ${call.arguments}');
+            print('Arguments type: ${call.arguments.runtimeType}');
           }
           break;
         case 'onPlaneDetected':

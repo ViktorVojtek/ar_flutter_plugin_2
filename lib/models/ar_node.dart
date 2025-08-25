@@ -113,6 +113,7 @@ class ARNode {
         'uri': uri,
         'transformation':
             _matrixValueNotifierConverter.toJson(transformNotifier),
+        'scale': [scale.x, scale.y, scale.z], // Add direct scale access
         'name': name,
         'data': data,
         'isTransformable': isTransformable,

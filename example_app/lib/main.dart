@@ -90,14 +90,14 @@ class _ObjectGesturesState extends State<ObjectGestures> {
       ARObjectManager arObjectManager,
       ARAnchorManager arAnchorManager,
       ARLocationManager arLocationManager) {
+    print("🚀🚀🚀 FLUTTER: onARViewCreated called!");
     this.arSessionManager = arSessionManager;
     this.arObjectManager = arObjectManager;
     this.arAnchorManager = arAnchorManager;
 
     this.arSessionManager!.onInitialize(
       showFeaturePoints: false,
-      showPlanes: false,
-      // customPlaneTexturePath: "Images/triangle.png",
+      showPlanes: true, // Enable plane visualization
       showWorldOrigin: false,
       handlePans: true,
       handleRotation: true,
@@ -105,6 +105,8 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     this.arObjectManager!.onInitialize();
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
+    print("🎯🎯🎯 FLUTTER: Callback set! Function: $onPlaneOrPointTapped");
+    
     // Add other callbacks as needed...
   }
 
@@ -132,6 +134,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   }
 
   Future<void> onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
+    print("🎯🎯🎯 FLUTTER: onPlaneOrPointTapped called with ${hitTestResults.length} results");
     debugPrint("AR_DEBUG: 🎯 Plane tapped! Hit test results: ${hitTestResults.length}");
     debugPrint("AR_DEBUG: 🥑 Placing Avocado model...");
     
@@ -159,17 +162,20 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         this.anchors.add(newAnchor);
         debugPrint("AR_DEBUG: ✅ Anchor added successfully, total anchors: ${anchors.length}");
         
-        // Create Avocado node with fixed configuration
+        // Create Avocado node with gesture support enabled
         var newNode = ARNode(
           type: NodeType.webGLB,
           uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb",
-          scale: vector_math.Vector3(1.0, 1.0, 1.0),
+          scale: vector_math.Vector3(3.0, 3.0, 3.0),
           position: vector_math.Vector3(0.0, 0.0, -0.5),
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
+          isTransformable: true,        // Enable transformations
+          enablePanGestures: true,      // Enable pan (drag) gestures  
+          enableRotationGestures: true, // Enable rotation gestures
         );
         
         debugPrint("AR_DEBUG: 🥑 Creating Avocado node...");
-        debugPrint("AR_DEBUG: 📊 Avocado details - URI: Avocado.glb, Type: webGLB, Scale: (5.0, 5.0, 5.0)");
+        debugPrint("AR_DEBUG: 📊 Avocado details - URI: Avocado.glb, Type: webGLB, Scale: (10.0, 10.0, 10.0)");
         
         // Add the node to the anchor
         String? nodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
