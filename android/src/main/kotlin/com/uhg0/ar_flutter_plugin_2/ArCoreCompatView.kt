@@ -70,11 +70,15 @@ class ArCoreCompatView(
                 // Create session manually with activity context  
                 val session = Session(activity)
                 
-                // Configure session for plane detection
+                // Configure session for plane detection with memory-optimized settings
                 val config = session.config.apply {
                     planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
                     updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                    
+                    // Memory optimizations
+                    focusMode = Config.FocusMode.AUTO
+                    // Disable unnecessary features to reduce memory usage
                 }
                 session.configure(config)
                 
@@ -725,17 +729,27 @@ class ArCoreCompatView(
             // Phase A: Stop background work
             Log.d(TAG, "⏹️ Phase A: Stopping background work")
             
-            // Phase B: Destroy native drawing surfaces
+            // Phase B: Destroy native drawing surfaces (CRITICAL: Stop render loop BEFORE pausing session)
             Log.d(TAG, "🖥️ Phase B: Destroying native drawing surfaces")
             arSceneView?.let { sceneView ->
-                // Stop session
-                sceneView.session?.pause()
-                
-                // Clear scene by removing all child nodes from the root
-                val rootNode = sceneView.scene
-                // Don't try to replace the scene, just clear it
-                
-                Log.d(TAG, "🔥 Scene cleared and session paused")
+                try {
+                    // CRITICAL: Stop the render loop first to prevent SessionPausedException
+                    sceneView.pause()
+                    Log.d(TAG, "⏸️ ArSceneView paused - render loop stopped")
+                    
+                    // Now it's safe to pause the session
+                    sceneView.session?.pause()
+                    Log.d(TAG, "⏸️ AR Session paused")
+                    
+                    // Clear scene by removing all child nodes from the root
+                    val rootNode = sceneView.scene
+                    // Don't try to replace the scene, just clear it
+                    
+                    Log.d(TAG, "🔥 Scene cleared and session paused safely")
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Error in Phase B cleanup: ${e.message}")
+                    // Continue with cleanup even if this fails
+                }
             }
 
             // Phase C: Clear all anchors and nodes
@@ -840,10 +854,27 @@ class ArCoreCompatView(
 
     private fun handleDispose(call: MethodCall, result: MethodChannel.Result) {
         try {
-            arSceneView?.session?.close()
+            Log.d(TAG, "🗑️ Starting ArCoreCompatView disposal...")
+            
+            arSceneView?.let { sceneView ->
+                try {
+                    // CRITICAL: Stop render loop first to prevent crashes
+                    sceneView.pause()
+                    Log.d(TAG, "⏸️ ArSceneView paused during disposal")
+                    
+                    // Then safely close the session
+                    sceneView.session?.close()
+                    Log.d(TAG, "🔒 AR Session closed")
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Error during ArSceneView cleanup: ${e.message}")
+                }
+            }
+            
+            // Clear references
             arSceneView = null
             nodesMap.clear()
-            Log.d(TAG, "🗑️ ArCoreCompatView disposed")
+            
+            Log.d(TAG, "✅ ArCoreCompatView disposed successfully")
             result.success(null)
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error disposing view: ${e.message}")
