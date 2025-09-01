@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.GestureDetector
 import java.util.concurrent.CompletableFuture
+import kotlin.math.pow
 import com.google.ar.core.*
 import com.google.ar.sceneform.*
 import com.google.ar.sceneform.assets.RenderableSource
@@ -523,42 +524,83 @@ class ArCoreCompatView(
                         transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                         Log.d(TAG, "📍 Set world position for direct placement: ($positionX, $positionY, $positionZ)")
                         
-                        // CRITICAL FIX: For gesture support, we need to create a virtual anchor
-                        // Direct scene attachment doesn't work well with ARCore's gesture system
+                        // CRITICAL FIX: For gesture support, we need to find a detected plane
+                        // Instead of creating virtual anchors, use actual detected planes
                         try {
                             val session = arSceneView?.session
                             if (session != null) {
-                                // Create a pose at the desired position
-                                val pose = Pose.makeTranslation(positionX, positionY, positionZ)
+                                // Get all tracked planes from the current frame
+                                val frame = session.update()
+                                val trackedPlanes = session.getAllTrackables(Plane::class.java)
+                                    .filter { it.trackingState == TrackingState.TRACKING }
                                 
-                                // Create an anchor at this pose
-                                val virtualAnchor = session.createAnchor(pose)
-                                Log.d(TAG, "🔗 Created virtual anchor for direct placement node")
+                                Log.d(TAG, "🔍 Found ${trackedPlanes.size} tracked planes for auto placement")
                                 
-                                // Create an anchor node for this virtual anchor
-                                val anchorNode = AnchorNode(virtualAnchor)
-                                anchorNode.setParent(arSceneView?.scene)
-                                
-                                // Attach the transformable node to the anchor instead of directly to scene
-                                transformableNode.setParent(anchorNode)
-                                transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f) // Reset local position since anchor handles world position
-                                
-                                Log.d(TAG, "🎯 Attached node to virtual anchor for proper gesture support")
-                                
-                                // Store both nodes for cleanup
-                                nodesMap[nodeName] = transformableNode
-                                nodesMap["${nodeName}_anchor"] = anchorNode
+                                if (trackedPlanes.isNotEmpty()) {
+                                    // Find the best plane to place the object on
+                                    // Prefer horizontal planes that are close to the desired position
+                                    val targetPose = Pose.makeTranslation(positionX, positionY, positionZ)
+                                    
+                                    val bestPlane = trackedPlanes.minByOrNull { plane ->
+                                        val planeCenterPose = plane.centerPose
+                                        val distance = kotlin.math.sqrt(
+                                            (planeCenterPose.tx() - targetPose.tx()).pow(2) +
+                                            (planeCenterPose.tz() - targetPose.tz()).pow(2)
+                                        )
+                                        distance
+                                    }
+                                    
+                                    if (bestPlane != null) {
+                                        Log.d(TAG, "🎯 Using detected plane for auto placement")
+                                        
+                                        // Create an anchor on the detected plane at a position close to desired location
+                                        val planeAnchor = bestPlane.createAnchor(
+                                            bestPlane.centerPose.compose(
+                                                Pose.makeTranslation(0.0f, 0.0f, 0.0f) // Use plane's center
+                                            )
+                                        )
+                                        
+                                        // Create an anchor node for this plane anchor
+                                        val anchorNode = AnchorNode(planeAnchor)
+                                        anchorNode.setParent(arSceneView?.scene)
+                                        
+                                        // Attach the transformable node to the plane anchor
+                                        transformableNode.setParent(anchorNode)
+                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                        
+                                        Log.d(TAG, "✅ Successfully placed node on detected plane with gesture support")
+                                        
+                                        // Store both nodes for cleanup
+                                        nodesMap[nodeName] = transformableNode
+                                        nodesMap["${nodeName}_anchor"] = anchorNode
+                                        
+                                    } else {
+                                        Log.w(TAG, "⚠️ No suitable plane found, falling back to scene attachment")
+                                        // Fallback: Add directly to scene (gestures may not work optimally)
+                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                        arSceneView?.scene?.addChild(transformableNode)
+                                        nodesMap[nodeName] = transformableNode
+                                    }
+                                } else {
+                                    Log.w(TAG, "⚠️ No tracked planes available, falling back to scene attachment")
+                                    // Fallback: Add directly to scene (gestures may not work optimally)
+                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                    arSceneView?.scene?.addChild(transformableNode)
+                                    nodesMap[nodeName] = transformableNode
+                                }
                                 
                             } else {
                                 Log.w(TAG, "⚠️ AR Session not available, falling back to direct scene attachment")
                                 // Fallback: Add the node directly to the scene (gestures may not work optimally)
+                                transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                 arSceneView?.scene?.addChild(transformableNode)
                                 nodesMap[nodeName] = transformableNode
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "❌ Failed to create virtual anchor: ${e.message}")
+                            Log.e(TAG, "❌ Failed to find detected plane: ${e.message}")
                             Log.d(TAG, "🔄 Falling back to direct scene attachment")
                             // Fallback: Add the node directly to the scene
+                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                             arSceneView?.scene?.addChild(transformableNode)
                             nodesMap[nodeName] = transformableNode
                         }
