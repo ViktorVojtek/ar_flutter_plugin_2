@@ -217,8 +217,8 @@ class ArCoreCompatView(
                     Log.d(TAG, "📍 addNode with planeAnchor - routing to addNodeToPlaneAnchor")
                     handleAddNodeToPlaneAnchor(call, result)
                 } else {
-                    Log.w(TAG, "⚠️ addNode without planeAnchor not supported in ArCoreCompatView")
-                    result.error("UNSUPPORTED", "addNode without planeAnchor not supported", null)
+                    Log.d(TAG, "📍 addNode without planeAnchor - direct position placement")
+                    handleAddNode(call, result)
                 }
             }
             "addNodeToPlaneAnchor" -> handleAddNodeToPlaneAnchor(call, result)
@@ -329,6 +329,222 @@ class ArCoreCompatView(
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to create anchor: ${e.message}", e)
             result.error("ANCHOR_CREATION_FAILED", e.message, null)
+        }
+    }
+
+    private fun handleAddNode(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleAddNode called for direct position placement")
+        Log.d(TAG, "📋 Method call arguments: ${call.arguments}")
+        
+        try {
+            val nodeData = call.arguments as? Map<String, Any>
+            if (nodeData == null) {
+                Log.e(TAG, "❌ Node data is null")
+                result.error("INVALID_ARGUMENTS", "Node data is null", null)
+                return
+            }
+            
+            Log.d(TAG, "📋 Node data keys: ${nodeData.keys}")
+            
+            val nodeName = nodeData["name"] as? String
+            val uri = nodeData["uri"] as? String
+            val nodeType = nodeData["type"] as? Int
+            
+            if (nodeName == null || uri == null || nodeType == null) {
+                result.error("INVALID_ARGUMENTS", "Node name, URI, or type is null", null)
+                return
+            }
+            
+            Log.d(TAG, "🎯 Loading model for direct placement: $nodeName with URI: $uri, Type: $nodeType")
+            
+            // Check if this is a supported node type
+            when (nodeType) {
+                1 -> {
+                    // NodeType.webGLB - Load GLB from web
+                    Log.d(TAG, "🌐 Loading webGLB model from URL for direct placement")
+                }
+                0 -> {
+                    // NodeType.localGLTF2 - Load GLTF from assets
+                    Log.d(TAG, "📁 Loading local GLTF2 model for direct placement")
+                    result.error("UNSUPPORTED_TYPE", "Local GLTF2 not yet supported in ArCoreCompatView", null)
+                    return
+                }
+                else -> {
+                    Log.e(TAG, "❌ Unsupported node type: $nodeType")
+                    result.error("UNSUPPORTED_TYPE", "Node type $nodeType not supported", null)
+                    return
+                }
+            }
+            
+            // Load GLB model using RenderableSource (same approach as arcore_flutter_plugin)
+            Log.d(TAG, "🔄 Loading GLB with RenderableSource for direct placement")
+            
+            // Extract position from transformation matrix
+            var positionX = 0.0f
+            var positionY = -1.2f  // Default position in front of user
+            var positionZ = -0.8f
+            
+            val nodeTransformation = nodeData["transformation"] as? List<*>
+            if (nodeTransformation != null && nodeTransformation.size == 16) {
+                // Extract translation from transformation matrix (last column)
+                positionX = (nodeTransformation[12] as? Number)?.toFloat() ?: 0.0f
+                positionY = (nodeTransformation[13] as? Number)?.toFloat() ?: -1.2f
+                positionZ = (nodeTransformation[14] as? Number)?.toFloat() ?: -0.8f
+                Log.d(TAG, "📏 Position extracted from transformation matrix: ($positionX, $positionY, $positionZ)")
+            } else {
+                Log.d(TAG, "📏 Using default position for direct placement: ($positionX, $positionY, $positionZ)")
+            }
+            
+            // Extract scale from node data - check both scale property and transformation matrix
+            var scaleX = 1.0f
+            var scaleY = 1.0f 
+            var scaleZ = 1.0f
+            
+            // First try to get scale from direct scale property
+            val scaleData = nodeData["scale"] as? List<*>
+            android.util.Log.d("SCALE_DEBUG", "🔍🔍🔍 DEBUG: scaleData = $scaleData")
+            android.util.Log.d("SCALE_DEBUG", "🔍🔍🔍 DEBUG: nodeData.keys = ${nodeData.keys}")
+            if (scaleData != null && scaleData.size == 3) {
+                scaleX = (scaleData[0] as? Number)?.toFloat() ?: 1.0f
+                scaleY = (scaleData[1] as? Number)?.toFloat() ?: 1.0f
+                scaleZ = (scaleData[2] as? Number)?.toFloat() ?: 1.0f
+                android.util.Log.d("SCALE_DEBUG", "✅✅✅ Scale from direct property: ($scaleX, $scaleY, $scaleZ)")
+            } else {
+                // Fallback: Extract scale from transformation matrix
+                if (nodeTransformation != null && nodeTransformation.size == 16) {
+                    // For a transformation matrix, scale is the length of the first 3 columns
+                    val m00 = (nodeTransformation[0] as? Number)?.toFloat() ?: 1.0f
+                    val m10 = (nodeTransformation[1] as? Number)?.toFloat() ?: 0.0f
+                    val m20 = (nodeTransformation[2] as? Number)?.toFloat() ?: 0.0f
+                    
+                    val m01 = (nodeTransformation[4] as? Number)?.toFloat() ?: 0.0f
+                    val m11 = (nodeTransformation[5] as? Number)?.toFloat() ?: 1.0f
+                    val m21 = (nodeTransformation[6] as? Number)?.toFloat() ?: 0.0f
+                    
+                    val m02 = (nodeTransformation[8] as? Number)?.toFloat() ?: 0.0f
+                    val m12 = (nodeTransformation[9] as? Number)?.toFloat() ?: 0.0f
+                    val m22 = (nodeTransformation[10] as? Number)?.toFloat() ?: 1.0f
+                    
+                    // Calculate scale as the length of each column vector
+                    scaleX = kotlin.math.sqrt(m00 * m00 + m10 * m10 + m20 * m20)
+                    scaleY = kotlin.math.sqrt(m01 * m01 + m11 * m11 + m21 * m21)
+                    scaleZ = kotlin.math.sqrt(m02 * m02 + m12 * m12 + m22 * m22)
+                    Log.d(TAG, "📏 Scale extracted from transformation matrix: ($scaleX, $scaleY, $scaleZ)")
+                } else {
+                    Log.d(TAG, "📏 Using default scale: (1.0, 1.0, 1.0)")
+                }
+            }
+            
+            // Extract gesture properties from node data
+            val isTransformable = nodeData["isTransformable"] as? Boolean ?: false
+            val enablePanGestures = nodeData["enablePanGestures"] as? Boolean ?: false
+            val enableRotationGestures = nodeData["enableRotationGestures"] as? Boolean ?: false
+            Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
+            
+            try {
+                val modelRenderableBuilder = ModelRenderable.builder()
+                val renderableSourceBuilder = RenderableSource.builder()
+                
+                // Check file extension and set appropriate source type
+                if (uri.endsWith(".glb")) {
+                    Log.d(TAG, "📂 Loading GLB file for direct placement: $uri")
+                    renderableSourceBuilder
+                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
+                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
+                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                } else if (uri.endsWith(".gltf")) {
+                    Log.d(TAG, "📂 Loading GLTF file for direct placement: $uri")
+                    renderableSourceBuilder
+                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
+                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
+                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                } else {
+                    Log.e(TAG, "❌ Unsupported file format for direct placement: $uri")
+                    result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
+                    return
+                }
+                
+                modelRenderableBuilder
+                    .setSource(activity, renderableSourceBuilder.build())
+                    .setRegistryId(uri)
+                    .build()
+                    .thenAccept { renderable: ModelRenderable ->
+                        Log.d(TAG, "✅ GLB model loaded successfully for direct placement: $nodeName")
+                        
+                        val transformableNode = TransformableNode(transformationSystem)
+                        transformableNode.renderable = renderable
+                        transformableNode.name = nodeName
+                        
+                        // CRITICAL: Enable the node for hit testing and selection
+                        transformableNode.isEnabled = true
+                        
+                        // CRITICAL: Set collision shape for hit testing
+                        transformableNode.collisionShape = Box(
+                            Vector3(1.0f, 1.0f, 1.0f)
+                        )
+                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName")
+                        
+                        // Set up tap listener for node selection
+                        transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
+                            Log.d(TAG, "🎯 Node $nodeName tapped - selecting for transformation")
+                            transformationSystem?.selectNode(transformableNode)
+                            Log.d(TAG, "🎯 Node $nodeName selected for transformation")
+                            true
+                        }
+                        
+                        // Apply gesture properties from Flutter
+                        if (isTransformable) {
+                            transformableNode.translationController.isEnabled = enablePanGestures
+                            transformableNode.rotationController.isEnabled = enableRotationGestures
+                            transformableNode.scaleController.isEnabled = true // Always allow scale for now
+                            
+                            // Additional pan gesture configuration
+                            transformableNode.translationController.apply {
+                                isEnabled = enablePanGestures
+                                Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
+                            }
+                            
+                            Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
+                            
+                        } else {
+                            transformableNode.translationController.isEnabled = false
+                            transformableNode.rotationController.isEnabled = false
+                            transformableNode.scaleController.isEnabled = false
+                            Log.d(TAG, "🎯 All gesture controllers disabled (isTransformable=false)")
+                        }
+                        
+                        // Apply the scale from Flutter to the node
+                        transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
+                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
+                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
+                        
+                        // Set the world position directly (no anchor needed for direct placement)
+                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                        Log.d(TAG, "📍 Set world position for direct placement: ($positionX, $positionY, $positionZ)")
+                        
+                        // Add the node directly to the scene (no anchor needed)
+                        arSceneView?.scene?.addChild(transformableNode)
+                        
+                        // Store the node for later reference
+                        nodesMap[nodeName] = transformableNode
+                        
+                        Log.d(TAG, "✅ GLB model added with direct placement: $nodeName")
+                        result.success(nodeName)
+                    }
+                    .exceptionally { throwable: Throwable ->
+                        Log.e(TAG, "❌ Failed to load GLB model for direct placement: ${throwable.message}")
+                        result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
+                        null
+                    }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Exception loading GLB for direct placement: ${e.message}")
+                result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
+            }
+                
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Exception in handleAddNode: ${e.message}", e)
+            result.error("GENERAL_ERROR", e.message ?: "Unknown error", null)
         }
     }
 
