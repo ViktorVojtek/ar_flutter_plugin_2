@@ -23,6 +23,7 @@ import com.google.ar.sceneform.ux.TransformationSystem
 import com.google.ar.sceneform.ux.SelectionVisualizer
 import com.google.ar.sceneform.ux.TransformableNode
 import com.google.ar.sceneform.ux.BaseTransformableNode
+import com.google.ar.sceneform.AnchorNode
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -522,11 +523,45 @@ class ArCoreCompatView(
                         transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                         Log.d(TAG, "📍 Set world position for direct placement: ($positionX, $positionY, $positionZ)")
                         
-                        // Add the node directly to the scene (no anchor needed)
-                        arSceneView?.scene?.addChild(transformableNode)
-                        
-                        // Store the node for later reference
-                        nodesMap[nodeName] = transformableNode
+                        // CRITICAL FIX: For gesture support, we need to create a virtual anchor
+                        // Direct scene attachment doesn't work well with ARCore's gesture system
+                        try {
+                            val session = arSceneView?.session
+                            if (session != null) {
+                                // Create a pose at the desired position
+                                val pose = Pose.makeTranslation(positionX, positionY, positionZ)
+                                
+                                // Create an anchor at this pose
+                                val virtualAnchor = session.createAnchor(pose)
+                                Log.d(TAG, "🔗 Created virtual anchor for direct placement node")
+                                
+                                // Create an anchor node for this virtual anchor
+                                val anchorNode = AnchorNode(virtualAnchor)
+                                anchorNode.setParent(arSceneView?.scene)
+                                
+                                // Attach the transformable node to the anchor instead of directly to scene
+                                transformableNode.setParent(anchorNode)
+                                transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f) // Reset local position since anchor handles world position
+                                
+                                Log.d(TAG, "🎯 Attached node to virtual anchor for proper gesture support")
+                                
+                                // Store both nodes for cleanup
+                                nodesMap[nodeName] = transformableNode
+                                nodesMap["${nodeName}_anchor"] = anchorNode
+                                
+                            } else {
+                                Log.w(TAG, "⚠️ AR Session not available, falling back to direct scene attachment")
+                                // Fallback: Add the node directly to the scene (gestures may not work optimally)
+                                arSceneView?.scene?.addChild(transformableNode)
+                                nodesMap[nodeName] = transformableNode
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Failed to create virtual anchor: ${e.message}")
+                            Log.d(TAG, "🔄 Falling back to direct scene attachment")
+                            // Fallback: Add the node directly to the scene
+                            arSceneView?.scene?.addChild(transformableNode)
+                            nodesMap[nodeName] = transformableNode
+                        }
                         
                         Log.d(TAG, "✅ GLB model added with direct placement: $nodeName")
                         result.success(nodeName)
@@ -788,6 +823,16 @@ class ArCoreCompatView(
                     Log.d(TAG, "🗑️ Removing node by name: $nodeName")
                     node.setParent(null) // Remove from scene
                     nodesMap.remove(nodeName)
+                    
+                    // Also remove associated virtual anchor if it exists
+                    val virtualAnchorName = "${nodeName}_anchor"
+                    val virtualAnchor = nodesMap[virtualAnchorName]
+                    if (virtualAnchor != null) {
+                        Log.d(TAG, "🗑️ Also removing virtual anchor: $virtualAnchorName")
+                        virtualAnchor.setParent(null)
+                        nodesMap.remove(virtualAnchorName)
+                    }
+                    
                     result.success(true)
                 } else {
                     Log.w(TAG, "⚠️ Node not found for removal: $nodeName")
