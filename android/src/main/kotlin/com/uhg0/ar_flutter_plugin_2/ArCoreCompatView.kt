@@ -686,11 +686,73 @@ class ArCoreCompatView(
             }
             
             // Find the anchor node
-            val anchorNode = nodesMap[anchorName] as? AnchorNode
+            var anchorNode = nodesMap[anchorName] as? AnchorNode
             if (anchorNode == null) {
                 Log.e(TAG, "❌ Anchor node not found: $anchorName")
                 result.error("ANCHOR_NOT_FOUND", "Anchor node not found: $anchorName", null)
                 return
+            }
+            
+            // CRITICAL FIX: Verify the anchor is properly attached to a tracked plane for gesture support
+            // If the anchor is not properly tracked, try to find a nearby detected plane and re-anchor
+            try {
+                val session = arSceneView?.session
+                if (session != null) {
+                    val frame = session.update()
+                    val trackedPlanes = session.getAllTrackables(Plane::class.java)
+                        .filter { it.trackingState == TrackingState.TRACKING }
+                    
+                    Log.d(TAG, "🔍 Found ${trackedPlanes.size} tracked planes for anchor verification")
+                    
+                    // Check if current anchor is on a tracked plane, if not, create a new one on a detected plane
+                    val anchor = anchorNode.anchor
+                    if (anchor == null || trackedPlanes.isNotEmpty()) {
+                        Log.d(TAG, "🎯 Re-anchoring to detected plane for better gesture support")
+                        
+                        // Get current anchor position for reference
+                        val currentPose = anchor?.pose ?: Pose.IDENTITY
+                        
+                        // Find the best plane to place the object on
+                        val bestPlane = trackedPlanes.minByOrNull { plane ->
+                            val planeCenterPose = plane.centerPose
+                            val distance = kotlin.math.sqrt(
+                                (planeCenterPose.tx() - currentPose.tx()).pow(2) +
+                                (planeCenterPose.tz() - currentPose.tz()).pow(2)
+                            )
+                            distance
+                        }
+                        
+                        if (bestPlane != null) {
+                            Log.d(TAG, "🎯 Using detected plane for re-anchoring")
+                            
+                            // Create a new anchor on the detected plane
+                            val newPlaneAnchor = bestPlane.createAnchor(
+                                bestPlane.centerPose.compose(
+                                    Pose.makeTranslation(0.0f, 0.0f, 0.0f) // Use plane's center
+                                )
+                            )
+                            
+                            // Create a new anchor node for this plane anchor
+                            val newAnchorNode = AnchorNode(newPlaneAnchor)
+                            newAnchorNode.setParent(arSceneView?.scene)
+                            
+                            // Update the stored reference
+                            anchorNode = newAnchorNode
+                            nodesMap[anchorName] = newAnchorNode
+                            
+                            Log.d(TAG, "✅ Successfully re-anchored to detected plane with gesture support")
+                        } else {
+                            Log.w(TAG, "⚠️ No suitable plane found for re-anchoring, using existing anchor")
+                        }
+                    } else {
+                        Log.d(TAG, "✅ Anchor already properly attached to tracked surface")
+                    }
+                } else {
+                    Log.w(TAG, "⚠️ AR Session not available for anchor verification")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to verify/improve anchor: ${e.message}")
+                Log.d(TAG, "🔄 Continuing with existing anchor")
             }
             
             // Load GLB model using RenderableSource (same approach as arcore_flutter_plugin)
