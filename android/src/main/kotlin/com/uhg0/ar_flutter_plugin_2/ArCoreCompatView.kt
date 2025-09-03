@@ -491,6 +491,17 @@ class ArCoreCompatView(
                             Log.d(TAG, "🎯 Node $nodeName tapped - selecting for transformation")
                             transformationSystem?.selectNode(transformableNode)
                             Log.d(TAG, "🎯 Node $nodeName selected for transformation")
+                            
+                            // CRITICAL FIX: Notify Flutter about node tap via method channel
+                            try {
+                                val tappedNodesList = listOf(nodeName)
+                                Log.d(TAG, "📢 Notifying Flutter about node tap: $tappedNodesList")
+                                objectChannel.invokeMethod("onNodeTapped", tappedNodesList)
+                                Log.d(TAG, "✅ Flutter callback triggered successfully")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
+                            }
+                            
                             true
                         }
                         
@@ -854,6 +865,17 @@ class ArCoreCompatView(
                             Log.d(TAG, "🎯 Node $nodeName tapped - selecting for transformation")
                             transformationSystem?.selectNode(transformableNode)
                             Log.d(TAG, "🎯 Node $nodeName selected for transformation")
+                            
+                            // CRITICAL FIX: Notify Flutter about node tap via method channel
+                            try {
+                                val tappedNodesList = listOf(nodeName)
+                                Log.d(TAG, "📢 Notifying Flutter about node tap: $tappedNodesList")
+                                objectChannel.invokeMethod("onNodeTapped", tappedNodesList)
+                                Log.d(TAG, "✅ Flutter callback triggered successfully")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
+                            }
+                            
                             true
                         }
                         
