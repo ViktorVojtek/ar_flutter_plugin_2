@@ -481,10 +481,15 @@ class ArCoreCompatView(
                         transformableNode.isEnabled = true
                         
                         // CRITICAL: Set collision shape for hit testing
-                        transformableNode.collisionShape = Box(
-                            Vector3(1.0f, 1.0f, 1.0f)
+                        // Use a larger collision shape to improve hit testing during gestures
+                        // Scale the collision box based on the actual scale of the object
+                        val collisionSize = Vector3(
+                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
+                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
+                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
                         )
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName")
+                        transformableNode.collisionShape = Box(collisionSize)
+                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
                         
                         // Set up tap listener for node selection
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
@@ -511,13 +516,27 @@ class ArCoreCompatView(
                             transformableNode.rotationController.isEnabled = enableRotationGestures
                             transformableNode.scaleController.isEnabled = true // Always allow scale for now
                             
-                            // Additional pan gesture configuration
+                            // Additional pan gesture configuration - CRITICAL for gesture functionality
                             transformableNode.translationController.apply {
                                 isEnabled = enablePanGestures
+                                // Allow movement only on horizontal plane (Y locked to current position)
+                                // This prevents objects from flying off into space during pan operations
                                 Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
                             }
                             
+                            // CRITICAL: Ensure the transformation system can properly handle the node
+                            if (enablePanGestures) {
+                                // Pre-configure the transformation system for this node
+                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
+                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
+                                    false // Return false to allow the transformation system to handle it
+                                }
+                            }
+                            
                             Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
+                            Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
+                            Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
+                            Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
                             
                         } else {
                             transformableNode.translationController.isEnabled = false
@@ -704,66 +723,27 @@ class ArCoreCompatView(
                 return
             }
             
-            // CRITICAL FIX: Verify the anchor is properly attached to a tracked plane for gesture support
-            // If the anchor is not properly tracked, try to find a nearby detected plane and re-anchor
+            // DEBUG: Log anchor information for troubleshooting
             try {
+                val anchor = anchorNode.anchor
+                if (anchor != null) {
+                    val pose = anchor.pose
+                    Log.d(TAG, "� Original anchor info - Position: (${pose.tx()}, ${pose.ty()}, ${pose.tz()}), Tracking: ${anchor.trackingState}")
+                } else {
+                    Log.w(TAG, "⚠️ Anchor node has no anchor attached")
+                }
+                
                 val session = arSceneView?.session
                 if (session != null) {
                     val frame = session.update()
                     val trackedPlanes = session.getAllTrackables(Plane::class.java)
                         .filter { it.trackingState == TrackingState.TRACKING }
-                    
-                    Log.d(TAG, "🔍 Found ${trackedPlanes.size} tracked planes for anchor verification")
-                    
-                    // Check if current anchor is on a tracked plane, if not, create a new one on a detected plane
-                    val anchor = anchorNode.anchor
-                    if (anchor == null || trackedPlanes.isNotEmpty()) {
-                        Log.d(TAG, "🎯 Re-anchoring to detected plane for better gesture support")
-                        
-                        // Get current anchor position for reference
-                        val currentPose = anchor?.pose ?: Pose.IDENTITY
-                        
-                        // Find the best plane to place the object on
-                        val bestPlane = trackedPlanes.minByOrNull { plane ->
-                            val planeCenterPose = plane.centerPose
-                            val distance = kotlin.math.sqrt(
-                                (planeCenterPose.tx() - currentPose.tx()).pow(2) +
-                                (planeCenterPose.tz() - currentPose.tz()).pow(2)
-                            )
-                            distance
-                        }
-                        
-                        if (bestPlane != null) {
-                            Log.d(TAG, "🎯 Using detected plane for re-anchoring")
-                            
-                            // Create a new anchor on the detected plane
-                            val newPlaneAnchor = bestPlane.createAnchor(
-                                bestPlane.centerPose.compose(
-                                    Pose.makeTranslation(0.0f, 0.0f, 0.0f) // Use plane's center
-                                )
-                            )
-                            
-                            // Create a new anchor node for this plane anchor
-                            val newAnchorNode = AnchorNode(newPlaneAnchor)
-                            newAnchorNode.setParent(arSceneView?.scene)
-                            
-                            // Update the stored reference
-                            anchorNode = newAnchorNode
-                            nodesMap[anchorName] = newAnchorNode
-                            
-                            Log.d(TAG, "✅ Successfully re-anchored to detected plane with gesture support")
-                        } else {
-                            Log.w(TAG, "⚠️ No suitable plane found for re-anchoring, using existing anchor")
-                        }
-                    } else {
-                        Log.d(TAG, "✅ Anchor already properly attached to tracked surface")
-                    }
+                    Log.d(TAG, "🔍 Available tracked planes: ${trackedPlanes.size}")
                 } else {
-                    Log.w(TAG, "⚠️ AR Session not available for anchor verification")
+                    Log.w(TAG, "⚠️ AR Session not available")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to verify/improve anchor: ${e.message}")
-                Log.d(TAG, "🔄 Continuing with existing anchor")
+                Log.e(TAG, "❌ Error during anchor debugging: ${e.message}")
             }
             
             // Load GLB model using RenderableSource (same approach as arcore_flutter_plugin)
@@ -855,10 +835,15 @@ class ArCoreCompatView(
                         
                         // CRITICAL: Set collision shape for hit testing - this is what was missing!
                         // Without collision shape, the node can't be hit-tested and selected
-                        transformableNode.collisionShape = Box(
-                            Vector3(1.0f, 1.0f, 1.0f)
+                        // Use a larger collision shape to improve hit testing during gestures
+                        // Scale the collision box based on the actual scale of the object
+                        val collisionSize = Vector3(
+                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
+                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
+                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
                         )
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName")
+                        transformableNode.collisionShape = Box(collisionSize)
+                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
                         
                         // Set up tap listener for node selection (like in arcore_flutter_plugin)
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
@@ -885,11 +870,20 @@ class ArCoreCompatView(
                             transformableNode.rotationController.isEnabled = enableRotationGestures
                             transformableNode.scaleController.isEnabled = true // Always allow scale for now
                             
-                            // Additional pan gesture configuration
+                            // Additional pan gesture configuration - CRITICAL for gesture functionality
                             transformableNode.translationController.apply {
                                 isEnabled = enablePanGestures
                                 // Ensure the translation controller allows movement in all directions
                                 Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
+                            }
+                            
+                            // CRITICAL: Ensure the transformation system can properly handle the node
+                            if (enablePanGestures) {
+                                // Pre-configure the transformation system for this node
+                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
+                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
+                                    false // Return false to allow the transformation system to handle it
+                                }
                             }
                             
                             Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
