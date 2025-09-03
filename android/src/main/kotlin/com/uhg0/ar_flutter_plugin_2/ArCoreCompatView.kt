@@ -245,15 +245,67 @@ class ArCoreCompatView(
 
     private fun handleTap(motionEvent: MotionEvent) {
         Log.d(TAG, "🎯 HANDLE TAP CALLED: x=${motionEvent.x}, y=${motionEvent.y}")
+        
+        // FIRST: Check for node/object hits (like iOS implementation)
+        // This is the critical missing piece that makes object selection work globally
+        val nodeHitResults = mutableListOf<String>()
+        arSceneView?.let { sceneView ->
+            try {
+                val camera = sceneView.scene.camera
+                if (camera != null) {
+                    // Manual hit testing by checking all transformable nodes
+                    // Check their screen-space distance from the tap point
+                    for ((nodeName, node) in nodesMap) {
+                        if (node is TransformableNode) {
+                            try {
+                                // Get the node's world position
+                                val worldPosition = node.worldPosition
+                                
+                                // Convert world position to screen coordinates
+                                val screenPosition = camera.worldToScreenPoint(worldPosition)
+                                
+                                // Calculate distance between tap point and node's screen position
+                                val distance = kotlin.math.sqrt(
+                                    (screenPosition.x - motionEvent.x).pow(2) + 
+                                    (screenPosition.y - motionEvent.y).pow(2)
+                                )
+                                
+                                // If tap is within reasonable distance of the node's screen projection, consider it hit
+                                // Use a larger threshold to account for object size and collision shapes
+                                if (distance < 150.0) {
+                                    nodeHitResults.add(nodeName)
+                                    Log.d(TAG, "🎯 Object hit detected: $nodeName (distance: ${distance.toInt()}px)")
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Error checking node hit for $nodeName: ${e.message}")
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Error during object hit testing: ${e.message}")
+            }
+        }
+        
+        // If we found object hits, send them to Flutter and return (like iOS)
+        if (nodeHitResults.isNotEmpty()) {
+            Log.d(TAG, "📢 Sending onNodeTap to Flutter with objects: $nodeHitResults")
+            // Remove duplicates like iOS does: Array(Set(nodeHitResults))
+            val uniqueNodeHits = nodeHitResults.toSet().toList()
+            objectChannel.invokeMethod("onNodeTap", uniqueNodeHits)
+            return
+        }
+        
+        // SECOND: If no objects were hit, check for plane hits (existing logic)
         val frame = arSceneView?.arFrame ?: return
         
         if (frame.camera.trackingState != TrackingState.TRACKING) {
-            Log.w(TAG, "⚠️ Camera not tracking, skipping tap")
+            Log.w(TAG, "⚠️ Camera not tracking, skipping plane tap")
             return
         }
 
         val hits = frame.hitTest(motionEvent.x, motionEvent.y)
-        Log.d(TAG, "🎯 Hit test found ${hits.size} hits")
+        Log.d(TAG, "🎯 Hit test found ${hits.size} plane hits")
         for (hit in hits) {
             val trackable = hit.trackable
             Log.d(TAG, "🎯 Hit trackable type: ${trackable::class.simpleName}")
@@ -501,7 +553,7 @@ class ArCoreCompatView(
                             try {
                                 val tappedNodesList = listOf(nodeName)
                                 Log.d(TAG, "📢 Notifying Flutter about node tap: $tappedNodesList")
-                                objectChannel.invokeMethod("onNodeTapped", tappedNodesList)
+                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
                                 Log.d(TAG, "✅ Flutter callback triggered successfully")
                             } catch (e: Exception) {
                                 Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
@@ -855,7 +907,7 @@ class ArCoreCompatView(
                             try {
                                 val tappedNodesList = listOf(nodeName)
                                 Log.d(TAG, "📢 Notifying Flutter about node tap: $tappedNodesList")
-                                objectChannel.invokeMethod("onNodeTapped", tappedNodesList)
+                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
                                 Log.d(TAG, "✅ Flutter callback triggered successfully")
                             } catch (e: Exception) {
                                 Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
