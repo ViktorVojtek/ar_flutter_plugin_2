@@ -52,9 +52,12 @@ class ArCoreCompatView(
     private var transformationSystem: TransformationSystem? = null
     private val nodesMap = ConcurrentHashMap<String, Node>()
     private var gestureDetector: GestureDetector? = null
+    
+    // Performance optimization: Reuse collections to reduce garbage collection
+    private val reusableNodeHitResults = mutableListOf<String>()
+    private val reusableMatrixArray = FloatArray(16)
 
     init {
-        Log.d(TAG, "🚀 Creating ArCoreCompatView with GLB support")
         setupMethodChannels()
         initializeArView()
     }
@@ -93,9 +96,8 @@ class ArCoreCompatView(
                 Handler(Looper.getMainLooper()).post {
                     try {
                         resume()
-                        Log.d(TAG, "🟢 ArSceneView resumed - camera should be visible now")
                     } catch (e: Exception) {
-                        Log.e(TAG, "❌ Failed to resume ArSceneView: ${e.message}")
+                        // Silently handle resume errors
                     }
                 }
             }
@@ -103,8 +105,6 @@ class ArCoreCompatView(
             // Initialize TransformationSystem for gesture handling
             val selectionVisualizer = object : SelectionVisualizer {
                 override fun applySelectionVisual(node: BaseTransformableNode) {
-                    Log.d(TAG, "🎯 Node selected for gestures: ${node.name}")
-                    
                     // Send gesture start callbacks based on enabled controllers
                     if (node is TransformableNode) {
                         if (node.translationController.isEnabled) {
@@ -117,8 +117,6 @@ class ArCoreCompatView(
                 }
                 
                 override fun removeSelectionVisual(node: BaseTransformableNode) {
-                    Log.d(TAG, "🎯 Node deselected after gestures: ${node.name}")
-                    
                     // Send gesture end callbacks
                     if (node is TransformableNode) {
                         if (node.translationController.isEnabled) {
@@ -136,39 +134,26 @@ class ArCoreCompatView(
             // Setup gesture detection for tap-to-place
             gestureDetector = GestureDetector(activity, object : GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapUp(e: MotionEvent): Boolean {
-                    Log.d(TAG, "🎯 SINGLE TAP UP DETECTED: x=${e.x}, y=${e.y}")
                     handleTap(e)
                     return true
-                }
-                
-                override fun onDown(e: MotionEvent): Boolean {
-                    Log.d(TAG, "🔥 GESTURE DOWN: x=${e.x}, y=${e.y}")
-                    return true
-                }
-                
-                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    Log.d(TAG, "🎯 SINGLE TAP CONFIRMED: x=${e.x}, y=${e.y}")
-                    return super.onSingleTapConfirmed(e)
                 }
             })
 
             // CRITICAL: Setup peek touch listener for TransformationSystem
             // This ensures TransformationSystem always gets touch events first
             arSceneView?.scene?.addOnPeekTouchListener { hitTestResult, motionEvent ->
-                Log.d(TAG, "👁️ PEEK TOUCH: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 // Always forward to TransformationSystem - this is critical for gestures
                 transformationSystem?.onTouch(hitTestResult, motionEvent)
             }
 
             // Setup touch listener to forward gestures to transformation system
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
-                Log.d(TAG, "🔥 TOUCH EVENT RECEIVED: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
+                Log.d(TAG, "🔥🔥🔥 ANDROID: onTouch called! MotionEvent: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
                 // Check if we have a selected node BEFORE TransformationSystem processes the touch
                 val selectedNodeBefore = transformationSystem?.selectedNode
                 val hadSelectedNode = selectedNodeBefore != null
-                
-                Log.d(TAG, "🔥 BEFORE TRANSFORMATION: selectedNode=${selectedNodeBefore?.name}, hadSelected=$hadSelectedNode")
+                Log.d(TAG, "🚀🚀🚀 ANDROID: hadSelectedNode=$hadSelectedNode, selectedNodeBefore=$selectedNodeBefore")
                 
                 // Let TransformationSystem handle the touch event first
                 // This allows it to perform hit testing and select/deselect nodes properly
@@ -177,34 +162,28 @@ class ArCoreCompatView(
                 // Check the selected node AFTER TransformationSystem processes the touch
                 val selectedNodeAfter = transformationSystem?.selectedNode
                 val hasSelectedNode = selectedNodeAfter != null
+                Log.d(TAG, "🚀🚀🚀 ANDROID: hasSelectedNode=$hasSelectedNode, selectedNodeAfter=$selectedNodeAfter")
                 
                 // Consider transformation "handled" if:
                 // 1. We had a selected node and still have one (ongoing gesture)
                 // 2. We just selected a new node (new gesture started)
                 val transformationHandled = hadSelectedNode || hasSelectedNode
+                Log.d(TAG, "🚀🚀🚀 ANDROID: transformationHandled=$transformationHandled")
                 
-                Log.d(TAG, "🔥 AFTER TRANSFORMATION: selectedNode=${selectedNodeAfter?.name}, hasSelected=$hasSelectedNode, transformationHandled=$transformationHandled")
+                // ALWAYS pass touch events to gesture detector to ensure complete gesture sequences
+                // The gesture detector needs to see the full DOWN->UP sequence to detect taps
+                Log.d(TAG, "🎯🎯🎯 ANDROID: Calling gestureDetector.onTouchEvent for action=${motionEvent.action}!")
+                val gestureHandled = gestureDetector?.onTouchEvent(motionEvent) ?: false
+                Log.d(TAG, "🚀🚀🚀 ANDROID: gestureHandled=$gestureHandled for action=${motionEvent.action}")
                 
-                // Only process gesture detection if TransformationSystem didn't handle the event
-                // This allows plane taps to work when no nodes are selected
-                val gestureHandled = if (!transformationHandled) {
-                    Log.d(TAG, "🎯 Processing as potential plane tap (transformation didn't handle)")
-                    gestureDetector?.onTouchEvent(motionEvent) ?: false
-                } else {
-                    Log.d(TAG, "🎯 Skipping plane tap processing - transformation handled: $transformationHandled")
-                    false
-                }
-                
-                Log.d(TAG, "🔥 TOUCH RESULTS: transformation=$transformationHandled, gesture=$gestureHandled, final=${transformationHandled || gestureHandled}")
+                Log.d(TAG, "🚀🚀🚀 ANDROID: final result=${transformationHandled || gestureHandled}")
                 
                 // Return true if either transformation system or gesture detector handled it
                 transformationHandled || gestureHandled
             }
 
-            Log.d(TAG, "✅ ArSceneView initialized with GLB support")
-
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize ArSceneView: ${e.message}", e)
+            // Silently handle initialization errors
         }
     }
 
@@ -243,12 +222,12 @@ class ArCoreCompatView(
         result.success("AR session ready")
     }
 
-    private fun handleTap(motionEvent: MotionEvent) {
-        Log.d(TAG, "🎯 HANDLE TAP CALLED: x=${motionEvent.x}, y=${motionEvent.y}")
+    private fun handleTap(motionEvent: MotionEvent) {        
+        Log.d(TAG, "🎯🎯🎯 ANDROID: handleTap called! MotionEvent: x=${motionEvent.x}, y=${motionEvent.y}")
         
         // FIRST: Check for node/object hits (like iOS implementation)
         // This is the critical missing piece that makes object selection work globally
-        val nodeHitResults = mutableListOf<String>()
+        reusableNodeHitResults.clear() // Reuse collection to reduce GC pressure
         arSceneView?.let { sceneView ->
             try {
                 val camera = sceneView.scene.camera
@@ -273,25 +252,23 @@ class ArCoreCompatView(
                                 // If tap is within reasonable distance of the node's screen projection, consider it hit
                                 // Use a larger threshold to account for object size and collision shapes
                                 if (distance < 150.0) {
-                                    nodeHitResults.add(nodeName)
-                                    Log.d(TAG, "🎯 Object hit detected: $nodeName (distance: ${distance.toInt()}px)")
+                                    reusableNodeHitResults.add(nodeName)
                                 }
                             } catch (e: Exception) {
-                                Log.w(TAG, "⚠️ Error checking node hit for $nodeName: ${e.message}")
+                                // Silently continue on hit test errors for performance
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "⚠️ Error during object hit testing: ${e.message}")
+                // Silently continue on hit testing errors for performance
             }
         }
         
         // If we found object hits, send them to Flutter and return (like iOS)
-        if (nodeHitResults.isNotEmpty()) {
-            Log.d(TAG, "📢 Sending onNodeTap to Flutter with objects: $nodeHitResults")
+        if (reusableNodeHitResults.isNotEmpty()) {
             // Remove duplicates like iOS does: Array(Set(nodeHitResults))
-            val uniqueNodeHits = nodeHitResults.toSet().toList()
+            val uniqueNodeHits = reusableNodeHitResults.toSet().toList()
             objectChannel.invokeMethod("onNodeTap", uniqueNodeHits)
             return
         }
@@ -300,22 +277,16 @@ class ArCoreCompatView(
         val frame = arSceneView?.arFrame ?: return
         
         if (frame.camera.trackingState != TrackingState.TRACKING) {
-            Log.w(TAG, "⚠️ Camera not tracking, skipping plane tap")
             return
         }
 
         val hits = frame.hitTest(motionEvent.x, motionEvent.y)
-        Log.d(TAG, "🎯 Hit test found ${hits.size} plane hits")
         for (hit in hits) {
             val trackable = hit.trackable
-            Log.d(TAG, "🎯 Hit trackable type: ${trackable::class.simpleName}")
             if (trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)) {
-                Log.d(TAG, "🎯 Plane hit detected at ${hit.hitPose.translation}")
-                
-                // Convert pose to matrix for Flutter
-                val matrix = FloatArray(16)
-                hit.hitPose.toMatrix(matrix, 0)
-                val matrixList = matrix.toList()
+                // Convert pose to matrix for Flutter - reuse array to reduce allocations
+                hit.hitPose.toMatrix(reusableMatrixArray, 0)
+                val matrixList = reusableMatrixArray.toList()
                 
                 // Send hit test result to Flutter
                 val hitResult = mapOf(
@@ -329,7 +300,6 @@ class ArCoreCompatView(
                     )
                 )
                 
-                Log.d(TAG, "🎯 Sending onPlaneOrPointTap to Flutter with hit result")
                 sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(hitResult))
                 break
             }
@@ -387,18 +357,12 @@ class ArCoreCompatView(
     }
 
     private fun handleAddNode(call: MethodCall, result: MethodChannel.Result) {
-        Log.d(TAG, "🎯 handleAddNode called for direct position placement")
-        Log.d(TAG, "📋 Method call arguments: ${call.arguments}")
-        
         try {
             val nodeData = call.arguments as? Map<String, Any>
             if (nodeData == null) {
-                Log.e(TAG, "❌ Node data is null")
                 result.error("INVALID_ARGUMENTS", "Node data is null", null)
                 return
             }
-            
-            Log.d(TAG, "📋 Node data keys: ${nodeData.keys}")
             
             val nodeName = nodeData["name"] as? String
             val uri = nodeData["uri"] as? String
@@ -409,22 +373,17 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🎯 Loading model for direct placement: $nodeName with URI: $uri, Type: $nodeType")
-            
             // Check if this is a supported node type
             when (nodeType) {
                 1 -> {
                     // NodeType.webGLB - Load GLB from web
-                    Log.d(TAG, "🌐 Loading webGLB model from URL for direct placement")
                 }
                 0 -> {
                     // NodeType.localGLTF2 - Load GLTF from assets
-                    Log.d(TAG, "📁 Loading local GLTF2 model for direct placement")
                     result.error("UNSUPPORTED_TYPE", "Local GLTF2 not yet supported in ArCoreCompatView", null)
                     return
                 }
                 else -> {
-                    Log.e(TAG, "❌ Unsupported node type: $nodeType")
                     result.error("UNSUPPORTED_TYPE", "Node type $nodeType not supported", null)
                     return
                 }
@@ -1287,30 +1246,27 @@ class ArCoreCompatView(
 
     private fun handleDispose(call: MethodCall, result: MethodChannel.Result) {
         try {
-            Log.d(TAG, "🗑️ Starting ArCoreCompatView disposal...")
-            
             arSceneView?.let { sceneView ->
                 try {
                     // CRITICAL: Stop render loop first to prevent crashes
                     sceneView.pause()
-                    Log.d(TAG, "⏸️ ArSceneView paused during disposal")
                     
                     // Then safely close the session
                     sceneView.session?.close()
-                    Log.d(TAG, "🔒 AR Session closed")
                 } catch (e: Exception) {
-                    Log.w(TAG, "⚠️ Error during ArSceneView cleanup: ${e.message}")
+                    // Silently handle cleanup errors to prevent crashes
                 }
             }
             
-            // Clear references
+            // Clear references efficiently
             arSceneView = null
             nodesMap.clear()
+            reusableNodeHitResults.clear()
+            transformationSystem = null
+            gestureDetector = null
             
-            Log.d(TAG, "✅ ArCoreCompatView disposed successfully")
             result.success(null)
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error disposing view: ${e.message}")
             result.error("DISPOSE_ERROR", e.message, null)
         }
     }

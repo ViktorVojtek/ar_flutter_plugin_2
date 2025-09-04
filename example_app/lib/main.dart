@@ -154,12 +154,41 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
     this.arSessionManager!.onInitialize(
       showFeaturePoints: false,
-      showPlanes: true, // Enable plane visualization
+      showPlanes: false, // TEMPORARILY DISABLE plane visualization to test tap detection
       showWorldOrigin: false,
       handlePans: true,
       handleRotation: true,
     );
     this.arObjectManager!.onInitialize();
+
+    // Set up gesture handlers for object interaction
+    this.arObjectManager!.onPanStart = (String nodeName) {
+      print("🔥 Pan started on node: $nodeName");
+    };
+
+    this.arObjectManager!.onPanChange = (String nodeName) {
+      print("🔥 Pan changing on node: $nodeName");
+    };
+
+    this.arObjectManager!.onPanEnd = (String nodeName, Matrix4 transform) {
+      print("🔥 Pan ended on node: $nodeName");
+    };
+
+    this.arObjectManager!.onRotationStart = (String nodeName) {
+      print("🔥 Rotation started on node: $nodeName");
+    };
+
+    this.arObjectManager!.onRotationChange = (String nodeName) {
+      print("🔥 Rotation changing on node: $nodeName");
+    };
+
+    this.arObjectManager!.onRotationEnd = (String nodeName, Matrix4 transform) {
+      print("🔥 Rotation ended on node: $nodeName");
+    };
+
+    this.arObjectManager!.onNodeTap = (List<String> nodeNames) {
+      print("🔥 Node tapped: $nodeNames");
+    };
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
     print("🎯🎯🎯 FLUTTER: Callback set! Function: $onPlaneOrPointTapped");
@@ -201,7 +230,25 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   Future<void> onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
     print("🎯🎯🎯 FLUTTER: onPlaneOrPointTapped called with ${hitTestResults.length} results");
     debugPrint("AR_DEBUG: 🎯 Plane tapped! Hit test results: ${hitTestResults.length}");
-    debugPrint("AR_DEBUG: � Placing Duck model...");
+    
+    // ALWAYS show a notification that tap was detected
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("👆 TAP DETECTED! Results: ${hitTestResults.length}"), 
+        backgroundColor: Colors.blue,
+        duration: Duration(seconds: 1)
+      )
+    );
+    
+    if (hitTestResults.isEmpty) {
+      debugPrint("AR_DEBUG: ❌ No hit test results - make sure planes are detected");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("No surface detected - move device to detect planes"), backgroundColor: Colors.orange)
+      );
+      return;
+    }
+    
+    debugPrint("AR_DEBUG: 🦆 Placing Duck model...");
     
     // Find the first plane hit result
     ARHitTestResult? planeHitTestResult;
@@ -231,16 +278,16 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         var newNode = ARNode(
           type: NodeType.webGLB,
           uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
-          scale: vector_math.Vector3(0.05, 0.05, 0.05), // Larger scale for visibility
-          position: vector_math.Vector3(0.0, 0.0, -0.5),
+          scale: vector_math.Vector3(0.5, 0.5, 0.5), // Larger scale for visibility
+          position: vector_math.Vector3(0.0, 0.0, 0.0), // Place directly on the plane
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
           isTransformable: true,        // Enable transformations
           enablePanGestures: true,      // Enable pan (drag) gestures  
           enableRotationGestures: true, // Enable rotation gestures
         );
         
-        debugPrint("AR_DEBUG: � Creating Duck node...");
-        debugPrint("AR_DEBUG: 📊 Duck details - URI: Duck.glb, Type: webGLB, Scale: (5.0, 5.0, 5.0)");
+        debugPrint("AR_DEBUG: 🦆 Creating Duck node...");
+        debugPrint("AR_DEBUG: 📊 Duck details - URI: Duck.glb, Type: webGLB, Scale: (0.5, 0.5, 0.5)");
         
         // Add the node to the anchor
         String? nodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
@@ -256,7 +303,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           // Show success message to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("� Duck placed! ID: $nodeId"), 
+              content: Text("🦆 Duck placed! ID: $nodeId"), 
               duration: Duration(seconds: 2),
               backgroundColor: Colors.green,
             )

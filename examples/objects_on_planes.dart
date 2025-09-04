@@ -12,6 +12,7 @@ import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
+import 'package:ar_flutter_plugin_2/models/ar_plane.dart';
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
@@ -96,6 +97,8 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
     this.arObjectManager!.onNodeTap = onNodeTapped;
+    // Optional: Set up plane detection callback
+    this.arSessionManager!.onPlaneDetected = onPlaneDetected;
   }
 
   Future<void> onRemoveEverything() async {
@@ -163,5 +166,9 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
         this.nodes.add(newNode);
       }*/
     }
+  }
+
+  void onPlaneDetected(ARPlane plane) {
+    print("Plane detected: ${plane.identifier} with extent ${plane.extent}");
   }
 }

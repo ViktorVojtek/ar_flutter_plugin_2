@@ -60,7 +60,7 @@ class CachedAsset {
     }
 }
 
-class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureRecognizerDelegate, ARSessionDelegate {
+class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureRecognizerDelegate, ARSessionDelegate, ARCoachingOverlayViewDelegate {
     let sceneView: ARSCNView
     let coachingView: ARCoachingOverlayView
     let sessionManagerChannel: FlutterMethodChannel
@@ -77,6 +77,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private var assetCache: [String: CachedAsset] = [:]
     private let maxCacheAge: TimeInterval = 300.0 // 5 minutes
     private let loadingQueue = DispatchQueue(label: "ar.model.loading", qos: .userInitiated)
+    
+    // Performance optimization: Object pools to reduce allocations
+    private let nodeHitResultsPool = NSMutableArray()
+    private let matrixPool = NSMutableArray()
     
     var cancellableCollection = Set<AnyCancellable>() //Used to store all cancellables in (needed for working with Futures)
     var anchorCollection = [String: ARAnchor]() //Used to bookkeep all anchors created by Flutter calls
@@ -127,12 +131,29 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     }
 
     func onDispose(_ result:FlutterResult) {
-                sceneView.session.pause()
-                self.sessionManagerChannel.setMethodCallHandler(nil)
-                self.objectManagerChannel.setMethodCallHandler(nil)
-                self.anchorManagerChannel.setMethodCallHandler(nil)
-                result(nil)
-            }
+        // Comprehensive cleanup to prevent memory leaks
+        sceneView.session.pause()
+        
+        // Clear all resources efficiently
+        resourceHandles.removeAll()
+        assetCache.removeAll()
+        anchorCollection.removeAll()
+        trackedPlanes.removeAll()
+        
+        // Clear object pools
+        nodeHitResultsPool.removeAllObjects()
+        matrixPool.removeAllObjects()
+        
+        // Clear cancellables
+        cancellableCollection.removeAll()
+        
+        // Clear method channel handlers
+        self.sessionManagerChannel.setMethodCallHandler(nil)
+        self.objectManagerChannel.setMethodCallHandler(nil)
+        self.anchorManagerChannel.setMethodCallHandler(nil)
+        
+        result(nil)
+    }
 
     func onSessionMethodCalled(_ call :FlutterMethodCall, _ result:FlutterResult) {
         let arguments = call.arguments as? Dictionary<String, Any>
@@ -232,13 +253,27 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 result(nil)
                 break
             case "addNode":
-                addNode(dict_node: arguments!).sink(receiveCompletion: {completion in }, receiveValue: { val in
+                addNode(dict_node: arguments!).sink(receiveCompletion: { completion in
+                    switch completion {
+                        case .failure(let error):
+                            DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onError", arguments: ["Error: \(error.localizedDescription)"])}
+                        case .finished:
+                            break
+                    }
+                }, receiveValue: { val in
                        result(val)
                     }).store(in: &self.cancellableCollection)
                 break
             case "addNodeToPlaneAnchor":
                 if let dict_node = arguments!["node"] as? Dictionary<String, Any>, let dict_anchor = arguments!["anchor"] as? Dictionary<String, Any> {
-                    addNode(dict_node: dict_node, dict_anchor: dict_anchor).sink(receiveCompletion: {completion in }, receiveValue: { val in
+                    addNode(dict_node: dict_node, dict_anchor: dict_anchor).sink(receiveCompletion: { completion in
+                        switch completion {
+                            case .failure(let error):
+                                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onError", arguments: ["Error: \(error.localizedDescription)"])}
+                            case .finished:
+                                break
+                        }
+                    }, receiveValue: { val in
                            result(val)
                         }).store(in: &self.cancellableCollection)
                 }
@@ -341,7 +376,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 break
             case "uploadAnchor":
                 if let anchorName = arguments!["name"] as? String, let anchor = anchorCollection[anchorName] {
-                    print("---------------- HOSTING INITIATED ------------------")
                     if let ttl = arguments!["ttl"] as? Int {
                         cloudAnchorHandler?.hostCloudAnchorWithTtl(anchorName: anchorName, anchor: anchor, listener: cloudAnchorUploadedListener(parent: self), ttl: ttl)
                     } else {
@@ -352,7 +386,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 break
             case "downloadAnchor":
                 if let anchorId = arguments!["cloudanchorid"] as? String {
-                    print("---------------- RESOLVING INITIATED ------------------")
                     cloudAnchorHandler?.resolveCloudAnchor(anchorId: anchorId, listener: cloudAnchorDownloadedListener(parent: self))
                 }
                 break
@@ -558,8 +591,13 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 case 1: // GLB Model from the web
                     // Add object to scene
                     self.modelBuilder.makeNodeFromWebGlb(name: dict_node["name"] as! String, modelURL: dict_node["uri"] as! String, transformation: dict_node["transformation"] as? Array<NSNumber>)
-                    .sink(receiveCompletion: {
-                                    completion in print("Async Model Downloading Task completed: ", completion)
+                    .sink(receiveCompletion: { completion in
+                        switch completion {
+                            case .failure(let error):
+                                DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onError", arguments: ["Error: \(error.localizedDescription)"])}
+                            case .finished:
+                                break
+                        }
                     }, receiveValue: { val in
                         if let node: SCNNode = val {
                             let nodeName = dict_node["name"] as? String
@@ -902,7 +940,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     args["cloudanchorid"] = anchor?.cloudIdentifier
                     DispatchQueue.main.async {self.parent.anchorManagerChannel.invokeMethod("onCloudAnchorUploaded", arguments: args)}
                 } else {
-                    print("Error uploading anchor, state: \(parent.decodeCloudAnchorState(state: cloudState))")
                     DispatchQueue.main.async {self.parent.sessionManagerChannel.invokeMethod("onError", arguments: ["Error uploading anchor, state: \(self.parent.decodeCloudAnchorState(state: cloudState))"])}
                     return
                 }
@@ -932,7 +969,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
                     })}
                 } else {
-                    print("Error downloading anchor, state \(cloudState)")
                     DispatchQueue.main.async {self.parent.sessionManagerChannel.invokeMethod("onError", arguments: ["Error downloading anchor, state \(cloudState)"])}
                     return
                 }
@@ -1021,15 +1057,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     // ========================================
     
     private func removeNodeDeep(nodeId: String) -> Bool {
-        print("🗑️ Deep removing node: \(nodeId)")
         
         // 1) Get resource handle
         guard let resourceHandle = resourceHandles.removeValue(forKey: nodeId) else {
-            print("⚠️ Resource handle not found for node: \(nodeId)")
             // Still try to remove from scene if it exists
             if let node = sceneView.scene.rootNode.childNode(withName: nodeId, recursively: true) {
                 node.removeFromParentNode()
-                print("✅ Node removed from scene (without resource handle): \(nodeId)")
                 return true
             }
             return false
@@ -1060,47 +1093,31 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let newRefCount = cachedAsset.refCount - 1
                 if newRefCount <= 0 {
                     assetCache.removeValue(forKey: assetKey)
-                    print("🗑️ Removed asset from cache: \(assetKey)")
                 } else {
                     // Update ref count (simplified - in real implementation you'd need atomic operations)
                     assetCache[assetKey] = CachedAsset(uri: cachedAsset.uri, rootNode: cachedAsset.rootNode, refCount: newRefCount)
-                    print("🔢 Asset refCount for \(assetKey): \(newRefCount)")
                 }
             }
         }
         
-        print("✅ Deep node removal completed: \(nodeId)")
         return true
     }
     
     private func purgeCaches() -> Bool {
-        print("🧹 Purging all caches")
-        
-        let cacheSize = assetCache.count
         assetCache.removeAll()
-        print("🗑️ Cleared asset cache (\(cacheSize) items)")
-        
-        let handleCount = resourceHandles.count
         resourceHandles.removeAll()
-        print("🗑️ Cleared resource handles (\(handleCount) items)")
-        
-        print("✅ Cache purging completed")
         return true
     }
     
     private func softResetSession(removeAnchors: Bool, resetTracking: Bool) -> Bool {
-        print("🔄 Soft resetting AR session - removeAnchors: \(removeAnchors), resetTracking: \(resetTracking)")
-        
         var options: ARSession.RunOptions = []
         if removeAnchors { 
             options.insert(.removeExistingAnchors)
             // Also clear our anchor collection
             anchorCollection.removeAll()
-            print("🗑️ Cleared anchor collection")
         }
         if resetTracking { 
             options.insert(.resetTracking) 
-            print("🔄 Reset tracking enabled")
         }
         
         DispatchQueue.main.async {
@@ -1394,7 +1411,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     }
     
     private func createNodeFromAsset(uri: String, transformMatrix: [Double], completion: @escaping (String?) -> Void) {
-        print("🔄 Creating shared node from asset: \(uri)")
         
         loadingQueue.async { [weak self] in
             guard let self = self else {
@@ -1411,18 +1427,52 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 node = cachedAsset.rootNode.clone()
                 let newRefCount = cachedAsset.refCount + 1
                 self.assetCache[uri] = CachedAsset(uri: cachedAsset.uri, rootNode: cachedAsset.rootNode, refCount: newRefCount)
-                print("♻️ Reusing cached asset: \(uri) (refCount: \(newRefCount))")
             } else {
                 // Load new asset - determine type from URI
                 if uri.hasPrefix("http://") || uri.hasPrefix("https://") {
-                    // Web asset
-                    node = self.modelBuilder.makeNodeFromWebGlb(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelURL: uri, transformation: nil)
-                        .sink(receiveCompletion: { _ in }, receiveValue: { webNode in
-                            if let webNode = webNode {
-                                shouldCache = true
-                                node = webNode
-                            }
-                        }).store(in: &self.cancellableCollection) as? SCNNode
+                    // Web asset - use async loading
+                    DispatchQueue.main.async {
+                        self.modelBuilder.makeNodeFromWebGlb(name: "SharedAsset_\(Date().timeIntervalSince1970)", modelURL: uri, transformation: nil)
+                            .sink(receiveCompletion: { completionResult in
+                                switch completionResult {
+                                    case .failure(_):
+                                        completion(nil)
+                                    case .finished:
+                                        break
+                                }
+                            }, receiveValue: { webNode in
+                                if let webNode = webNode {
+                                    // Cache the loaded asset
+                                    self.assetCache[uri] = CachedAsset(uri: uri, rootNode: webNode, refCount: 1)
+                                    
+                                    // Apply transformation matrix
+                                    if transformMatrix.count >= 16 {
+                                        let matrix = transformMatrix.map { Float($0) }
+                                        let transform = SCNMatrix4(
+                                            m11: matrix[0], m12: matrix[1], m13: matrix[2], m14: matrix[3],
+                                            m21: matrix[4], m22: matrix[5], m23: matrix[6], m24: matrix[7],
+                                            m31: matrix[8], m32: matrix[9], m33: matrix[10], m34: matrix[11],
+                                            m41: matrix[12], m42: matrix[13], m43: matrix[14], m44: matrix[15]
+                                        )
+                                        webNode.transform = transform
+                                    }
+                                    
+                                    // Set node name and add to scene
+                                    let nodeName = "SharedAsset_\(Date().timeIntervalSince1970)"
+                                    webNode.name = nodeName
+                                    self.sceneView.scene.rootNode.addChildNode(webNode)
+                                    
+                                    // Track resource handle
+                                    let resourceHandle = ResourceHandle(nodeId: nodeName, node: webNode, assetKey: uri)
+                                    self.resourceHandles[nodeName] = resourceHandle
+                                    
+                                    completion(nodeName)
+                                } else {
+                                    completion(nil)
+                                }
+                            }).store(in: &self.cancellableCollection)
+                    }
+                    return // Exit early for async loading
                 } else if uri.contains("/") {
                     // File system asset
                     let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
@@ -1444,13 +1494,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 
                 if let node = node, shouldCache {
                     self.assetCache[uri] = CachedAsset(uri: uri, rootNode: node)
-                    print("💾 Cached new asset: \(uri)")
                 }
             }
             
             DispatchQueue.main.async {
                 guard let finalNode = node else {
-                    print("❌ Failed to load model instance from: \(uri)")
                     completion(nil)
                     return
                 }
@@ -1480,7 +1528,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let resourceHandle = ResourceHandle(nodeId: nodeName, node: finalNode, assetKey: uri)
                 self.resourceHandles[nodeName] = resourceHandle
                 
-                print("✅ Shared node added to scene: \(nodeName)")
                 completion(nodeName)
             }
         }
@@ -1518,7 +1565,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private func trackResourceHandle(for node: SCNNode, nodeId: String, assetKey: String? = nil) {
         let resourceHandle = ResourceHandle(nodeId: nodeId, node: node, assetKey: assetKey)
         resourceHandles[nodeId] = resourceHandle
-        print("📝 Tracking resource handle for node: \(nodeId)")
     }
     
     // Cleanup old cached assets (call periodically)
@@ -1528,7 +1574,6 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         for (key, asset) in assetCache {
             if asset.refCount <= 0 && (currentTime - asset.creationTime) > maxCacheAge {
                 assetCache.removeValue(forKey: key)
-                print("🧹 Cleaned up old asset: \(key)")
             }
         }
     }
@@ -1536,7 +1581,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
 // ---------------------- ARCoachingOverlayViewDelegate ---------------------------------------
 
-extension IosARView: ARCoachingOverlayViewDelegate {
+extension IosARView {
     
     func coachingOverlayViewWillActivate(_ coachingOverlayView: ARCoachingOverlayView){
         // use this delegate method to hide anything in the UI that could cover the coaching overlay view

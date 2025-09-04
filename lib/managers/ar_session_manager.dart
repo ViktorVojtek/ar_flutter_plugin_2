@@ -30,10 +30,10 @@ class ARSessionManager {
   final PlaneDetectionConfig planeDetectionConfig;
 
   /// Receives hit results from user taps with tracked planes or feature points
-  late ARHitResultHandler onPlaneOrPointTap;
+  ARHitResultHandler? onPlaneOrPointTap;
 
   /// Receives comprehensive plane data when a plane is detected and added to the view
-  late ARPlaneResultHandler onPlaneDetected;
+  ARPlaneResultHandler? onPlaneDetected;
 
   /// Callback that is triggered once error is triggered
   ErrorHandler? onError;
@@ -206,7 +206,9 @@ class ARSessionManager {
               
               print('🎯 Final hit test results count: ${hitTestResults.length}');
               
-              onPlaneOrPointTap(hitTestResults);
+              if (onPlaneOrPointTap != null) {
+                onPlaneOrPointTap!(hitTestResults);
+              }
             }
           } catch (e) {
             print('❌ Error in onPlaneOrPointTap: $e');
@@ -219,7 +221,7 @@ class ARSessionManager {
             try {
               final planeData = call.arguments as Map<String, dynamic>;
               final plane = ARPlane.fromMap(planeData);
-              onPlaneDetected(plane);
+              onPlaneDetected!(plane);
               if (debug) {
                 print('Plane detected: $plane');
               }
