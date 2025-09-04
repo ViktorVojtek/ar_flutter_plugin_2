@@ -539,7 +539,7 @@ class ArCoreCompatView(
                             if (enablePanGestures) {
                                 // Pre-configure the transformation system for this node
                                 transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
+                                    // Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
                                     false // Return false to allow the transformation system to handle it
                                 }
                             }
@@ -892,15 +892,15 @@ class ArCoreCompatView(
                             if (enablePanGestures) {
                                 // Pre-configure the transformation system for this node
                                 transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
+                                    // Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
                                     false // Return false to allow the transformation system to handle it
                                 }
                             }
                             
-                            Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
-                            Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
-                            Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
-                            Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
+                            // Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
+                            // Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
+                            // Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
+                            // Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
                             
                             // Don't auto-select the node - let user tap to select it
                             // This allows proper gesture state management
