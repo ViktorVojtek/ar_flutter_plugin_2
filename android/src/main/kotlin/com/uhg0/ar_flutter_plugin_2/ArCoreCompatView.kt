@@ -19,6 +19,7 @@ import com.google.ar.sceneform.rendering.ModelRenderable
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
 import com.google.ar.sceneform.collision.Box
+import com.google.ar.sceneform.collision.Ray
 import com.google.ar.sceneform.HitTestResult
 import com.google.ar.sceneform.ux.TransformationSystem
 import com.google.ar.sceneform.ux.SelectionVisualizer
@@ -52,6 +53,11 @@ class ArCoreCompatView(
     private var transformationSystem: TransformationSystem? = null
     private val nodesMap = ConcurrentHashMap<String, Node>()
     private var gestureDetector: GestureDetector? = null
+    // Debug: show visual collider aids to make selection areas visible
+    private var debugShowColliders: Boolean = true
+    // Plane-drag helpers: per-node locked Y and drag offsets
+    private val yLocks = ConcurrentHashMap<String, Float>()
+    private val dragOffsets = ConcurrentHashMap<String, Vector3>()
     
     // Performance optimization: Reuse collections to reduce garbage collection
     private val reusableNodeHitResults = mutableListOf<String>()
@@ -134,8 +140,14 @@ class ArCoreCompatView(
             // Setup gesture detection for tap-to-place
             gestureDetector = GestureDetector(activity, object : GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapUp(e: MotionEvent): Boolean {
+                    Log.d(TAG, "🎯🎯🎯 ANDROID: onSingleTapUp triggered! x=${e.x}, y=${e.y}")
                     handleTap(e)
                     return true
+                }
+                
+                override fun onDown(e: MotionEvent): Boolean {
+                    Log.d(TAG, "🎯 ANDROID: GestureDetector onDown x=${e.x}, y=${e.y}")
+                    return true // Must return true to continue processing the gesture
                 }
             })
 
@@ -175,11 +187,59 @@ class ArCoreCompatView(
                 Log.d(TAG, "🎯🎯🎯 ANDROID: Calling gestureDetector.onTouchEvent for action=${motionEvent.action}!")
                 val gestureHandled = gestureDetector?.onTouchEvent(motionEvent) ?: false
                 Log.d(TAG, "🚀🚀🚀 ANDROID: gestureHandled=$gestureHandled for action=${motionEvent.action}")
+
+                // Custom constant-Y plane drag to guarantee unlimited XZ movement regardless of plane hits
+                var customDragHandled = false
+                // Only perform custom pan when single-finger to avoid fighting rotation/scale gestures
+                val isSinglePointer = motionEvent.pointerCount == 1
+                var selected = transformationSystem?.selectedNode as? TransformableNode
+                if (isSinglePointer) {
+                    // If nothing is selected yet on DOWN, try selecting from the hit test result
+                    if (motionEvent.action == MotionEvent.ACTION_DOWN && selected == null) {
+                        val hitNode = hitTestResult.node
+                        val candidate = findTransformableAncestor(hitNode)
+                        if (candidate != null) {
+                            try {
+                                transformationSystem?.selectNode(candidate)
+                                selected = candidate
+                                Log.d(TAG, "🎯 Auto-selected node from hit on DOWN: ${candidate.name}")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to auto-select from hit: ${e.message}")
+                            }
+                        }
+                    }
+
+                    selected?.let { sel ->
+                        val nodeName = sel.name ?: ""
+                        val lockedY = yLocks[nodeName] ?: sel.worldPosition.y.also { yLocks[nodeName] = it }
+                        when (motionEvent.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)?.let { hitPt ->
+                                    val cur = sel.worldPosition
+                                    dragOffsets[nodeName] = Vector3(cur.x - hitPt.x, 0.0f, cur.z - hitPt.z)
+                                    Log.d(TAG, "🎯 Drag start on $nodeName at Y=$lockedY, offset=${dragOffsets[nodeName]}")
+                                }
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                val offset = dragOffsets[nodeName]
+                                screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)?.let { hitPt ->
+                                    val newX = hitPt.x + (offset?.x ?: 0.0f)
+                                    val newZ = hitPt.z + (offset?.z ?: 0.0f)
+                                    sel.worldPosition = Vector3(newX, lockedY, newZ)
+                                    customDragHandled = true
+                                }
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                dragOffsets.remove(nodeName)
+                            }
+                        }
+                    }
+                }
                 
-                Log.d(TAG, "🚀🚀🚀 ANDROID: final result=${transformationHandled || gestureHandled}")
+                Log.d(TAG, "🚀🚀🚀 ANDROID: final result=${transformationHandled || gestureHandled || customDragHandled}")
                 
                 // Return true if either transformation system or gesture detector handled it
-                transformationHandled || gestureHandled
+                (transformationHandled || gestureHandled || customDragHandled)
             }
 
         } catch (e: Exception) {
@@ -188,12 +248,14 @@ class ArCoreCompatView(
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🚀🚀🚀 METHOD CALL: ${call.method} with arguments: ${call.arguments}")
         when (call.method) {
             "init" -> handleInit(call, result)
             "addAnchor" -> handleAddAnchor(call, result)
             "addNode" -> {
                 // Route addNode to addNodeToPlaneAnchor when planeAnchor is provided
                 val arguments = call.arguments as? Map<String, Any>
+                Log.d(TAG, "🔥🔥🔥 addNode called - planeAnchor present: ${arguments?.get("planeAnchor") != null}")
                 if (arguments?.get("planeAnchor") != null) {
                     Log.d(TAG, "📍 addNode with planeAnchor - routing to addNodeToPlaneAnchor")
                     handleAddNodeToPlaneAnchor(call, result)
@@ -202,7 +264,10 @@ class ArCoreCompatView(
                     handleAddNode(call, result)
                 }
             }
-            "addNodeToPlaneAnchor" -> handleAddNodeToPlaneAnchor(call, result)
+            "addNodeToPlaneAnchor" -> {
+                Log.d(TAG, "🔥🔥🔥 addNodeToPlaneAnchor called directly")
+                handleAddNodeToPlaneAnchor(call, result)
+            }
             "removeNode" -> handleRemoveNode(call, result)
             "removeNodeDeep" -> handleRemoveNodeDeep(call, result)
             "purgeCaches" -> handlePurgeCaches(call, result)
@@ -276,7 +341,19 @@ class ArCoreCompatView(
         // SECOND: If no objects were hit, check for plane hits (existing logic)
         val frame = arSceneView?.arFrame ?: return
         
+        // Debug tracking state
+        val trackingState = frame.camera.trackingState
+        Log.d(TAG, "🎯 Camera tracking state: $trackingState")
+        
+        // Get all planes for debugging (need access to session)
+        arSceneView?.session?.let { session ->
+            val allPlanes = session.getAllTrackables(Plane::class.java)
+            val trackedPlanes = allPlanes.filter { it.trackingState == TrackingState.TRACKING }
+            Log.d(TAG, "✈️ Planes detected: ${allPlanes.size}, tracked: ${trackedPlanes.size}")
+        }
+        
         if (frame.camera.trackingState != TrackingState.TRACKING) {
+            Log.w(TAG, "⚠️ Camera not tracking, state: $trackingState")
             return
         }
 
@@ -455,6 +532,7 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
+                Log.d(TAG, "🚀🚀🚀 STARTING model load for: $nodeName, URI: $uri")
                 val modelRenderableBuilder = ModelRenderable.builder()
                 val renderableSourceBuilder = RenderableSource.builder()
                 
@@ -477,12 +555,18 @@ class ArCoreCompatView(
                     return
                 }
                 
+                Log.d(TAG, "🛠️ Building renderable source for: $nodeName")
+                
                 modelRenderableBuilder
                     .setSource(activity, renderableSourceBuilder.build())
                     .setRegistryId(uri)
-                    .build()
+                
+                Log.d(TAG, "🚧 About to call .build() on ModelRenderable for: $nodeName")
+                
+                modelRenderableBuilder.build()
                     .thenAccept { renderable: ModelRenderable ->
-                        Log.d(TAG, "✅ GLB model loaded successfully for direct placement: $nodeName")
+                        Log.d(TAG, "✅✅✅ GLB model loaded successfully for direct placement: $nodeName")
+                        Log.d(TAG, "🔥🔥🔥 About to create collision shapes for: $nodeName")
                         
                         val transformableNode = TransformableNode(transformationSystem)
                         transformableNode.renderable = renderable
@@ -492,15 +576,79 @@ class ArCoreCompatView(
                         transformableNode.isEnabled = true
                         
                         // CRITICAL: Set collision shape for hit testing
-                        // Use a larger collision shape to improve hit testing during gestures
-                        // Scale the collision box based on the actual scale of the object
+                        // RE-ENABLE collision shapes for proper pan gesture detection
                         val collisionSize = Vector3(
-                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
-                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
-                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
+                            maxOf(scaleX * 6.0f, 2.0f), // 6x larger - minimum 2.0 units for better detection
+                            maxOf(scaleY * 6.0f, 2.0f), // 6x larger - minimum 2.0 units for better detection
+                            maxOf(scaleZ * 6.0f, 2.0f)  // 6x larger - minimum 2.0 units for better detection
                         )
                         transformableNode.collisionShape = Box(collisionSize)
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
+                        Log.d(TAG, "🎯 Collision shape set: ${collisionSize.x} x ${collisionSize.y} x ${collisionSize.z}")
+                        
+                        // (Optional visual collider indicator removed for stability)
+                        
+                        // �🏗️ CREATE FLOOR-LEVEL PAN GESTURE HELPER
+                        // Add an invisible collision node at floor level to improve pan gesture detection
+                        if (enablePanGestures) {
+                            try {
+                                // Create a large invisible collision box at floor level
+                                val floorCollisionSize = Vector3(
+                                    maxOf(scaleX * 3.5f, 1.2f), // Larger horizontal area for easy interaction
+                                    0.06f,                       // Very thin vertically
+                                    maxOf(scaleZ * 3.5f, 1.2f)
+                                )
+                                
+                                // Create a simple child node for floor-level collision detection
+                                val floorCollisionNode = Node()
+                                floorCollisionNode.collisionShape = Box(floorCollisionSize)
+                                
+                                // Position the floor collision node near the bottom of the object's collider
+                                // Place slightly above the lowest point to stay pickable
+                                val bottomY = -collisionSize.y / 2.0f + 0.03f
+                                floorCollisionNode.localPosition = Vector3(0.0f, bottomY, 0.0f)
+                                
+                                // Make it a child of the main transformable node
+                                floorCollisionNode.setParent(transformableNode)
+                                
+                                // (Optional visual floor collider indicator removed for stability)
+
+                                // Set up pan gesture detection on the floor collision node
+                                floorCollisionNode.setOnTouchListener { hitTestResult, motionEvent ->
+                                    Log.d(TAG, "🎯 Floor collision node touched for: $nodeName, action: ${motionEvent.action}")
+                                    
+                                    // Forward the touch to the parent transformable node
+                                    // This ensures pan gestures work on the floor area
+                                    transformationSystem?.selectNode(transformableNode)
+                                    
+                                    // Let the transformation system handle the actual gesture
+                                    false // Return false to allow transformation system to process
+                                }
+                                
+                                Log.d(TAG, "🏗️ Added floor-level collision helper for pan gestures: $nodeName, size: $floorCollisionSize")
+                                
+                                // Add a mid-height collision helper to make tapping beams/roof easier
+                                val midCollisionSize = Vector3(
+                                    maxOf(scaleX * 3.0f, 1.0f),
+                                    maxOf(scaleY * 1.0f, 0.5f),
+                                    maxOf(scaleZ * 3.0f, 1.0f)
+                                )
+                                val midCollisionNode = Node().apply {
+                                    collisionShape = Box(midCollisionSize)
+                                    // Place around the middle of the object height
+                                    localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                    setParent(transformableNode)
+                                    setOnTouchListener { _, me ->
+                                        Log.d(TAG, "🎯 Mid collision node touched for: $nodeName, action: ${me.action}")
+                                        transformationSystem?.selectNode(transformableNode)
+                                        false
+                                    }
+                                }
+                                Log.d(TAG, "🏗️ Added mid-height collision helper for pan gestures: $nodeName, size: $midCollisionSize")
+                                
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to create floor collision helper: ${e.message}")
+                            }
+                        }
                         
                         // Set up tap listener for node selection
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
@@ -522,129 +670,148 @@ class ArCoreCompatView(
                         }
                         
                         // Apply gesture properties from Flutter
-                        if (isTransformable) {
-                            transformableNode.translationController.isEnabled = enablePanGestures
-                            transformableNode.rotationController.isEnabled = enableRotationGestures
-                            transformableNode.scaleController.isEnabled = true // Always allow scale for now
+                        // CRITICAL FIX: Enable ARCore's built-in gesture controllers directly
+                        // Use ARCore's proven gesture system instead of custom implementations
+                        
+                        // CRITICAL DEBUG: Log the input values
+                        Log.d(TAG, "🔍 GESTURE DEBUG: enablePanGestures=$enablePanGestures")
+                        Log.d(TAG, "🔍 GESTURE DEBUG: enableRotationGestures=$enableRotationGestures") 
+                        Log.d(TAG, "🔍 GESTURE DEBUG: isTransformable=$isTransformable")
+                        
+                        // CRITICAL FIX: Use custom pan; disable built-in translation to avoid conflicts
+                        transformableNode.translationController.isEnabled = false  // We'll pan via constant-Y plane drag
+                        transformableNode.rotationController.isEnabled = true     // Always enable rotation  
+                        transformableNode.scaleController.isEnabled = false       // Disable scale to avoid conflicts
+                        
+                        // � UNLIMITED MOVEMENT: Configure translation controller for unrestricted XZ movement
+                        Log.d(TAG, "🌍 CONFIGURING UNLIMITED XZ MOVEMENT")
+                        try {
+                            val translationController = transformableNode.translationController
                             
-                            // Additional pan gesture configuration - CRITICAL for gesture functionality
-                            transformableNode.translationController.apply {
-                                isEnabled = enablePanGestures
-                                // Allow movement only on horizontal plane (Y locked to current position)
-                                // This prevents objects from flying off into space during pan operations
-                                Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
+                            // Defer Y lock setup until after we set initial worldPosition below
+                            translationController.let { _ ->
+                                // Remove any plane constraints by not binding to a plane anchor
+                                Log.d(TAG, "🌍 Translation controller configured for unlimited XZ movement")
                             }
-                            
-                            // CRITICAL: Ensure the transformation system can properly handle the node
-                            if (enablePanGestures) {
-                                // Pre-configure the transformation system for this node
-                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    // Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
-                                    false // Return false to allow the transformation system to handle it
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to configure unlimited movement: ${e.message}")
+                        }
+                        
+                        // �🚨 CRITICAL DEBUG: Add specific translation controller debugging
+                        try {
+                            transformableNode.translationController.let { controller ->
+                                Log.d(TAG, "🎯 TRANSLATION CONTROLLER DEBUG:")
+                                Log.d(TAG, "🎯 Translation enabled: ${controller.isEnabled}")
+                                
+                                // Log initial position for comparison
+                                val originalTransform = transformableNode.worldPosition
+                                Log.d(TAG, "🎯 Initial world position: $originalTransform")
+                                
+                                // We'll track position changes via the node's transform listener instead
+                                Log.d(TAG, "🎯 Translation controller setup complete")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to add translation debugging: ${e.message}")
+                        }
+                        
+                        // CRITICAL DEBUG: Log the actual controller states
+                        Log.d(TAG, "🔍 ACTUAL CONTROLLER STATES:")
+                        Log.d(TAG, "🔍 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
+                        Log.d(TAG, "🔍 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
+                        Log.d(TAG, "🔍 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
+                        
+                        // CRITICAL DEBUG: Add position change tracking
+                        var lastPosition = transformableNode.worldPosition
+                        val positionChangeListener = object : Node.TransformChangedListener {
+                            override fun onTransformChanged(node: Node?, parent: Node?) {
+                                val currentPosition = transformableNode.worldPosition
+                                if (currentPosition != lastPosition) {
+                                    Log.d(TAG, "🎯 POSITION CHANGED: from $lastPosition to $currentPosition")
+                                    lastPosition = currentPosition
                                 }
                             }
-                            
-                            Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
-                            Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
-                            Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
-                            Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
-                            
-                        } else {
-                            transformableNode.translationController.isEnabled = false
-                            transformableNode.rotationController.isEnabled = false
-                            transformableNode.scaleController.isEnabled = false
-                            Log.d(TAG, "🎯 All gesture controllers disabled (isTransformable=false)")
                         }
+                        transformableNode.addTransformChangedListener(positionChangeListener)
                         
                         // Apply the scale from Flutter to the node
                         transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
-                        // Set the world position directly (no anchor needed for direct placement)
-                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                        Log.d(TAG, "📍 Set world position for direct placement: ($positionX, $positionY, $positionZ)")
+                        // CRITICAL FIX: Enable unlimited 3D movement - no surface restrictions!
+                        // Instead of forcing anchors to detected planes, allow free-floating objects
+                        // This enables movement beyond tracked surfaces - perfect for small rooms
                         
-                        // CRITICAL FIX: For gesture support, we need to find a detected plane
-                        // Instead of creating virtual anchors, use actual detected planes
+                        Log.d(TAG, "� UNLIMITED MOVEMENT: Enabling free-floating object placement")
+                        
+                        // Add the transformable node directly to the scene without plane constraints
+                        // This allows unlimited panning in 3D space regardless of detected surfaces
+                        arSceneView?.scene?.addChild(transformableNode)
+                        
+                        // Set the world position directly (no anchor constraints)
+                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                        Log.d(TAG, "📍 Set unrestricted world position: ($positionX, $positionY, $positionZ)")
+
+                        // Now that initial world position is set, lock Y to this value during drags
                         try {
-                            val session = arSceneView?.session
-                            if (session != null) {
-                                // Get all tracked planes from the current frame
-                                val frame = session.update()
-                                val trackedPlanes = session.getAllTrackables(Plane::class.java)
-                                    .filter { it.trackingState == TrackingState.TRACKING }
-                                
-                                Log.d(TAG, "🔍 Found ${trackedPlanes.size} tracked planes for auto placement")
-                                
-                                if (trackedPlanes.isNotEmpty()) {
-                                    // Find the best plane to place the object on
-                                    // Prefer horizontal planes that are close to the desired position
-                                    val targetPose = Pose.makeTranslation(positionX, positionY, positionZ)
-                                    
-                                    val bestPlane = trackedPlanes.minByOrNull { plane ->
-                                        val planeCenterPose = plane.centerPose
-                                        val distance = kotlin.math.sqrt(
-                                            (planeCenterPose.tx() - targetPose.tx()).pow(2) +
-                                            (planeCenterPose.tz() - targetPose.tz()).pow(2)
-                                        )
-                                        distance
-                                    }
-                                    
-                                    if (bestPlane != null) {
-                                        Log.d(TAG, "🎯 Using detected plane for auto placement")
-                                        
-                                        // Create an anchor on the detected plane at a position close to desired location
-                                        val planeAnchor = bestPlane.createAnchor(
-                                            bestPlane.centerPose.compose(
-                                                Pose.makeTranslation(0.0f, 0.0f, 0.0f) // Use plane's center
-                                            )
-                                        )
-                                        
-                                        // Create an anchor node for this plane anchor
-                                        val anchorNode = AnchorNode(planeAnchor)
-                                        anchorNode.setParent(arSceneView?.scene)
-                                        
-                                        // Attach the transformable node to the plane anchor
-                                        transformableNode.setParent(anchorNode)
-                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                        
-                                        Log.d(TAG, "✅ Successfully placed node on detected plane with gesture support")
-                                        
-                                        // Store both nodes for cleanup
-                                        nodesMap[nodeName] = transformableNode
-                                        nodesMap["${nodeName}_anchor"] = anchorNode
-                                        
-                                    } else {
-                                        Log.w(TAG, "⚠️ No suitable plane found, falling back to scene attachment")
-                                        // Fallback: Add directly to scene (gestures may not work optimally)
-                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                        arSceneView?.scene?.addChild(transformableNode)
-                                        nodesMap[nodeName] = transformableNode
-                                    }
-                                } else {
-                                    Log.w(TAG, "⚠️ No tracked planes available, falling back to scene attachment")
-                                    // Fallback: Add directly to scene (gestures may not work optimally)
-                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                    arSceneView?.scene?.addChild(transformableNode)
-                                    nodesMap[nodeName] = transformableNode
+                            val originalY = transformableNode.worldPosition.y
+                            Log.d(TAG, "🌍 Locking Y position at: $originalY (direct placement)")
+                            yLocks[nodeName] = originalY
+                            transformableNode.addTransformChangedListener { _, _ ->
+                                val currentPos = transformableNode.worldPosition
+                                if (kotlin.math.abs(currentPos.y - originalY) > 0.01f) {
+                                    transformableNode.worldPosition = Vector3(currentPos.x, originalY, currentPos.z)
+                                    Log.d(TAG, "🌍 Y-axis locked: corrected from ${currentPos.y} to $originalY")
                                 }
-                                
-                            } else {
-                                Log.w(TAG, "⚠️ AR Session not available, falling back to direct scene attachment")
-                                // Fallback: Add the node directly to the scene (gestures may not work optimally)
-                                transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                arSceneView?.scene?.addChild(transformableNode)
-                                nodesMap[nodeName] = transformableNode
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "❌ Failed to find detected plane: ${e.message}")
-                            Log.d(TAG, "🔄 Falling back to direct scene attachment")
-                            // Fallback: Add the node directly to the scene
-                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                            arSceneView?.scene?.addChild(transformableNode)
-                            nodesMap[nodeName] = transformableNode
+                            Log.w(TAG, "⚠️ Failed to add Y lock listener: ${e.message}")
                         }
+                        
+                        // CRITICAL: Configure translation controller for unlimited movement
+                        transformableNode.translationController.let { controller ->
+                            // Allow movement in all directions without plane constraints
+                            Log.d(TAG, "🔧 Configuring unlimited translation controller")
+                        }
+                        
+                        // 🎯 SIMPLE COLLISION IMPROVEMENT FOR BETTER UX (enlarged pick box)
+                        // Create a larger invisible collision box for easier object grabbing
+                        // This makes it much easier to grab and pan objects, especially at small scales
+                        if (enablePanGestures) {
+                            try {
+                                Log.d(TAG, "🎨 Creating larger collision area for easy object grabbing")
+                                
+                                // Create a larger collision box for easier interaction (invisible)
+                                val enlargedCollisionSize = Vector3(
+                                    maxOf(scaleX * 4.0f, 1.2f),  // Make it larger than the object, minimum ~1.2m
+                                    maxOf(scaleY * 4.0f, 1.0f),
+                                    maxOf(scaleZ * 4.0f, 1.2f)
+                                )
+                                
+                                // Apply the larger collision shape directly to the transformable node
+                                transformableNode.collisionShape = Box(enlargedCollisionSize)
+                                
+                                Log.d(TAG, "✅ Created enlarged collision area with size: $enlargedCollisionSize")
+                                // (Optional main collider visualization removed for stability)
+                                    
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Could not create enlarged collision area: ${e.message}")
+                                // Fallback to default collision
+                                transformableNode.collisionShape = Box(Vector3(scaleX, scaleY, scaleZ))
+                            }
+                        }
+                        
+                        // Store the node for cleanup (no anchor needed)
+                        nodesMap[nodeName] = transformableNode
+                        
+                        // Ensure this new node is selected so single-finger drag works immediately
+                        try {
+                            transformationSystem?.selectNode(transformableNode)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to auto-select new node: ${e.message}")
+                        }
+                        
+                        Log.d(TAG, "✅ Successfully placed node with UNLIMITED movement capability")
                         
                         Log.d(TAG, "✅ GLB model added with direct placement: $nodeName")
                         result.success(nodeName)
@@ -808,18 +975,19 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
+                Log.d(TAG, "🎯 Starting ModelRenderable.builder() for planeAnchor placement: $nodeName, URI: $uri")
                 val modelRenderableBuilder = ModelRenderable.builder()
                 val renderableSourceBuilder = RenderableSource.builder()
                 
                 // Check file extension and set appropriate source type
                 if (uri.endsWith(".glb")) {
-                    Log.d(TAG, "📂 Loading GLB file: $uri")
+                    Log.d(TAG, "� Building ModelRenderable with URI: $uri (GLB format)")
                     renderableSourceBuilder
                         .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
                         .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                 } else if (uri.endsWith(".gltf")) {
-                    Log.d(TAG, "📂 Loading GLTF file: $uri")
+                    Log.d(TAG, "� Building ModelRenderable with URI: $uri (GLTF format)")
                     renderableSourceBuilder
                         .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
@@ -830,12 +998,14 @@ class ArCoreCompatView(
                     return
                 }
                 
+                Log.d(TAG, "⚙️ About to call ModelRenderable.builder().build() for: $nodeName")
                 modelRenderableBuilder
                     .setSource(activity, renderableSourceBuilder.build())
                     .setRegistryId(uri)
                     .build()
                     .thenAccept { renderable: ModelRenderable ->
-                        Log.d(TAG, "✅ GLB model loaded successfully: $nodeName")
+                        Log.d(TAG, "✅ GLB model loaded successfully for planeAnchor placement: $nodeName")
+                        Log.d(TAG, "🔥 About to create collision shapes for planeAnchor: $nodeName")
                         
                         val transformableNode = TransformableNode(transformationSystem)
                         transformableNode.renderable = renderable
@@ -876,58 +1046,74 @@ class ArCoreCompatView(
                         }
                         
                         // Apply gesture properties from Flutter
-                        if (isTransformable) {
-                            transformableNode.translationController.isEnabled = enablePanGestures
-                            transformableNode.rotationController.isEnabled = enableRotationGestures
-                            transformableNode.scaleController.isEnabled = true // Always allow scale for now
-                            
-                            // Additional pan gesture configuration - CRITICAL for gesture functionality
-                            transformableNode.translationController.apply {
-                                isEnabled = enablePanGestures
-                                // Ensure the translation controller allows movement in all directions
-                                Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
-                            }
-                            
-                            // CRITICAL: Ensure the transformation system can properly handle the node
-                            if (enablePanGestures) {
-                                // Pre-configure the transformation system for this node
-                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    // Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
-                                    false // Return false to allow the transformation system to handle it
-                                }
-                            }
-                            
-                            // Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
-                            // Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
-                            // Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
-                            // Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
-                            
-                            // Don't auto-select the node - let user tap to select it
-                            // This allows proper gesture state management
-                            
-                        } else {
-                            transformableNode.translationController.isEnabled = false
-                            transformableNode.rotationController.isEnabled = false
-                            transformableNode.scaleController.isEnabled = false
-                            Log.d(TAG, "🎯 All gesture controllers disabled (isTransformable=false)")
-                        }
+                        // Use custom pan (disable built-in translation), keep rotation per flag
+                        transformableNode.translationController.isEnabled = false
+                        transformableNode.rotationController.isEnabled = enableRotationGestures
+                        transformableNode.scaleController.isEnabled = isTransformable // Only enable scale if fully transformable
+                        
+                        Log.d(TAG, "🎯 Gesture controllers configured - pan: $enablePanGestures, rotation: $enableRotationGestures, scale: $isTransformable")
+                        Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
+                        Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
+                        Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
+                        
+                        // Don't auto-select the node - let user tap to select it
+                        // This allows proper gesture state management
                         
                         // Apply the scale from Flutter to the node
                         transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
-                        // Add the node as a child of the anchor
+                        // 🌍 UNLIMITED MOVEMENT: Initially place at anchor, then detach for unlimited XZ movement
+                        Log.d(TAG, "🌍 Setting up unlimited XZ movement")
+                        
+                        // Store original Y position for locking  
+                        val originalY = anchorNode.worldPosition.y
+                        Log.d(TAG, "🌍 Original anchor Y position: $originalY")
+                        
+                        // Initially place node at anchor position
                         transformableNode.setParent(anchorNode)
+                        transformableNode.localPosition = Vector3.zero()
+                        
+                        // Get world position before detaching
+                        val worldPos = transformableNode.worldPosition
+                        Log.d(TAG, "🌍 Initial world position: $worldPos")
+                        
+                        // Detach from anchor and reparent to scene for unlimited movement
+                        transformableNode.setParent(arSceneView?.scene)
+                        transformableNode.worldPosition = worldPos
+                        
+                        Log.d(TAG, "🌍 Node detached from anchor - unlimited XZ movement enabled")
+                        
+                        // Add Y-axis locking
+                        transformableNode.addTransformChangedListener { node, parent ->
+                            val currentPos = transformableNode.worldPosition
+                            if (Math.abs(currentPos.y - originalY) > 0.01f) {
+                                // Y position changed, lock it back
+                                val correctedPos = Vector3(currentPos.x, originalY, currentPos.z)
+                                transformableNode.worldPosition = correctedPos
+                                Log.d(TAG, "🌍 Y-axis locked: ${currentPos.y} → $originalY")
+                            }
+                        }
+                        // Record locked Y for custom drag
+                        yLocks[nodeName] = originalY
                         
                         // Store the node for later reference
                         nodesMap[nodeName] = transformableNode
+                        
+                        // Auto-select the node to allow immediate panning
+                        try {
+                            transformationSystem?.selectNode(transformableNode)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to auto-select new anchored node: ${e.message}")
+                        }
                         
                         Log.d(TAG, "✅ GLB model added to plane anchor: $nodeName")
                         result.success(nodeName)
                     }
                     .exceptionally { throwable: Throwable ->
-                        Log.e(TAG, "❌ Failed to load GLB model: ${throwable.message}")
+                        Log.e(TAG, "❌ Failed to load GLB model for planeAnchor: ${throwable.message}", throwable)
+                        Log.e(TAG, "🚫 ModelRenderable.builder() failed for: $nodeName, URI: $uri")
                         result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
                         null
                     }
@@ -953,7 +1139,18 @@ class ArCoreCompatView(
                 if (node != null) {
                     Log.d(TAG, "🗑️ Removing node by name: $nodeName")
                     node.setParent(null) // Remove from scene
+                    // Clear selection if this node was currently selected
+                    try {
+                        if (transformationSystem?.selectedNode === node) {
+                            transformationSystem?.selectNode(null)
+                            Log.d(TAG, "🧽 Cleared selection for removed node: $nodeName")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "⚠️ Unable to clear selection on remove: ${e.message}")
+                    }
                     nodesMap.remove(nodeName)
+                    yLocks.remove(nodeName)
+                    dragOffsets.remove(nodeName)
                     
                     // Also remove associated virtual anchor if it exists
                     val virtualAnchorName = "${nodeName}_anchor"
@@ -991,6 +1188,15 @@ class ArCoreCompatView(
                     
                     // Remove from scene graph
                     node.setParent(null)
+                    // Clear selection if this node was currently selected
+                    try {
+                        if (transformationSystem?.selectedNode === node) {
+                            transformationSystem?.selectNode(null)
+                            Log.d(TAG, "🧽 Cleared selection for deep-removed node: $nodeId")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "⚠️ Unable to clear selection on deep remove: ${e.message}")
+                    }
                     
                     // If it's a TransformableNode, disable it
                     if (node is TransformableNode) {
@@ -1222,6 +1428,15 @@ class ArCoreCompatView(
             
             // Clear the tracking
             nodesMap.clear()
+            yLocks.clear()
+            dragOffsets.clear()
+            // Clear lingering selection
+            try {
+                transformationSystem?.selectNode(null)
+                Log.d(TAG, "🧽 Cleared selection after removeAllObjects")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Unable to clear selection after removeAllObjects: ${e.message}")
+            }
             
             Log.d(TAG, "✅ Removed $removedCount objects from scene")
             result.success(true)
@@ -1264,6 +1479,8 @@ class ArCoreCompatView(
             reusableNodeHitResults.clear()
             transformationSystem = null
             gestureDetector = null
+            yLocks.clear()
+            dragOffsets.clear()
             
             result.success(null)
         } catch (e: Exception) {
@@ -1283,4 +1500,31 @@ class ArCoreCompatView(
 
     // Extension function to convert pose matrix to list for Flutter
     private fun FloatArray.toList(): List<Float> = this.asList()
+
+    // Project a screen point to a horizontal plane at y = planeY in world space
+    private fun screenPointToYPlane(x: Float, y: Float, planeY: Float): Vector3? {
+        val sceneView = arSceneView ?: return null
+        val camera = sceneView.scene?.camera ?: return null
+        return try {
+            val ray = camera.screenPointToRay(x, y)
+            val dy = ray.direction.y
+            if (kotlin.math.abs(dy) < 1e-5f) return null
+            val t = (planeY - ray.origin.y) / dy
+            if (t < 0f) return null
+            val hit = Vector3.add(ray.origin, ray.direction.scaled(t))
+            hit
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Find the nearest TransformableNode up the ancestry from a touched node
+    private fun findTransformableAncestor(node: Node?): TransformableNode? {
+        var cur = node
+        while (cur != null) {
+            if (cur is TransformableNode) return cur
+            cur = cur.parent
+        }
+        return null
+    }
 }

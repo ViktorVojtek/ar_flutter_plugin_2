@@ -26,6 +26,7 @@ class ARNode {
     this.enablePanGestures = false,
     this.enableRotationGestures = false,
   })  : name = name ?? UniqueKey().toString(),
+        _originalScale = scale ?? Vector3(1.0, 1.0, 1.0),
         transformNotifier = ValueNotifier(createTransformMatrix(
             transformation, position, scale, rotation, eulerAngles)),
         data = data ?? null;
@@ -35,6 +36,9 @@ class ARNode {
 
   /// Specifies the path to the 3D model used for the [ARNode]. Depending on the [type], this is either a relative path or an URL to an online asset
   String uri;
+
+  /// Private field to store original scale values
+  final Vector3 _originalScale;
 
   /// Determines the receiver's transform.
   /// The transform is the combination of the position, rotation and scale defined below.
@@ -56,7 +60,7 @@ class ARNode {
   }
 
   /// Determines the receiver's scale.
-  Vector3 get scale => transform.matrixScale;
+  Vector3 get scale => _originalScale;
 
   set scale(Vector3 value) {
     transform =

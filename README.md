@@ -32,6 +32,33 @@ if (ok) {
 📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
 📖 **[NUKE ALL Complete Documentation](NUKE_ALL_DOCUMENTATION.md)**
 
+## NEW: Smart Object Placement System 🎯
+
+This plugin now includes a **size-based classification system** for optimal object placement and interaction:
+
+- **Size-Based Types**: SMALL, MEDIUM, BIG instead of object-specific types
+- **Smart Placement**: Automatic optimal distance calculation based on object size
+- **Enhanced Gestures**: Size-aware touch detection and interaction areas
+- **Cross-Platform**: Consistent behavior on Android and iOS
+- **Flexible**: Same size type works for different object categories
+
+### Smart Placement Usage
+
+```dart
+// Place objects with optimal positioning based on size
+String? result = await arObjectManager.addNodeWithSmartPlacement(
+  arNode,
+  sizeType: "BIG", // SMALL, MEDIUM, or BIG
+);
+```
+
+**Size Guidelines:**
+- **SMALL**: Objects < 1m (grills, decorations) → placed 1.5-2m away
+- **MEDIUM**: Objects 1-2m (tables, chairs) → placed 2.5-3m away  
+- **BIG**: Objects > 2m (pergolas, gazebos) → placed 4-6m away
+
+📖 **[Size-Based Classification Documentation](SIZE_BASED_CLASSIFICATION.md)**
+
 ---
 
 This version is a direct adaptation of the original ar_flutter_plugin (https://pub.dev/packages/ar_flutter_plugin), 

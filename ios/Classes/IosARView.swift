@@ -728,9 +728,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         }
         let touchLocation = recognizer.location(in: sceneView)
     
-        let allHitResults = sceneView.hitTest(touchLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-        // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-        let nodeHitResults: Array<String> = allHitResults.compactMap { nearestParentWithNameStart(node: $0.node, characters: "[#")?.name }
+        // Enhanced hit detection for large objects
+        let nodeHitResults = detectNodeHitsEnhanced(at: touchLocation, in: sceneView)
         if (nodeHitResults.count != 0) {
             DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onNodeTap", arguments: Array(Set(nodeHitResults)))} // Chaining of Array and Set is used to remove duplicates
             return
@@ -766,22 +765,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         {
             panStartLocation = recognizer.location(in: sceneView)
             if let startLocation = panStartLocation {
-                let allHitResults = sceneView.hitTest(startLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-                // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-                let nodeHitResults: Array<String> = allHitResults.compactMap {
-                    if let nearestNode = nearestParentWithNameStart(node: $0.node, characters: "[#") {
-                        panningNode = nearestNode
-                        return nearestNode.name
-                    }else{
-                        return nil
+                // Use enhanced node detection for better large object handling
+                let nodeHitResults = detectNodeHitsEnhanced(at: startLocation, in: sceneView)
+                
+                if let firstNodeName = nodeHitResults.first {
+                    panningNode = sceneView.scene.rootNode.childNode(withName: firstNodeName, recursively: true)
+                    if let panNode = panningNode {
+                        panningNodeCurrentWorldLocation = panNode.worldPosition
+                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: firstNodeName)}
+                        return
                     }
-                }
-                if (nodeHitResults.count != 0 && panningNode != nil) {
-                    panningNodeCurrentWorldLocation = panningNode?.worldPosition
-                    if let panningNodeName = panningNode?.name {
-                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: panningNodeName)}
-                    }
-                    return
                 }
             }
         }
@@ -832,21 +825,15 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         {
             rotationStartLocation = recognizer.location(in: sceneView)
             if let startLocation = rotationStartLocation {
-                let allHitResults = sceneView.hitTest(startLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-                // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-                let nodeHitResults: Array<String> = allHitResults.compactMap {
-                    if let nearestNode = nearestParentWithNameStart(node: $0.node, characters: "[#") {
-                        panningNode = nearestNode
-                        return nearestNode.name
-                    }else{
-                        return nil
+                // Use enhanced node detection for better large object handling
+                let nodeHitResults = detectNodeHitsEnhanced(at: startLocation, in: sceneView)
+                
+                if let firstNodeName = nodeHitResults.first {
+                    panningNode = sceneView.scene.rootNode.childNode(withName: firstNodeName, recursively: true)
+                    if let panNode = panningNode {
+                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: firstNodeName)}
+                        return
                     }
-                }
-                if (nodeHitResults.count != 0 && panningNode != nil) {
-                    if let panNodeName = panningNode?.name {
-                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: panNodeName)}
-                    }
-                    return
                 }
             }
         }
@@ -899,6 +886,77 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         }
         if let parent = node?.parent { return nearestParentWithNameStart(node: parent, characters: characters) }
         return nil
+    }
+    
+    /**
+     * Enhanced node hit detection that works better with large objects
+     * 
+     * This addresses the issue where large objects (pergolas) are hard to select
+     * by implementing a larger touch area and better hit testing logic.
+     */
+    func detectNodeHitsEnhanced(at location: CGPoint, in sceneView: ARSCNView) -> [String] {
+        // First try standard hit testing
+        let standardHitResults = sceneView.hitTest(location, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
+        let standardNodeResults: [String] = standardHitResults.compactMap { 
+            nearestParentWithNameStart(node: $0.node, characters: "[#")?.name 
+        }
+        
+        if !standardNodeResults.isEmpty {
+            return standardNodeResults
+        }
+        
+        // Enhanced hit testing for large objects - expand touch area
+        let expandedRadius: CGFloat = 50.0 // 50 points around the touch
+        var enhancedResults: [String] = []
+        
+        // Check all nodes in the scene to see if any are within the expanded touch area
+        sceneView.scene.rootNode.enumerateChildNodes { (node, _) in
+            if let nodeName = node.name, nodeName.hasPrefix("[#") {
+                let screenPoint = sceneView.projectPoint(node.position)
+                let nodeScreenLocation = CGPoint(x: CGFloat(screenPoint.x), y: CGFloat(screenPoint.y))
+                
+                // Calculate distance from touch to node's screen position
+                let dx = location.x - nodeScreenLocation.x
+                let dy = location.y - nodeScreenLocation.y
+                let distance = sqrt(dx * dx + dy * dy)
+                
+                // Calculate dynamic touch radius based on node scale
+                let nodeScale = max(node.scale.x, max(node.scale.y, node.scale.z))
+                let dynamicRadius = max(expandedRadius, CGFloat(nodeScale) * 25.0) // Larger radius for large objects
+                
+                if distance <= dynamicRadius {
+                    // Additional depth check to prefer closer objects
+                    let cameraPosition = sceneView.pointOfView?.position ?? SCNVector3Zero
+                    let nodeDistance = distance3D(from: cameraPosition, to: node.position)
+                    
+                    enhancedResults.append(nodeName)
+                    print("🎯 Enhanced hit detected: \(nodeName), scale: \(nodeScale), distance: \(distance), radius: \(dynamicRadius)")
+                }
+            }
+        }
+        
+        // Sort by proximity to camera (closer objects first)
+        enhancedResults.sort { name1, name2 in
+            guard let node1 = sceneView.scene.rootNode.childNode(withName: name1, recursively: true),
+                  let node2 = sceneView.scene.rootNode.childNode(withName: name2, recursively: true),
+                  let cameraPosition = sceneView.pointOfView?.position else {
+                return false
+            }
+            
+            let distance1 = distance3D(from: cameraPosition, to: node1.position)
+            let distance2 = distance3D(from: cameraPosition, to: node2.position)
+            return distance1 < distance2
+        }
+        
+        return enhancedResults
+    }
+    
+    // Helper function to calculate 3D distance between two points
+    private func distance3D(from point1: SCNVector3, to point2: SCNVector3) -> Float {
+        let dx = point1.x - point2.x
+        let dy = point1.y - point2.y
+        let dz = point1.z - point2.z
+        return sqrt(dx * dx + dy * dy + dz * dz)
     }
     
     func addPlaneAnchor(transform: Array<NSNumber>, name: String){

@@ -12,6 +12,7 @@ import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:vector_math/vector_math_64.dart' as vector_math;
 import 'auto_placement_test.dart';
+// import 'pergola_placement_example.dart';
 
 void main() {
   runApp(MyApp());
@@ -72,6 +73,23 @@ class MainMenu extends StatelessWidget {
               child: Text('Object Gestures Example'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                minimumSize: Size(200, 50),
+              ),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => TestPergolaSample(),
+                  ),
+                );
+              },
+              child: Text('Pergola Touch Test'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
                 foregroundColor: Colors.white,
                 minimumSize: Size(200, 50),
               ),
@@ -153,8 +171,9 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     this.arAnchorManager = arAnchorManager;
 
     this.arSessionManager!.onInitialize(
-      showFeaturePoints: false,
-      showPlanes: false, // TEMPORARILY DISABLE plane visualization to test tap detection
+      showFeaturePoints: true,
+      showPlanes: true, // ENABLE plane visualization for tap detection
+      customPlaneTexturePath: "triangle.png",
       showWorldOrigin: false,
       handlePans: true,
       handleRotation: true,
@@ -325,6 +344,350 @@ class _ObjectGesturesState extends State<ObjectGestures> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("No surface detected"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
       );
+    }
+  }
+}
+
+// Simple test class to bypass import issues
+class TestPergolaSample extends StatefulWidget {
+  @override
+  _TestPergolaSampleState createState() => _TestPergolaSampleState();
+}
+
+class _TestPergolaSampleState extends State<TestPergolaSample> {
+  ARSessionManager? arSessionManager;
+  ARObjectManager? arObjectManager;
+  ARLocationManager? arLocationManager;
+  ARAnchorManager? arAnchorManager;
+
+  List<ARNode> nodes = [];
+  String _statusText = "⏳ Initializing AR...";
+  bool _isARInitialized = false;
+
+  @override
+  void dispose() {
+    print("🧹 Test: Disposing AR session");
+    arSessionManager?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("Touch Test"),
+        backgroundColor: Colors.green[700],
+        foregroundColor: Colors.white,
+      ),
+      body: Stack(
+        children: [
+          // AR View - Full screen for proper tap detection
+          ARView(
+            onARViewCreated: _onARViewCreated,
+            planeDetectionConfig: PlaneDetectionConfig.horizontal,
+          ),
+          // Status overlay
+          Positioned(
+            top: 20,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _statusText,
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    "Objects placed: ${nodes.length}",
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Control panel - positioned above AR view but allowing AR interaction
+          Positioned(
+            bottom: 20,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.95),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 8,
+                    offset: Offset(0, -2),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "Touch Test - Two Placement Methods:",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green[700],
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    "1. Button = Direct placement (limited gestures)\n2. Tap PLANE = Full gesture support",
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 16),
+                  
+                  // Test button
+                  ElevatedButton(
+                    onPressed: () {
+                      print("🎯🎯🎯 TEST BUTTON PRESSED!");
+                      _testPlace();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.purple,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      "DIRECT PLACEMENT",
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  // Clear button
+                  ElevatedButton(
+                    onPressed: _clearAllObjects,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      "CLEAR ALL",
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onARViewCreated(
+      ARSessionManager arSessionManager,
+      ARObjectManager arObjectManager,
+      ARAnchorManager arAnchorManager,
+      ARLocationManager arLocationManager) async {
+    
+    print("🚀 Test: AR View created");
+    
+    this.arSessionManager = arSessionManager;
+    this.arObjectManager = arObjectManager;
+    this.arAnchorManager = arAnchorManager;
+    this.arLocationManager = arLocationManager;
+
+    try {
+      this.arSessionManager!.onInitialize(
+        showFeaturePoints: true,
+        showPlanes: true,
+        customPlaneTexturePath: "triangle.png",
+        showWorldOrigin: true,
+        handleTaps: true,
+        handlePans: true,
+        handleRotation: true,
+      );
+      
+      this.arObjectManager!.onInitialize();
+
+      // Set up tap-to-place for gesture testing
+      this.arSessionManager!.onPlaneOrPointTap = _onPlaneOrPointTapped;
+
+      // Set up gesture callbacks
+      this.arObjectManager!.onNodeTap = (List<String> nodeNames) {
+        print("🔥 Node tapped: $nodeNames");
+        setState(() {
+          _statusText = "🎯 Tapped on: ${nodeNames.join(', ')} - Try pan/rotate gestures!";
+        });
+      };
+
+      setState(() {
+        _isARInitialized = true;
+        _statusText = "✅ AR ready! Tap 'TEST TOUCH' for direct placement or tap a plane for gesture-enabled placement.";
+      });
+
+    } catch (e) {
+      print("❌ Error initializing AR: $e");
+      setState(() {
+        _statusText = "❌ AR initialization failed: $e";
+      });
+    }
+  }
+
+  void _testPlace() async {
+    print("🎯🎯🎯 FLUTTER: Test button pressed!");
+    
+    if (arObjectManager == null) {
+      print("❌ ARObjectManager not initialized");
+      setState(() {
+        _statusText = "❌ AR not ready";
+      });
+      return;
+    }
+
+    try {
+      setState(() {
+        _statusText = "🚀 Testing direct placement (limited gestures)...";
+      });
+
+      // Create a simple transform matrix with position only
+      var transform = Matrix4.identity();
+      transform.setTranslation(vector_math.Vector3(0, 0, -1)); // 1 meter forward
+
+      var newNode = ARNode(
+        type: NodeType.webGLB,
+        uri: "https://storage.googleapis.com/vd_ar_bucket/Pergola_Eva_450cm_pivottest-3-94ca859f-be4a-4649-bef5-ef44c94468da.glb",
+        position: vector_math.Vector3(0, 0, -2), // 2 meters forward for big pergola
+        scale: vector_math.Vector3(0.05, 0.05, 0.05), // Even smaller scale for easier manipulation
+        rotation: vector_math.Vector4(0, 0, 0, 1), // Direct rotation
+        isTransformable: true, // FIXED: Enable transformations like in ObjectGestures
+        enablePanGestures: true, // Enable pan gestures for testing
+        enableRotationGestures: true, // Enable rotation gestures for testing
+      );
+
+      String? nodeId = await arObjectManager!.addNode(newNode);
+      if (nodeId != null) {
+        nodes.add(newNode);
+        print("✅ TEST: Object added with ID: $nodeId");
+        setState(() {
+          _statusText = "✅ Direct placement successful! For full gestures, tap on a plane instead.";
+        });
+      } else {
+        print("❌ Failed to add object");
+        setState(() {
+          _statusText = "❌ Failed to place object";
+        });
+      }
+    } catch (e) {
+      print("❌ Error in test: $e");
+      setState(() {
+        _statusText = "❌ Error: $e";
+      });
+    }
+  }
+
+  // Handle plane taps for gesture-enabled placement
+  Future<void> _onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
+    print("🎯🎯🎯 FLUTTER: Plane tapped for gesture placement! Hit test results: ${hitTestResults.length}");
+    
+    if (hitTestResults.isEmpty) {
+      setState(() {
+        _statusText = "No surface detected - move device to detect planes";
+      });
+      return;
+    }
+    
+    setState(() {
+      _statusText = "🚀 Placing pergola on plane for full gesture support...";
+    });
+    
+    // Find the first plane hit result
+    ARHitTestResult? planeHitTestResult;
+    try {
+      planeHitTestResult = hitTestResults.firstWhere(
+        (hitTestResult) => hitTestResult.type == ARHitTestResultType.plane,
+      );
+    } catch (e) {
+      planeHitTestResult = hitTestResults.first;
+    }
+    
+    // Create anchor at the tapped position
+    var newAnchor = ARPlaneAnchor(transformation: planeHitTestResult.worldTransform);
+    bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
+    
+    if (didAddAnchor == true) {
+      print("📍 Anchor created successfully");
+      
+      var newNode = ARNode(
+        type: NodeType.webGLB,
+        uri: "https://storage.googleapis.com/vd_ar_bucket/Pergola_Eva_450cm_pivottest-3-94ca859f-be4a-4649-bef5-ef44c94468da.glb",
+        position: vector_math.Vector3(0, 0, 0), // Place directly on the plane
+        scale: vector_math.Vector3(0.05, 0.05, 0.05), // Even smaller scale for easier manipulation
+        rotation: vector_math.Vector4(0, 0, 0, 1),
+        isTransformable: true, // FIXED: Enable transformations like in ObjectGestures
+        enablePanGestures: true, // Enable pan gestures for testing
+        enableRotationGestures: true, // Enable rotation gestures for testing
+      );
+      
+      String? nodeId = await arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
+      
+      if (nodeId != null) {
+        nodes.add(newNode);
+        print("✅ GESTURE-ENABLED: Pergola placed with full gesture support! ID: $nodeId");
+        setState(() {
+          _statusText = "✅ Pergola placed with gestures! Tap to select, then pan/rotate.";
+        });
+      } else {
+        setState(() {
+          _statusText = "❌ Failed to place pergola on plane";
+        });
+      }
+    } else {
+      setState(() {
+        _statusText = "❌ Failed to create anchor";
+      });
+    }
+  }
+
+  // Clear all placed objects
+  Future<void> _clearAllObjects() async {
+    if (arObjectManager == null || nodes.isEmpty) return;
+
+    setState(() {
+      _statusText = "🧹 Removing all objects...";
+    });
+
+    try {
+      for (ARNode node in nodes) {
+        await arObjectManager!.removeNode(node);
+      }
+      
+      nodes.clear();
+      
+      setState(() {
+        _statusText = "✅ All objects removed. Ready for new placement.";
+      });
+      
+    } catch (e) {
+      print("❌ Error removing objects: $e");
+      setState(() {
+        _statusText = "❌ Error removing objects: $e";
+      });
     }
   }
 }

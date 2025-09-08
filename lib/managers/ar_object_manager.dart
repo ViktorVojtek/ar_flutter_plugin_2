@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
+import 'package:ar_flutter_plugin_2/utils/ar_placement_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math_64.dart';
 
@@ -237,8 +238,80 @@ class ARObjectManager {
         String? nodeName = await _channel.invokeMethod<String>('addNode', node.toMap());
         return nodeName; // Return the node name directly from native side
       }
-    } on PlatformException catch (e) {
+    } on PlatformException {
       return null;
+    }
+  }
+
+  /// Add node with intelligent placement based on object size
+  /// 
+  /// This method automatically calculates optimal placement distance and position
+  /// based on the object's scale and size type to address issues with large objects being
+  /// placed too close or small objects too far away.
+  /// 
+  /// [node] - The ARNode to place
+  /// [sizeType] - Size category: 'BIG', 'MEDIUM' (default), 'SMALL'
+  /// [planeAnchor] - Optional plane anchor to attach to
+  /// [userHeight] - Estimated user height for better positioning (default 1.7m)
+  Future<String?> addNodeWithSmartPlacement(
+    ARNode node, {
+    String sizeType = 'MEDIUM',
+    ARPlaneAnchor? planeAnchor,
+    double userHeight = 1.7,
+  }) async {
+    if (debug) {
+      print('[ARObjectManager] Smart placement for ${node.name}');
+      print('Object scale: ${node.scale}');
+      print('Size type: $sizeType');
+      print('Size category: ${ARObjectPlacementUtils.getObjectSizeCategory(node.scale)}');
+    }
+    
+    // Calculate optimal placement distances (but don't set position directly)
+    double optimalDistance = ARObjectPlacementUtils.calculateOptimalDistance(sizeType, node.scale);
+    double heightOffset = ARObjectPlacementUtils.calculateHeightOffset(sizeType, node.scale);
+    
+    if (debug) {
+      print('Calculated optimal distance: ${optimalDistance}m from camera');
+      print('Calculated height offset: ${heightOffset}m above ground');
+      print('Minimum viewing distance: ${ARObjectPlacementUtils.getMinimumViewingDistance(node.scale)}m');
+      print('Is large object: ${ARObjectPlacementUtils.isLargeObject(node.scale)}');
+    }
+    
+    // Add smart placement metadata to node for native platforms to use
+    final nodeData = node.toMap();
+    nodeData['smartPlacement'] = true;
+    nodeData['optimalDistance'] = optimalDistance;
+    nodeData['heightOffset'] = heightOffset;
+    nodeData['collisionMultiplier'] = ARObjectPlacementUtils.calculateCollisionMultiplier(node.scale);
+    nodeData['isLargeObject'] = ARObjectPlacementUtils.isLargeObject(node.scale);
+    nodeData['sizeCategory'] = ARObjectPlacementUtils.getObjectSizeCategory(node.scale);
+    nodeData['sizeType'] = sizeType; // Add the size type for native platforms
+    
+    try {
+      node.transformNotifier.addListener(() {
+        _channel.invokeMethod<void>('transformationChanged', {
+          'name': node.name,
+          'transformation':
+              MatrixValueNotifierConverter().toJson(node.transformNotifier)
+        });
+      });
+      
+      if (planeAnchor != null) {
+        planeAnchor.childNodes.add(node.name);
+        String? nodeName = await _channel.invokeMethod<String>('addNodeToPlaneAnchorWithSmartPlacement',
+            {'node': nodeData, 'anchor': planeAnchor.toJson()});
+        return nodeName;
+      } else {
+        String? nodeName = await _channel.invokeMethod<String>('addNodeWithSmartPlacement', nodeData);
+        return nodeName;
+      }
+    } on PlatformException catch (e) {
+      if (debug) {
+        print('[ARObjectManager] Smart placement failed: $e');
+        print('[ARObjectManager] Falling back to regular placement');
+      }
+      // Fallback to regular placement if smart placement is not implemented
+      return addNode(node, planeAnchor: planeAnchor);
     }
   }
 
