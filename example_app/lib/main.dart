@@ -301,7 +301,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           position: vector_math.Vector3(0.0, 0.0, 0.0), // Place directly on the plane
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
           isTransformable: true,        // Enable transformations
-          enablePanGestures: true,      // Enable pan (drag) gestures  
+          enablePanGestures: false,     // Use built-in pan with native fallback for small model reliability
           enableRotationGestures: true, // Enable rotation gestures
         );
         

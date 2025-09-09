@@ -149,10 +149,10 @@ class _ScreenshotState extends State<Screenshot> {
             scale: Vector3(0.2, 0.2, 0.2),
             position: Vector3(0.0, 0.0, 0.0),
             rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-        bool? didAddNodeToAnchor =
-            await arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
+    String? addedNodeId =
+      await arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
 
-        if (didAddNodeToAnchor != null && didAddNodeToAnchor) {
+    if (addedNodeId != null) {
           nodes.add(newNode);
         } else {
           AlertDialog(
@@ -173,8 +173,8 @@ class _ScreenshotState extends State<Screenshot> {
           uri: "Models/Chicken_01/Chicken_01.gltf",
           scale: Vector3(0.2, 0.2, 0.2),
           transformation: singleHitTestResult.worldTransform);
-      bool didAddWebNode = await this.arObjectManager.addNode(newNode);
-      if (didAddWebNode) {
+  String? nodeId = await this.arObjectManager.addNode(newNode);
+  if (nodeId != null) {
         this.nodes.add(newNode);
       }*/
     }

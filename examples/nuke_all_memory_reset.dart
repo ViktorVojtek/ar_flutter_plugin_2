@@ -247,8 +247,8 @@ class _NukeAllMemoryResetExampleState extends State<NukeAllMemoryResetExample> {
           rotation: Vector4(1.0, 0.0, 0.0, 0.0),
         );
 
-        Object? didAddNodeResult = await arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
-        bool didAddNode = didAddNodeResult == true;
+  String? addedNodeId = await arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
+  bool didAddNode = addedNodeId != null;
         
         if (didAddNode) {
           anchors.add(newAnchor);

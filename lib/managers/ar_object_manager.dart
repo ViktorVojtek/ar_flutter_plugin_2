@@ -316,8 +316,18 @@ class ARObjectManager {
   }
 
   /// Remove given node from the AR Scene
-  removeNode(ARNode node) {
-    _channel.invokeMethod<String>('removeNode', {'name': node.name});
+  /// Returns true if the platform side reports success.
+  Future<bool> removeNode(ARNode node) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('removeNode', {'name': node.name});
+    // Android returns bool; iOS returns no value. Ignore result but request bool to avoid cast issues.
+    return result ?? false; 
+    } catch (e) {
+      if (debug) {
+        print('Error in removeNode: $e');
+      }
+      return false;
+    }
   }
 
   /// Deep-destroy native + GPU resources for this node

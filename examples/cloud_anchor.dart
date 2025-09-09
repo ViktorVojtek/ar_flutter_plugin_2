@@ -287,10 +287,10 @@ class _CloudAnchorState extends State<CloudAnchor> {
             position: Vector3(0.0, 0.0, 0.0),
             rotation: Vector4(1.0, 0.0, 0.0, 0.0),
             data: {"onTapText": "Ouch, that hurt!"});
-        bool? didAddNodeToAnchor = await this
-            .arObjectManager!
-            .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor ?? false) {
+    String? addedNodeId = await this
+      .arObjectManager!
+      .addNode(newNode, planeAnchor: newAnchor);
+    if (addedNodeId != null) {
           this.nodes.add(newNode);
           setState(() {
             readyToUpload = true;

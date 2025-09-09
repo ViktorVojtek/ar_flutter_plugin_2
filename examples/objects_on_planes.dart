@@ -130,17 +130,20 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
       if (didAddAnchor!) {
         this.anchors.add(newAnchor);
         // Add note to anchor
-        var newNode = ARNode(
+    var newNode = ARNode(
             type: NodeType.webGLB,
             uri:
                 "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
             scale: Vector3(0.2, 0.2, 0.2),
             position: Vector3(0.0, 0.0, 0.0),
-            rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-        bool? didAddNodeToAnchor = await this
+      rotation: Vector4(1.0, 0.0, 0.0, 0.0),
+      isTransformable: true,
+      enablePanGestures: false,
+      enableRotationGestures: true);
+        String? addedNodeId = await this
             .arObjectManager!
             .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor!) {
+        if (addedNodeId != null) {
           this.nodes.add(newNode);
         } else {
           AlertDialog(
@@ -161,8 +164,8 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
           uri: "Models/Chicken_01/Chicken_01.gltf",
           scale: Vector3(0.2, 0.2, 0.2),
           transformation: singleHitTestResult.worldTransform);
-      bool didAddWebNode = await this.arObjectManager.addNode(newNode);
-      if (didAddWebNode) {
+  String? nodeId = await this.arObjectManager.addNode(newNode);
+  if (nodeId != null) {
         this.nodes.add(newNode);
       }*/
     }

@@ -219,7 +219,8 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       print("🎯 Testing automatic object placement on Android ARCore");
       
       // Create a node with a specific position (in front of the camera)
-      vm.Vector3 autoPosition = vm.Vector3(0.0, -1.2, -0.8); // In front and down from camera
+  // Place 1m in front of the camera, keep Y at camera height for visibility
+  vm.Vector3 autoPosition = vm.Vector3(0.0, 0.0, -1.0);
       
       // Create transformation matrix for the position
       Matrix4 transformation = Matrix4.identity();
@@ -232,9 +233,10 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
         name: nodeName,
         transformation: transformation,
-        scale: vm.Vector3(0.5, 0.5, 0.5), // Make it visible
+        scale: vm.Vector3(0.5, 0.5, 0.5), // Visible at 1m distance
         isTransformable: true,
-        enablePanGestures: true,
+        // Use built-in pan with native fallback for small model reliability
+        enablePanGestures: false,
         enableRotationGestures: true,
       );
 
@@ -249,7 +251,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         print("✅ AUTO PLACEMENT SUCCESS! Node ID: $result");
         nodes.add(node);
         setState(() {
-          _statusText = "✅ Auto placement successful! Object should be visible in front of camera.";
+    _statusText = "✅ Auto placement successful! Object is ~1m in front. Drag to pan, twist to rotate.";
         });
       } else {
         print("❌ AUTO PLACEMENT FAILED! addNode returned null");

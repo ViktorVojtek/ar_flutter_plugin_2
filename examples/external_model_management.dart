@@ -306,10 +306,10 @@ class _ExternalModelManagementState extends State<ExternalModelManagement> {
             position: VectorMath.Vector3(0.0, 0.0, 0.0),
             rotation: VectorMath.Vector4(1.0, 0.0, 0.0, 0.0),
             data: {"onTapText": "I am a " + this.selectedModel.name});
-        bool? didAddNodeToAnchor = await this
-            .arObjectManager!
-            .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor!) {
+    String? addedNodeId = await this
+      .arObjectManager!
+      .addNode(newNode, planeAnchor: newAnchor);
+    if (addedNodeId != null) {
           this.nodes.add(newNode);
           setState(() {
             readyToUpload = true;
@@ -367,7 +367,7 @@ class _ExternalModelManagementState extends State<ExternalModelManagement> {
       snapshot.docs.forEach((objectDoc) {
         ARNode object =
             ARNode.fromMap(objectDoc.data() as Map<String, dynamic>);
-        arObjectManager!.addNode(object, planeAnchor: anchor);
+  arObjectManager!.addNode(object, planeAnchor: anchor);
         this.nodes.add(object);
       });
     });

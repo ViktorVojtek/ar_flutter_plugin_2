@@ -58,6 +58,10 @@ class ArCoreCompatView(
     // Plane-drag helpers: per-node locked Y and drag offsets
     private val yLocks = ConcurrentHashMap<String, Float>()
     private val dragOffsets = ConcurrentHashMap<String, Vector3>()
+    // Track which nodes should use custom unlimited XZ panning (vs. built-in translation controller)
+    private val customPanNodes = ConcurrentHashMap<String, Boolean>()
+    // Fallback flag for built-in pan: temporarily use constant-Y custom drag when drag starts on the model
+    private val fallbackPanActive = ConcurrentHashMap<String, Boolean>()
     
     // Performance optimization: Reuse collections to reduce garbage collection
     private val reusableNodeHitResults = mutableListOf<String>()
@@ -209,28 +213,100 @@ class ArCoreCompatView(
                         }
                     }
 
+                    // Refresh selected after TS handled the event to reflect tap selection on DOWN
+                    if (selected == null) {
+                        selected = selectedNodeAfter as? TransformableNode
+                    }
+
                     selected?.let { sel ->
                         val nodeName = sel.name ?: ""
+                        val useCustomPan = customPanNodes[nodeName] ?: false
+
+                        // Relaxed fallback activation: if a node is selected and we're not in custom pan mode,
+                        // start fallback constant-Y drag on single-finger DOWN anywhere in the scene. This makes
+                        // on-model panning reliable even when plane hits are flaky. Disable built-in translation
+                        // during fallback to avoid fighting controllers, and restore it on gesture end.
+
                         val lockedY = yLocks[nodeName] ?: sel.worldPosition.y.also { yLocks[nodeName] = it }
                         when (motionEvent.action) {
                             MotionEvent.ACTION_DOWN -> {
-                                screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)?.let { hitPt ->
+                                if (!useCustomPan) {
+                                    fallbackPanActive[nodeName] = true
+                                    // Temporarily disable built-in translation to prevent conflicts while we drive position
+                                    try { sel.translationController.isEnabled = false } catch (_: Exception) {}
+                                    Log.d(TAG, "🛟 Fallback pan ACTIVATED for $nodeName (single-finger DOWN)")
+                                }
+                                if (useCustomPan || (fallbackPanActive[nodeName] == true)) {
                                     val cur = sel.worldPosition
-                                    dragOffsets[nodeName] = Vector3(cur.x - hitPt.x, 0.0f, cur.z - hitPt.z)
-                                    Log.d(TAG, "🎯 Drag start on $nodeName at Y=$lockedY, offset=${dragOffsets[nodeName]}")
+                                    val camPlaneHit = screenPointToCameraFacingPlane(
+                                        motionEvent.x,
+                                        motionEvent.y,
+                                        Vector3(cur.x, lockedY, cur.z)
+                                    )
+                                    val yPlaneHit = screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)
+                                    val hitPt = camPlaneHit ?: yPlaneHit
+                                    Log.d(TAG, "🧭 DOWN: camPlaneHit=$camPlaneHit, yPlaneHit=$yPlaneHit, lockedY=$lockedY")
+                                    if (hitPt != null) {
+                                        dragOffsets[nodeName] = Vector3(cur.x - hitPt.x, 0.0f, cur.z - hitPt.z)
+                                        Log.d(TAG, "🎯 Drag start on $nodeName at Y=$lockedY, offset=${dragOffsets[nodeName]}")
+                                    } else {
+                                        // Initialize zero offset to allow MOVE to proceed even without an initial hit
+                                        dragOffsets[nodeName] = Vector3(0.0f, 0.0f, 0.0f)
+                                        Log.d(TAG, "⚠️ No initial hit on DOWN; initializing zero offset for $nodeName")
+                                    }
                                 }
                             }
                             MotionEvent.ACTION_MOVE -> {
-                                val offset = dragOffsets[nodeName]
-                                screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)?.let { hitPt ->
-                                    val newX = hitPt.x + (offset?.x ?: 0.0f)
-                                    val newZ = hitPt.z + (offset?.z ?: 0.0f)
-                                    sel.worldPosition = Vector3(newX, lockedY, newZ)
-                                    customDragHandled = true
+                                // If MOVE occurs without prior DOWN activation, bootstrap fallback now
+                                if (!useCustomPan && fallbackPanActive[nodeName] != true) {
+                                    fallbackPanActive[nodeName] = true
+                                    try { sel.translationController.isEnabled = false } catch (_: Exception) {}
+                                    // Initialize drag offset based on current hit and position
+                                    val cur = sel.worldPosition
+                                    val camPlaneHit = screenPointToCameraFacingPlane(
+                                        motionEvent.x,
+                                        motionEvent.y,
+                                        Vector3(cur.x, lockedY, cur.z)
+                                    )
+                                    val yPlaneHit = screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)
+                                    val hitPt = camPlaneHit ?: yPlaneHit
+                                    Log.d(TAG, "🛟 MOVE bootstrap: camPlaneHit=$camPlaneHit, yPlaneHit=$yPlaneHit, lockedY=$lockedY")
+                                    if (hitPt != null) {
+                                        dragOffsets[nodeName] = Vector3(cur.x - hitPt.x, 0.0f, cur.z - hitPt.z)
+                                        Log.d(TAG, "🛟 Fallback pan BOOTSTRAPPED on MOVE for $nodeName at Y=$lockedY, offset=${dragOffsets[nodeName]}")
+                                    }
+                                }
+                                if (useCustomPan || (fallbackPanActive[nodeName] == true)) {
+                                    val offset = dragOffsets[nodeName]
+                                    val cur = sel.worldPosition
+                                    val camPlaneHit = screenPointToCameraFacingPlane(
+                                        motionEvent.x,
+                                        motionEvent.y,
+                                        Vector3(cur.x, lockedY, cur.z)
+                                    )
+                                    val yPlaneHitMove = screenPointToYPlane(motionEvent.x, motionEvent.y, lockedY)
+                                    val hitPt = camPlaneHit ?: yPlaneHitMove
+                                    Log.d(TAG, "🧭 MOVE: camPlaneHit=$camPlaneHit, yPlaneHit=$yPlaneHitMove, offset=$offset")
+                                    if (hitPt != null) {
+                                        val newX = hitPt.x + (offset?.x ?: 0.0f)
+                                        val newZ = hitPt.z + (offset?.z ?: 0.0f)
+                                        sel.worldPosition = Vector3(newX, lockedY, newZ)
+                                        Log.d(TAG, "🚚 MOVE applied: newPos=(${newX}, ${lockedY}, ${newZ})")
+                                        customDragHandled = true
+                                    } else {
+                                        // Even if we couldn't compute a hit, consume the event to avoid rotation
+                                        customDragHandled = true
+                                        Log.d(TAG, "⚠️ MOVE: no hit computed; consuming to avoid rotation for $nodeName")
+                                    }
                                 }
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                                 dragOffsets.remove(nodeName)
+                                if (fallbackPanActive.remove(nodeName) == true) {
+                                    // Restore built-in translation state now that fallback gesture ended
+                                    try { if (!useCustomPan) sel.translationController.isEnabled = true } catch (_: Exception) {}
+                                    Log.d(TAG, "🛟 Fallback pan DEACTIVATED for $nodeName")
+                                }
                             }
                         }
                     }
@@ -678,10 +754,13 @@ class ArCoreCompatView(
                         Log.d(TAG, "🔍 GESTURE DEBUG: enableRotationGestures=$enableRotationGestures") 
                         Log.d(TAG, "🔍 GESTURE DEBUG: isTransformable=$isTransformable")
                         
-                        // CRITICAL FIX: Use custom pan; disable built-in translation to avoid conflicts
-                        transformableNode.translationController.isEnabled = false  // We'll pan via constant-Y plane drag
-                        transformableNode.rotationController.isEnabled = true     // Always enable rotation  
-                        transformableNode.scaleController.isEnabled = false       // Disable scale to avoid conflicts
+                        // Decide pan mode based on flag from Flutter
+                        val useCustomPan = enablePanGestures
+                        customPanNodes[nodeName] = useCustomPan
+                        // If custom pan: disable built-in translation; else enable it for model-drag on the object
+                        transformableNode.translationController.isEnabled = !useCustomPan
+                        transformableNode.rotationController.isEnabled = true
+                        transformableNode.scaleController.isEnabled = false
                         
                         // � UNLIMITED MOVEMENT: Configure translation controller for unrestricted XZ movement
                         Log.d(TAG, "🌍 CONFIGURING UNLIMITED XZ MOVEMENT")
@@ -738,40 +817,58 @@ class ArCoreCompatView(
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
-                        // CRITICAL FIX: Enable unlimited 3D movement - no surface restrictions!
-                        // Instead of forcing anchors to detected planes, allow free-floating objects
-                        // This enables movement beyond tracked surfaces - perfect for small rooms
-                        
-                        Log.d(TAG, "� UNLIMITED MOVEMENT: Enabling free-floating object placement")
-                        
-                        // Add the transformable node directly to the scene without plane constraints
-                        // This allows unlimited panning in 3D space regardless of detected surfaces
-                        arSceneView?.scene?.addChild(transformableNode)
-                        
-                        // Set the world position directly (no anchor constraints)
-                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                        Log.d(TAG, "📍 Set unrestricted world position: ($positionX, $positionY, $positionZ)")
-
-                        // Now that initial world position is set, lock Y to this value during drags
-                        try {
-                            val originalY = transformableNode.worldPosition.y
-                            Log.d(TAG, "🌍 Locking Y position at: $originalY (direct placement)")
-                            yLocks[nodeName] = originalY
-                            transformableNode.addTransformChangedListener { _, _ ->
-                                val currentPos = transformableNode.worldPosition
-                                if (kotlin.math.abs(currentPos.y - originalY) > 0.01f) {
-                                    transformableNode.worldPosition = Vector3(currentPos.x, originalY, currentPos.z)
-                                    Log.d(TAG, "🌍 Y-axis locked: corrected from ${currentPos.y} to $originalY")
-                                }
+                        // Determine world position. If no anchor is used, treat provided translation
+                        // as camera-relative (x: right, y: up, z: forward when negative).
+                        val camera = arSceneView?.scene?.camera
+                        val worldPos: Vector3 = if (camera != null) {
+                            try {
+                                val camPos = camera.worldPosition
+                                val camForward = camera.forward // world forward vector
+                                val camRight = camera.right
+                                val camUp = camera.up
+                                // In camera space: negative Z means in front of camera.
+                                val forwardDist = -positionZ
+                                val offset = Vector3(
+                                    camRight.x * positionX + camUp.x * positionY + camForward.x * forwardDist,
+                                    camRight.y * positionX + camUp.y * positionY + camForward.y * forwardDist,
+                                    camRight.z * positionX + camUp.z * positionY + camForward.z * forwardDist
+                                )
+                                Vector3(camPos.x + offset.x, camPos.y + offset.y, camPos.z + offset.z)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to compute camera-relative position, using raw: ${e.message}")
+                                Vector3(positionX, positionY, positionZ)
                             }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Failed to add Y lock listener: ${e.message}")
+                        } else {
+                            Vector3(positionX, positionY, positionZ)
                         }
-                        
-                        // CRITICAL: Configure translation controller for unlimited movement
-                        transformableNode.translationController.let { controller ->
-                            // Allow movement in all directions without plane constraints
-                            Log.d(TAG, "🔧 Configuring unlimited translation controller")
+
+                        if (useCustomPan) {
+                            // Custom unlimited pan for pergola-like models
+                            Log.d(TAG, "🌍 UNLIMITED MOVEMENT: Enabling free-floating object placement")
+                            arSceneView?.scene?.addChild(transformableNode)
+                            transformableNode.worldPosition = worldPos
+                            Log.d(TAG, "📍 Set unrestricted world position: $worldPos (from cam-rel: x=$positionX, y=$positionY, z=$positionZ)")
+
+                            // Lock Y during drags
+                            try {
+                                val originalY = transformableNode.worldPosition.y
+                                Log.d(TAG, "🌍 Locking Y position at: $originalY (direct placement)")
+                                yLocks[nodeName] = originalY
+                                transformableNode.addTransformChangedListener { _, _ ->
+                                    val currentPos = transformableNode.worldPosition
+                                    if (kotlin.math.abs(currentPos.y - originalY) > 0.01f) {
+                                        transformableNode.worldPosition = Vector3(currentPos.x, originalY, currentPos.z)
+                                        Log.d(TAG, "🌍 Y-axis locked: corrected from ${currentPos.y} to $originalY")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to add Y lock listener: ${e.message}")
+                            }
+                        } else {
+                            // Built-in translation on direct placement: still add to scene at requested pose
+                            arSceneView?.scene?.addChild(transformableNode)
+                            transformableNode.worldPosition = worldPos
+                            Log.d(TAG, "📍 Direct placement with built-in translation at world: $worldPos (from cam-rel: x=$positionX, y=$positionY, z=$positionZ)")
                         }
                         
                         // 🎯 SIMPLE COLLISION IMPROVEMENT FOR BETTER UX (enlarged pick box)
@@ -1014,17 +1111,57 @@ class ArCoreCompatView(
                         // CRITICAL: Enable the node for hit testing and selection
                         transformableNode.isEnabled = true
                         
-                        // CRITICAL: Set collision shape for hit testing - this is what was missing!
-                        // Without collision shape, the node can't be hit-tested and selected
-                        // Use a larger collision shape to improve hit testing during gestures
-                        // Scale the collision box based on the actual scale of the object
+                        // CRITICAL: Set collision shape for hit testing
+                        // Make the box generous so taps/drags on the model are easy (similar to direct add path)
                         val collisionSize = Vector3(
-                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
-                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
-                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
+                            maxOf(scaleX * 4.0f, 1.2f), // Wider pick area
+                            maxOf(scaleY * 4.0f, 1.0f), // Taller pick area
+                            maxOf(scaleZ * 4.0f, 1.2f)
                         )
                         transformableNode.collisionShape = Box(collisionSize)
                         Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
+
+                        // Add helper collision nodes (floor + mid) to improve tap/drag on thin or skeletal meshes
+                        try {
+                            // Floor-level helper
+                            val floorCollisionSize = Vector3(
+                                maxOf(scaleX * 3.5f, 1.2f),
+                                0.06f,
+                                maxOf(scaleZ * 3.5f, 1.2f)
+                            )
+                            val floorCollisionNode = Node().apply {
+                                collisionShape = Box(floorCollisionSize)
+                                val bottomY = -collisionSize.y / 2.0f + 0.03f
+                                localPosition = Vector3(0.0f, bottomY, 0.0f)
+                                setParent(transformableNode)
+                                setOnTouchListener { _, me ->
+                                    Log.d(TAG, "🎯 Floor helper touched for: $nodeName action=${me.action}")
+                                    transformationSystem?.selectNode(transformableNode)
+                                    false
+                                }
+                            }
+                            Log.d(TAG, "🏗️ Added floor helper for anchored node: $nodeName, size: $floorCollisionSize")
+
+                            // Mid-height helper
+                            val midCollisionSize = Vector3(
+                                maxOf(scaleX * 3.0f, 1.0f),
+                                maxOf(scaleY * 1.0f, 0.5f),
+                                maxOf(scaleZ * 3.0f, 1.0f)
+                            )
+                            val midCollisionNode = Node().apply {
+                                collisionShape = Box(midCollisionSize)
+                                localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                setParent(transformableNode)
+                                setOnTouchListener { _, me ->
+                                    Log.d(TAG, "🎯 Mid helper touched for: $nodeName action=${me.action}")
+                                    transformationSystem?.selectNode(transformableNode)
+                                    false
+                                }
+                            }
+                            Log.d(TAG, "🏗️ Added mid helper for anchored node: $nodeName, size: $midCollisionSize")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to create helper colliders for anchored node: ${e.message}")
+                        }
                         
                         // Set up tap listener for node selection (like in arcore_flutter_plugin)
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
@@ -1064,48 +1201,47 @@ class ArCoreCompatView(
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
                         android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
                         
-                        // 🌍 UNLIMITED MOVEMENT: Initially place at anchor, then detach for unlimited XZ movement
-                        Log.d(TAG, "🌍 Setting up unlimited XZ movement")
-                        
-                        // Store original Y position for locking  
-                        val originalY = anchorNode.worldPosition.y
-                        Log.d(TAG, "🌍 Original anchor Y position: $originalY")
-                        
-                        // Initially place node at anchor position
-                        transformableNode.setParent(anchorNode)
-                        transformableNode.localPosition = Vector3.zero()
-                        
-                        // Get world position before detaching
-                        val worldPos = transformableNode.worldPosition
-                        Log.d(TAG, "🌍 Initial world position: $worldPos")
-                        
-                        // Detach from anchor and reparent to scene for unlimited movement
-                        transformableNode.setParent(arSceneView?.scene)
-                        transformableNode.worldPosition = worldPos
-                        
-                        Log.d(TAG, "🌍 Node detached from anchor - unlimited XZ movement enabled")
-                        
-                        // Add Y-axis locking
-                        transformableNode.addTransformChangedListener { node, parent ->
-                            val currentPos = transformableNode.worldPosition
-                            if (Math.abs(currentPos.y - originalY) > 0.01f) {
-                                // Y position changed, lock it back
-                                val correctedPos = Vector3(currentPos.x, originalY, currentPos.z)
-                                transformableNode.worldPosition = correctedPos
-                                Log.d(TAG, "🌍 Y-axis locked: ${currentPos.y} → $originalY")
+                        // Decide pan mode based on flag from Flutter
+                        val useCustomPanAnchor = enablePanGestures
+                        customPanNodes[nodeName] = useCustomPanAnchor
+
+                        if (useCustomPanAnchor) {
+                            // Custom: place at anchor, then detach for unlimited XZ and lock Y
+                            Log.d(TAG, "🌍 Setting up unlimited XZ movement (custom pan)")
+                            val originalY = anchorNode.worldPosition.y
+                            transformableNode.setParent(anchorNode)
+                            transformableNode.localPosition = Vector3.zero()
+                            val worldPos = transformableNode.worldPosition
+                            transformableNode.setParent(arSceneView?.scene)
+                            transformableNode.worldPosition = worldPos
+                            transformableNode.addTransformChangedListener { _, _ ->
+                                val currentPos = transformableNode.worldPosition
+                                if (kotlin.math.abs(currentPos.y - originalY) > 0.01f) {
+                                    transformableNode.worldPosition = Vector3(currentPos.x, originalY, currentPos.z)
+                                    Log.d(TAG, "🌍 Y-axis locked: ${currentPos.y} → $originalY")
+                                }
                             }
+                            yLocks[nodeName] = originalY
+                            // Disable built-in translation to avoid conflicts
+                            transformableNode.translationController.isEnabled = false
+                        } else {
+                            // Built-in translation: keep attached to anchor and let Sceneform handle drag on the model
+                            Log.d(TAG, "🧭 Built-in translation enabled for anchored node")
+                            transformableNode.setParent(anchorNode)
+                            transformableNode.localPosition = Vector3.zero()
+                            transformableNode.translationController.isEnabled = true
                         }
-                        // Record locked Y for custom drag
-                        yLocks[nodeName] = originalY
-                        
+
                         // Store the node for later reference
                         nodesMap[nodeName] = transformableNode
-                        
-                        // Auto-select the node to allow immediate panning
-                        try {
-                            transformationSystem?.selectNode(transformableNode)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Failed to auto-select new anchored node: ${e.message}")
+
+                        // Auto-select the node only for custom pan to allow immediate panning
+                        if (useCustomPanAnchor) {
+                            try {
+                                transformationSystem?.selectNode(transformableNode)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to auto-select new anchored node: ${e.message}")
+                            }
                         }
                         
                         Log.d(TAG, "✅ GLB model added to plane anchor: $nodeName")
@@ -1151,6 +1287,8 @@ class ArCoreCompatView(
                     nodesMap.remove(nodeName)
                     yLocks.remove(nodeName)
                     dragOffsets.remove(nodeName)
+                    customPanNodes.remove(nodeName)
+                    fallbackPanActive.remove(nodeName)
                     
                     // Also remove associated virtual anchor if it exists
                     val virtualAnchorName = "${nodeName}_anchor"
@@ -1430,6 +1568,8 @@ class ArCoreCompatView(
             nodesMap.clear()
             yLocks.clear()
             dragOffsets.clear()
+            customPanNodes.clear()
+            fallbackPanActive.clear()
             // Clear lingering selection
             try {
                 transformationSystem?.selectNode(null)
@@ -1513,6 +1653,25 @@ class ArCoreCompatView(
             if (t < 0f) return null
             val hit = Vector3.add(ray.origin, ray.direction.scaled(t))
             hit
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Project a screen point to a plane that faces the camera (normal = camera.forward) passing through a reference point
+    // Useful when the camera ray is nearly parallel to the Y-plane, so the intersection would be unstable
+    private fun screenPointToCameraFacingPlane(x: Float, y: Float, planePoint: Vector3): Vector3? {
+        val sceneView = arSceneView ?: return null
+        val camera = sceneView.scene?.camera ?: return null
+        return try {
+            val ray = camera.screenPointToRay(x, y)
+            val planeNormal = camera.forward
+            val denom = Vector3.dot(ray.direction, planeNormal)
+            if (kotlin.math.abs(denom) < 1e-5f) return null
+            val diff = Vector3.subtract(planePoint, ray.origin)
+            val t = Vector3.dot(diff, planeNormal) / denom
+            if (t < 0f) return null
+            Vector3.add(ray.origin, ray.direction.scaled(t))
         } catch (e: Exception) {
             null
         }

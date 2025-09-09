@@ -126,17 +126,20 @@ class _ObjectGesturesState extends State<ObjectGestures> {
       if (didAddAnchor!) {
         this.anchors.add(newAnchor);
         // Add note to anchor
-        var newNode = ARNode(
+    var newNode = ARNode(
             type: NodeType.webGLB,
             uri:
                 "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
             scale: Vector3(0.2, 0.2, 0.2),
             position: Vector3(0.0, 0.0, 0.0),
-            rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-        bool? didAddNodeToAnchor = await this
-            .arObjectManager!
-            .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor!) {
+      rotation: Vector4(1.0, 0.0, 0.0, 0.0),
+      isTransformable: true,
+      enablePanGestures: false, // Use built-in pan for small model reliability
+      enableRotationGestures: true);
+    String? addedNodeId = await this
+      .arObjectManager!
+      .addNode(newNode, planeAnchor: newAnchor);
+    if (addedNodeId != null) {
           this.nodes.add(newNode);
         } else {
           AlertDialog(

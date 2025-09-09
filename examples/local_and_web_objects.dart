@@ -174,8 +174,8 @@ class _LocalAndWebObjectsState extends State<LocalAndWebObjects> {
           scale: Vector3(0.2, 0.2, 0.2),
           position: Vector3(0.0, 0.0, 0.0),
           rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-      bool? didAddLocalNode = await this.arObjectManager!.addNode(newNode);
-      this.localObjectNode = (didAddLocalNode!) ? newNode : null;
+  String? nodeId = await this.arObjectManager!.addNode(newNode);
+  this.localObjectNode = (nodeId != null) ? newNode : null;
     }
   }
 
@@ -189,8 +189,8 @@ class _LocalAndWebObjectsState extends State<LocalAndWebObjects> {
           uri:
               "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
           scale: Vector3(0.2, 0.2, 0.2));
-      bool? didAddWebNode = await this.arObjectManager!.addNode(newNode);
-      this.webObjectNode = (didAddWebNode!) ? newNode : null;
+  String? nodeId = await this.arObjectManager!.addNode(newNode);
+  this.webObjectNode = (nodeId != null) ? newNode : null;
     }
   }
 
@@ -208,8 +208,8 @@ class _LocalAndWebObjectsState extends State<LocalAndWebObjects> {
       //    type: NodeType.fileSystemAppFolderGLTF2,
       //    uri: "Chicken_01.gltf",
       //    scale: Vector3(0.2, 0.2, 0.2));
-      bool? didAddFileSystemNode = await this.arObjectManager!.addNode(newNode);
-      this.fileSystemNode = (didAddFileSystemNode!) ? newNode : null;
+  String? nodeId = await this.arObjectManager!.addNode(newNode);
+  this.fileSystemNode = (nodeId != null) ? newNode : null;
     }
   }
 
