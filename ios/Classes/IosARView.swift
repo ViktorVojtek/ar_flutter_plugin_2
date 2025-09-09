@@ -100,6 +100,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private var rotationVelocity: CGFloat?
     private var panningNode: SCNNode?
     private var panningNodeCurrentWorldLocation: SCNVector3?
+    // Fallback pan state (camera-facing plane projection)
+    private var panPlaneDistance: Float?
+    private var panNodeFixedY: Float?
 
     init(
         frame: CGRect,
@@ -280,8 +283,13 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 break
             case "removeNode":
                 if let name = arguments!["name"] as? String {
-                    sceneView.scene.rootNode.childNode(withName: name, recursively: true)?.removeFromParentNode()
-                }
+                    if let node = sceneView.scene.rootNode.childNode(withName: name, recursively: true) {
+                        node.removeFromParentNode()
+                        result(true)
+                    } else {
+                        result(false)
+                    }
+                } else { result(false) }
                 break
             case "removeNodeDeep":
                 if let nodeId = arguments!["nodeId"] as? String {
@@ -399,6 +407,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         // Set plane detection configuration
         self.configuration = ARWorldTrackingConfiguration()
         self.configuration.environmentTexturing = .automatic
+    // Improve initial visibility of PBR materials
+    self.sceneView.autoenablesDefaultLighting = true
+    self.sceneView.automaticallyUpdatesLighting = true
         if let planeDetectionConfig = arguments["planeDetectionConfig"] as? Int {
             switch planeDetectionConfig {
                 case 1: 
@@ -578,9 +589,28 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
+
+                            // Camera-relative placement for direct add when a transformation is provided
+                            if let transformArr = dict_node["transformation"] as? Array<NSNumber>,
+                               transformArr.count >= 16,
+                               let currentFrame = self.sceneView.session.currentFrame {
+                                // Extract translation components from Flutter matrix (tx, ty, tz)
+                                let tx = Float(truncating: transformArr[12])
+                                let ty = Float(truncating: transformArr[13])
+                                let tz = Float(truncating: transformArr[14])
+
+                                // Treat the translation as camera-relative offset and convert to world space
+                                let camT: simd_float4x4 = currentFrame.camera.transform
+                                let offset = simd_float4(tx, ty, tz, 1.0)
+                                let world = simd_mul(camT, offset)
+                                node.worldPosition = SCNVector3(world.x, world.y, world.z)
+                            }
+
+                            // Note: Scale is already included in the transformation matrix from Flutter; avoid overriding here.
                             if let nodeId = nodeName {
                                 self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
                             }
+                            print("📍 iOS addNode (no anchor) placed at worldPos=\(node.worldPosition)")
                             promise(.success(nodeName))
                         }
                     } else {
@@ -621,9 +651,25 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                             } else {
                                 // Attach to top-level node of the scene
                                 self.sceneView.scene.rootNode.addChildNode(node)
+
+                                // Camera-relative placement for direct add when a transformation is provided
+                                if let transformArr = dict_node["transformation"] as? Array<NSNumber>,
+                                   transformArr.count >= 16,
+                                   let currentFrame = self.sceneView.session.currentFrame {
+                                    let tx = Float(truncating: transformArr[12])
+                                    let ty = Float(truncating: transformArr[13])
+                                    let tz = Float(truncating: transformArr[14])
+                                    let camT: simd_float4x4 = currentFrame.camera.transform
+                                    let offset = simd_float4(tx, ty, tz, 1.0)
+                                    let world = simd_mul(camT, offset)
+                                    node.worldPosition = SCNVector3(world.x, world.y, world.z)
+                                }
+
+                                // Note: Scale is encoded in transformation matrix; do not apply again.
                                 if let nodeId = nodeName {
                                     self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
                                 }
+                                print("📍 iOS addNode webGLB (no anchor) placed at worldPos=\(node.worldPosition)")
                                 promise(.success(nodeName))
                             }
                         } else {
@@ -661,9 +707,25 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
+
+                            // Camera-relative placement for direct add when a transformation is provided
+                            if let transformArr = dict_node["transformation"] as? Array<NSNumber>,
+                               transformArr.count >= 16,
+                               let currentFrame = self.sceneView.session.currentFrame {
+                                let tx = Float(truncating: transformArr[12])
+                                let ty = Float(truncating: transformArr[13])
+                                let tz = Float(truncating: transformArr[14])
+                                let camT: simd_float4x4 = currentFrame.camera.transform
+                                let offset = simd_float4(tx, ty, tz, 1.0)
+                                let world = simd_mul(camT, offset)
+                                node.worldPosition = SCNVector3(world.x, world.y, world.z)
+                            }
+
+                            // Note: Scale is encoded in transformation matrix; do not apply again.
                             if let nodeId = nodeName {
                                 self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
                             }
+                            print("📍 iOS addNode FS GLB (no anchor) placed at worldPos=\(node.worldPosition)")
                             promise(.success(nodeName))
                         }
                     } else {
@@ -772,6 +834,21 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     panningNode = sceneView.scene.rootNode.childNode(withName: firstNodeName, recursively: true)
                     if let panNode = panningNode {
                         panningNodeCurrentWorldLocation = panNode.worldPosition
+                        // Initialize fallback pan state: lock Y and compute plane distance along camera forward
+                        if let frame = sceneView.session.currentFrame {
+                            let camT = frame.camera.transform
+                            let camPos = SCNVector3(camT.columns.3.x, camT.columns.3.y, camT.columns.3.z)
+                            let nodePos = panNode.worldPosition
+                            // Camera forward vector is -Z axis of transform
+                            let forward = simd_normalize(simd_float3(-camT.columns.2.x, -camT.columns.2.y, -camT.columns.2.z))
+                            let nodeVec = simd_float3(nodePos.x - camPos.x, nodePos.y - camPos.y, nodePos.z - camPos.z)
+                            let dist = simd_dot(forward, nodeVec)
+                            panPlaneDistance = dist
+                            panNodeFixedY = nodePos.y
+                        } else {
+                            panPlaneDistance = nil
+                            panNodeFixedY = panNode.worldPosition.y
+                        }
                         DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: firstNodeName)}
                         return
                     }
@@ -787,14 +864,21 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             panCurrentTranslation = recognizer.translation(in: sceneView)
 
             if let panLoc = panCurrentLocation, let panNode = panningNode {
+                var didUpdate = false
                 if let query = sceneView.raycastQuery(from: panLoc, allowing: .estimatedPlane, alignment: .any) {
-                    guard let result = self.sceneView.session.raycast(query).first else {
-                        return
+                    if let result = self.sceneView.session.raycast(query).first {
+                        let posX = result.worldTransform.columns.3.x
+                        let posY = (panNodeFixedY ?? result.worldTransform.columns.3.y) // lock Y if available
+                        let posZ = result.worldTransform.columns.3.z
+                        panNode.worldPosition = SCNVector3(posX, posY, posZ)
+                        didUpdate = true
                     }
-                    let posX = result.worldTransform.columns.3.x
-                    let posY = result.worldTransform.columns.3.y
-                    let posZ = result.worldTransform.columns.3.z
-                    panNode.worldPosition = SCNVector3(posX, posY, posZ)
+                }
+                // Fallback: camera-facing plane projection if no raycast hit
+                if !didUpdate, let fallback = projectToCameraPlane(sceneView: sceneView, screenPoint: panLoc) {
+                    let lockedY = panNodeFixedY ?? fallback.y
+                    panNode.worldPosition = SCNVector3(fallback.x, lockedY, fallback.z)
+                    didUpdate = true
                 }
                 if let panNodeName = panNode.name {
                     DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanChange", arguments: panNodeName)}
@@ -807,6 +891,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             // kill variables
             panStartLocation = nil
             panCurrentLocation = nil
+            panPlaneDistance = nil
+            panNodeFixedY = nil
             // Only send onPanEnd if we have valid transformation data
             if let transformationData = serializeLocalTransformation(node: self.panningNode) {
                 DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanEnd", arguments: transformationData)}
@@ -814,6 +900,46 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             panningNode = nil
         }
     }
+
+    // Project screen point onto a camera-facing plane at a fixed distance from camera
+    private func projectToCameraPlane(sceneView: ARSCNView, screenPoint: CGPoint) -> SCNVector3? {
+        guard let frame = sceneView.session.currentFrame else { return nil }
+        let camT = frame.camera.transform
+        let camPos = SCNVector3(camT.columns.3.x, camT.columns.3.y, camT.columns.3.z)
+        // Camera forward vector (-Z)
+        let forward = SCNVector3(-camT.columns.2.x, -camT.columns.2.y, -camT.columns.2.z)
+        let n = normalizeVec3(forward)
+        let d = panPlaneDistance ?? 1.0
+        let planePoint = addVec3(camPos, mulVec3Scalar(n, d))
+
+        // Build a ray from screen point using unproject
+    let viewport = sceneView.bounds
+    // Convert UIKit coordinates to SceneKit coordinates (y is flipped)
+    let scnY = viewport.height - screenPoint.y
+    let pNear = sceneView.unprojectPoint(SCNVector3(Float(screenPoint.x), Float(scnY), 0.0))
+    let pFar = sceneView.unprojectPoint(SCNVector3(Float(screenPoint.x), Float(scnY), 1.0))
+        let rayDir = normalizeVec3(subVec3(pFar, pNear))
+
+        // Ray-plane intersection
+        let denom = dotVec3(n, rayDir)
+        if abs(denom) < 1e-6 { return nil }
+        let t = dotVec3(n, subVec3(planePoint, pNear)) / denom
+        if t.isNaN || t.isInfinite { return nil }
+        let hit = addVec3(pNear, mulVec3Scalar(rayDir, t))
+        return hit
+    }
+
+    // MARK: - Small SCNVector3 math helpers
+    private func addVec3(_ a: SCNVector3, _ b: SCNVector3) -> SCNVector3 { SCNVector3(a.x+b.x, a.y+b.y, a.z+b.z) }
+    private func subVec3(_ a: SCNVector3, _ b: SCNVector3) -> SCNVector3 { SCNVector3(a.x-b.x, a.y-b.y, a.z-b.z) }
+    private func mulVec3Scalar(_ v: SCNVector3, _ s: Float) -> SCNVector3 { SCNVector3(v.x*s, v.y*s, v.z*s) }
+    private func lengthVec3(_ v: SCNVector3) -> Float { sqrt(v.x*v.x + v.y*v.y + v.z*v.z) }
+    private func normalizeVec3(_ v: SCNVector3) -> SCNVector3 {
+        let len = lengthVec3(v)
+        if len < 1e-8 { return SCNVector3(0,0,-1) }
+        return SCNVector3(v.x/len, v.y/len, v.z/len)
+    }
+    private func dotVec3(_ a: SCNVector3, _ b: SCNVector3) -> Float { a.x*b.x + a.y*b.y + a.z*b.z }
     
     @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
         guard let sceneView = recognizer.view as? ARSCNView else {

@@ -361,6 +361,8 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
   ARAnchorManager? arAnchorManager;
 
   List<ARNode> nodes = [];
+  // Track node IDs for deep removal (iOS parity and reliability)
+  final Map<ARNode, String> _nodeToId = {};
   String _statusText = "⏳ Initializing AR...";
   bool _isARInitialized = false;
 
@@ -572,8 +574,8 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
       var newNode = ARNode(
         type: NodeType.webGLB,
         uri: "https://storage.googleapis.com/vd_ar_bucket/Pergola_Eva_450cm_pivottest-3-94ca859f-be4a-4649-bef5-ef44c94468da.glb",
-        position: vector_math.Vector3(0, 0, -2), // 2 meters forward for big pergola
-        scale: vector_math.Vector3(0.05, 0.05, 0.05), // Even smaller scale for easier manipulation
+  position: vector_math.Vector3(0, 1.5, -3), // lift ~1.5m to avoid burying below ground
+  scale: vector_math.Vector3(100.0, 100.0, 100.0), // iOS multiplies GLTF by 0.01 => 100x restores real size
         rotation: vector_math.Vector4(0, 0, 0, 1), // Direct rotation
         isTransformable: true, // FIXED: Enable transformations like in ObjectGestures
         enablePanGestures: true, // Enable pan gestures for testing
@@ -583,6 +585,7 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
       String? nodeId = await arObjectManager!.addNode(newNode);
       if (nodeId != null) {
         nodes.add(newNode);
+        _nodeToId[newNode] = nodeId;
         print("✅ TEST: Object added with ID: $nodeId");
         setState(() {
           _statusText = "✅ Direct placement successful! For full gestures, tap on a plane instead.";
@@ -636,8 +639,8 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
       var newNode = ARNode(
         type: NodeType.webGLB,
         uri: "https://storage.googleapis.com/vd_ar_bucket/Pergola_Eva_450cm_pivottest-3-94ca859f-be4a-4649-bef5-ef44c94468da.glb",
-        position: vector_math.Vector3(0, 0, 0), // Place directly on the plane
-        scale: vector_math.Vector3(0.05, 0.05, 0.05), // Even smaller scale for easier manipulation
+  position: vector_math.Vector3(0, 2.0, 0), // lift ~2m to compensate for pergola height/pivot
+  scale: vector_math.Vector3(100.0, 100.0, 100.0), // compensate for iOS 0.01 GLTF scaling
         rotation: vector_math.Vector4(0, 0, 0, 1),
         isTransformable: true, // FIXED: Enable transformations like in ObjectGestures
         enablePanGestures: true, // Enable pan gestures for testing
@@ -648,6 +651,7 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
       
       if (nodeId != null) {
         nodes.add(newNode);
+        _nodeToId[newNode] = nodeId;
         print("✅ GESTURE-ENABLED: Pergola placed with full gesture support! ID: $nodeId");
         setState(() {
           _statusText = "✅ Pergola placed with gestures! Tap to select, then pan/rotate.";
@@ -674,10 +678,16 @@ class _TestPergolaSampleState extends State<TestPergolaSample> {
 
     try {
       for (ARNode node in nodes) {
-        await arObjectManager!.removeNode(node);
+        final id = _nodeToId[node];
+        if (id != null) {
+          await arObjectManager!.removeNodeDeep(id);
+        } else {
+          await arObjectManager!.removeNode(node);
+        }
       }
       
       nodes.clear();
+      _nodeToId.clear();
       
       setState(() {
         _statusText = "✅ All objects removed. Ready for new placement.";
