@@ -53,6 +53,8 @@ class ArCoreCompatView(
     private var transformationSystem: TransformationSystem? = null
     private val nodesMap = ConcurrentHashMap<String, Node>()
     private var gestureDetector: GestureDetector? = null
+    // Controls whether taps on detected planes should be forwarded to Flutter for placement
+    private var tapPlacementEnabled: Boolean = true
     // Debug: show visual collider aids to make selection areas visible
     private var debugShowColliders: Boolean = true
     // Plane-drag helpers: per-node locked Y and drag offsets
@@ -354,6 +356,13 @@ class ArCoreCompatView(
             "removeAllObjects" -> handleRemoveAllObjects(call, result)
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
+            "setTapPlacementEnabled" -> {
+                val args = call.arguments as? Map<String, Any>
+                val enabled = args?.get("enabled") as? Boolean ?: true
+                tapPlacementEnabled = enabled
+                Log.d(TAG, "🔧 setTapPlacementEnabled = $tapPlacementEnabled")
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }
@@ -452,8 +461,11 @@ class ArCoreCompatView(
                         }
                     )
                 )
-                
-                sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(hitResult))
+                if (tapPlacementEnabled) {
+                    sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(hitResult))
+                } else {
+                    Log.d(TAG, "🚫 Tap-to-place disabled; plane tap ignored for placement")
+                }
                 break
             }
         }

@@ -103,6 +103,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     // Fallback pan state (camera-facing plane projection)
     private var panPlaneDistance: Float?
     private var panNodeFixedY: Float?
+    // Controls forwarding plane taps to Flutter for placement
+    private var tapPlacementEnabled: Bool = true
 
     init(
         frame: CGRect,
@@ -316,6 +318,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             case "getMemoryInfo":
                 let memoryInfo = getMemoryInfo()
                 result(memoryInfo)
+                break
+            case "setTapPlacementEnabled":
+                let enabled = (arguments?["enabled"] as? Bool) ?? true
+                self.tapPlacementEnabled = enabled
+                print("🔧 setTapPlacementEnabled = \(self.tapPlacementEnabled)")
+                result(nil)
                 break
             case "transformationChanged":
                 if let name = arguments!["name"] as? String, let transform = arguments!["transformation"] as? Array<NSNumber> {
@@ -813,7 +821,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             
         let serializedPlaneAndPointHitResults = planeAndPointHitResults.map{serializeHitResult($0)}
         if (serializedPlaneAndPointHitResults.count != 0) {
-            DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onPlaneOrPointTap", arguments: serializedPlaneAndPointHitResults)}
+            if self.tapPlacementEnabled {
+                DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onPlaneOrPointTap", arguments: serializedPlaneAndPointHitResults)}
+            } else {
+                print("🚫 Tap-to-place disabled; plane tap ignored for placement")
+            }
         }
     }
 

@@ -25,6 +25,7 @@ class ARNode {
     this.isTransformable = false,
     this.enablePanGestures = false,
     this.enableRotationGestures = false,
+  this.enableTapToPlace = true,
   })  : name = name ?? UniqueKey().toString(),
         _originalScale = scale ?? Vector3(1.0, 1.0, 1.0),
         transformNotifier = ValueNotifier(createTransformMatrix(
@@ -111,6 +112,10 @@ class ARNode {
   /// Whether rotation gestures are enabled for this node (requires isTransformable = true)
   final bool enableRotationGestures;
 
+  /// Whether tapping on detected planes should place another instance of this object.
+  /// Set to false to avoid accidental duplicates when using auto placement.
+  final bool enableTapToPlace;
+
   static const _matrixValueNotifierConverter = MatrixValueNotifierConverter();
 
   Map<String, dynamic> toMap() {
@@ -128,6 +133,7 @@ class ARNode {
         'isTransformable': isTransformable,
         'enablePanGestures': enablePanGestures,
         'enableRotationGestures': enableRotationGestures,
+  'enableTapToPlace': enableTapToPlace,
       }..removeWhere((String k, dynamic v) => v == null);
   }
 
@@ -140,7 +146,8 @@ class ARNode {
         data: Map<String, dynamic>.from(map["data"] ?? {}),
         isTransformable: map["isTransformable"] as bool? ?? false,
         enablePanGestures: map["enablePanGestures"] as bool? ?? false,
-        enableRotationGestures: map["enableRotationGestures"] as bool? ?? false);
+  enableRotationGestures: map["enableRotationGestures"] as bool? ?? false,
+  enableTapToPlace: map["enableTapToPlace"] as bool? ?? true);
   }
 }
 

@@ -50,6 +50,24 @@ class ARObjectManager {
     print("✅ ARObjectManager constructor completed");
   }
 
+  /// Enable or disable tap-to-place plane handling on the native side.
+  /// When disabled, taps on planes won't be forwarded to Flutter for placement,
+  /// preventing accidental creation of duplicate objects while using auto placement.
+  Future<void> setTapPlacementEnabled(bool enabled) async {
+    try {
+      if (debug) {
+        print('[ARObjectManager] setTapPlacementEnabled($enabled)');
+      }
+      await _channel.invokeMethod<void>('setTapPlacementEnabled', {
+        'enabled': enabled,
+      });
+    } catch (e) {
+      if (debug) {
+        print('Error in setTapPlacementEnabled: $e');
+      }
+    }
+  }
+
   Future<void> _platformCallHandler(MethodCall call) {
     if (debug) {
       print('_platformCallHandler call ${call.method} ${call.arguments}');
@@ -222,6 +240,10 @@ class ARObjectManager {
   /// Add given node to the given anchor of the underlying AR scene (or to its top-level if no anchor is given) and listen to any changes made to its transformation
   Future<String?> addNode(ARNode node, {ARPlaneAnchor? planeAnchor}) async {
     try {
+  // Apply tap placement preference for this node instance
+  // If disabled, prevent tap-to-place of additional instances after adding
+  await setTapPlacementEnabled(node.enableTapToPlace);
+
       node.transformNotifier.addListener(() {
         _channel.invokeMethod<void>('transformationChanged', {
           'name': node.name,
@@ -288,6 +310,9 @@ class ARObjectManager {
     nodeData['sizeType'] = sizeType; // Add the size type for native platforms
     
     try {
+  // Apply tap placement preference
+  await setTapPlacementEnabled(node.enableTapToPlace);
+
       node.transformNotifier.addListener(() {
         _channel.invokeMethod<void>('transformationChanged', {
           'name': node.name,

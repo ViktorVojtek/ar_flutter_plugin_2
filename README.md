@@ -32,6 +32,13 @@ if (ok) {
 📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
 📖 **[NUKE ALL Complete Documentation](NUKE_ALL_DOCUMENTATION.md)**
 
+## NEW: iOS Default Lighting and Visibility
+
+- Default lighting is enabled on iOS to improve visibility of PBR models.
+- For very large/thin models (e.g., pergolas), consider a higher initial scale and a small Y-offset when spawning to avoid “burial” in the floor during the first frame.
+
+See the pergola example links below for practical values.
+
 ## NEW: Smart Object Placement System 🎯
 
 This plugin now includes a **size-based classification system** for optimal object placement and interaction:
@@ -116,6 +123,97 @@ Add this to your code:
 ```dart
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 ```
+
+## What’s new (Sep 2025)
+
+These updates improve reliability, especially for thin or very large models, and harmonize Android/iOS behavior.
+
+- Direct camera-relative placement: addNode without an anchor now spawns in front of the camera on both Android and iOS.
+- Robust pan with Y-lock: Pan freely on X/Z with Y locked; native fallback uses a camera-facing plane when tracked plane hits are unreliable.
+- Per-node gesture flags: Enable/disable pan/rotation on each ARNode for predictable routing.
+- Better selection for thin structures: Larger helper colliders and enhanced hit tests (native) make pergolas/selectable skeletons easy to tap and pan.
+- Return types unified: addNode returns nodeId (String?), removeNode returns bool.
+- Deep removal: removeNodeDeep(nodeId) tears down native/GPU resources more aggressively.
+- Smart placement: addNodeWithSmartPlacement(node, sizeType) positions objects at an optimal, size-aware distance.
+- iOS: Default lighting enabled for better rendering out of the box.
+
+### Direct camera-relative placement (no anchor)
+
+Minimal example that places an object ~1m in front of the camera and enables gestures:
+
+```dart
+final position = vec.Vector3(0.0, 0.0, -1.0); // z is forward in camera space
+final transform = Matrix4.identity()..setTranslation(position);
+
+final node = ARNode(
+  type: NodeType.webGLB,
+  uri: "https://…/Duck.glb",
+  transformation: transform,
+  scale: vec.Vector3(0.5, 0.5, 0.5),
+  isTransformable: true,
+  enablePanGestures: false,  // small models: prefer native pan + fallback
+  enableRotationGestures: true,
+);
+
+final nodeId = await arObjectManager.addNode(node);
+```
+
+Notes:
+- For small models, set enablePanGestures: false to use the native pan with camera-plane fallback.
+- For very large models (pergolas), set enablePanGestures: true for unlimited XZ panning with Y locked.
+
+### Unlimited XZ panning with Y-lock and fallback
+
+Per-node gestures provide flexibility:
+- enablePanGestures: true → custom unlimited XZ pan with Y-lock.
+- enablePanGestures: false → built-in/native pan with camera-plane fallback for reliability on small/thin meshes.
+
+You can also subscribe to transformation updates:
+
+```dart
+arObjectManager.onNodeTransformed = (nodeName, position, rotation) {
+  debugPrint('Node $nodeName moved to $position');
+};
+```
+
+### Smart placement API
+
+Place objects at a size-aware distance to avoid “too close” large objects or “too far” small ones:
+
+```dart
+final node = ARNode(
+  type: NodeType.webGLB,
+  uri: "https://…/Duck.glb",
+  scale: vec.Vector3(3.0, 2.5, 3.0),
+  isTransformable: true,
+  enablePanGestures: true,
+  enableRotationGestures: true,
+);
+
+final nodeId = await arObjectManager.addNodeWithSmartPlacement(
+  node,
+  sizeType: 'BIG', // SMALL | MEDIUM | BIG
+);
+```
+
+Under the hood, the plugin computes optimal distance and height offsets and shares hints with the native layer. If a platform doesn’t implement smart placement, the call gracefully falls back to addNode.
+
+### Removal and deep cleanup
+
+Track returned node IDs for robust removal and resource teardown:
+
+```dart
+// Shallow removal (detaches from scene)
+final ok = await arObjectManager.removeNode(node);
+
+// Deep removal (native + GPU resources)
+if (nodeId != null) {
+  final deepOk = await arObjectManager.removeNodeDeep(nodeId);
+}
+```
+
+Pair this with the existing nukeAll() when you need to reset the entire AR session.
+
 ## IOS Permissions
 * To prevent your application from crashing when launching augmented reality on iOS, you need to add the following permission to the Info.plist file (located under ios/Runner) :
 
@@ -621,15 +719,53 @@ Therefore, it is necessary to publish your project with github and make the modi
 
 ### Example Applications
 
-| Example Name                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Link to Code                                                                                                                                         |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Debug Options                | Simple AR scene with toggles to visualize the world origin, feature points and tracked planes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | [Debug Options Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/debug_options.dart)                                   |
-| Local & Online Objects        | AR scene with buttons to place GLTF objects from the flutter asset folders, GLB objects from the internet, or a GLB object from the app's Documents directory at a given position, rotation and scale. Additional buttons allow to modify scale, position and orientation with regard to the world origin after objects have been placed.                                                                                                                                                                                                                                                                | [Local & Online Objects Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/local_and_web_objects.dart)                  |
-| Objects & Anchors on Planes  | AR Scene in which tapping on a plane creates an anchor with a 3D model attached to it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | [Objects & Anchors on Planes Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/objects_on_planes.dart)                 |
-| Object Transformation Gestures | Same as Objects & Anchors on Planes example, but objects can be panned and rotated using gestures after being placed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | [Objects Gestures](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/object_gestures.dart)                                   |
-| Screenshots                  | Same as Objects & Anchors on Planes Example, but the snapshot function is used to take screenshots of the AR Scene                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [Screenshots Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/screenshot.dart)                            |
-| Cloud Anchors                | AR Scene in which objects can be placed, uploaded and downloaded, thus creating an interactive AR experience that can be shared between multiple devices. Currently, the example allows to upload the last placed object along with its anchor and download all anchors within a radius of 100m along with all the attached objects (independent of which device originally placed the objects). As sharing the objects is done by using the Google Cloud Anchor Service and Firebase, this requires some additional setup, please read [Getting Started with cloud anchors](cloudAnchorSetup.md)        | [Cloud Anchors Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/cloud_anchor.dart)                         |
-| External Object Management   | Similar to the Cloud Anchors example, but contains UI to choose between different models. Rather than being hard-coded, an external database (Firestore) is used to manage the available models. As sharing the objects is done by using the Google Cloud Anchor Service and Firebase, this requires some additional setup, please read [Getting Started with cloud anchors](cloudAnchorSetup.md). Also make sure that in your Firestore database, the collection "models" contains some entries with the fields "name", "image", and "uri", where "uri" points to the raw file of a model in GLB format | [External Model Management Code](https://github.com/hlefe/ar_flutter_plugin_2/blob/main/examples/external_model_management.dart) |
+| Example Name                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Link to Code |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| Debug Options                | Visualize the world origin, feature points, and tracked planes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | examples/debug_options.dart |
+| Local & Online Objects       | Place GLTF/GLB from assets, web, or Documents with position/rotation/scale controls                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | examples/local_and_web_objects.dart |
+| Objects & Anchors on Planes  | Tap a plane to create an anchor with a 3D model attached                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | examples/objects_on_planes.dart |
+| Object Transformation Gestures | Pan/rotate objects after placement using gestures                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | examples/object_gestures.dart |
+| Screenshots                  | Take a snapshot of the AR Scene                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | examples/screenshot.dart |
+| Cloud Anchors                | Upload/download anchors and attached objects via Google Cloud Anchor + Firebase                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | examples/cloud_anchor.dart |
+| External Object Management   | Choose models from Firestore and place them in AR                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | examples/external_model_management.dart |
+| Smart Placement Demo         | Showcases addNodeWithSmartPlacement and size-aware placement for SMALL/MEDIUM/BIG                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | examples/smart_placement_demo.dart |
+
+See also in example_app/:
+- example_app/lib/pergola_placement_example_fixed.dart (pergola visibility/offsets and smart spacing)
+- example_app/lib/auto_placement_test.dart (direct addNode camera-relative spawn)
+
+## Migration notes (last-week baseline → current)
+
+Use this quick checklist to update dependent apps:
+
+- Capture node IDs returned by addNode/addNodeWithSmartPlacement and keep a map for removals.
+- Swap any void removeNode calls for bool result handling; use removeNodeDeep(nodeId) when fully tearing down.
+- For small objects, prefer enablePanGestures: false to leverage native pan with fallback; for large objects, true for unlimited XZ pan with Y-lock.
+- For tap-to-place large objects, add a small forward offset from the tap point (see pergola example) or use smart placement.
+- On iOS, large/thin models may need a slightly higher initial scale and tiny Y-offset to ensure visibility on first frame.
+
+Minimal before/after highlights:
+
+```dart
+// Before: addNode returned no ID in some flows, removals relied on ARNode only
+final added = await arObjectManager.addNode(node, planeAnchor: anchor);
+await arObjectManager.removeNode(node);
+
+// After: capture nodeId and prefer deep removal when needed
+final nodeId = await arObjectManager.addNode(node, planeAnchor: anchor);
+if (nodeId != null) {
+  // ... later
+  await arObjectManager.removeNodeDeep(nodeId);
+}
+
+// Per-node gestures
+final node = ARNode(
+  // ...
+  isTransformable: true,
+  enablePanGestures: false,     // native pan + fallback (small)
+  enableRotationGestures: true,
+);
+```
 
 
 ## Plugin Architecture
