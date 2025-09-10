@@ -664,74 +664,47 @@ class ArCoreCompatView(
                         transformableNode.isEnabled = true
                         
                         // CRITICAL: Set collision shape for hit testing
-                        // RE-ENABLE collision shapes for proper pan gesture detection
-                        val collisionSize = Vector3(
-                            maxOf(scaleX * 6.0f, 2.0f), // 6x larger - minimum 2.0 units for better detection
-                            maxOf(scaleY * 6.0f, 2.0f), // 6x larger - minimum 2.0 units for better detection
-                            maxOf(scaleZ * 6.0f, 2.0f)  // 6x larger - minimum 2.0 units for better detection
-                        )
+                        // Use object-scale appropriate collision that doesn't interfere with normal gestures
+                        val isLargeObject = scaleX > 2.0f || scaleY > 2.0f || scaleZ > 2.0f
+                        val collisionSize = if (isLargeObject) {
+                            // For large objects (pergolas): slightly larger collision for easier interaction
+                            Vector3(
+                                scaleX * 1.5f, // Only 1.5x larger for large objects
+                                scaleY * 1.5f,
+                                scaleZ * 1.5f
+                            )
+                        } else {
+                            // For normal objects: use actual object size for precise gestures
+                            Vector3(scaleX, scaleY, scaleZ)
+                        }
                         transformableNode.collisionShape = Box(collisionSize)
-                        Log.d(TAG, "🎯 Collision shape set: ${collisionSize.x} x ${collisionSize.y} x ${collisionSize.z}")
+                        Log.d(TAG, "🎯 Collision shape set: ${collisionSize.x} x ${collisionSize.y} x ${collisionSize.z} (isLarge=$isLargeObject)")
                         
-                        // (Optional visual collider indicator removed for stability)
-                        
-                        // �🏗️ CREATE FLOOR-LEVEL PAN GESTURE HELPER
-                        // Add an invisible collision node at floor level to improve pan gesture detection
-                        if (enablePanGestures) {
+                        // Only add collision helpers for large objects (pergolas) that need them
+                        if (isLargeObject && enablePanGestures) {
                             try {
-                                // Create a large invisible collision box at floor level
+                                // Create a floor-level collision helper only for large complex objects
                                 val floorCollisionSize = Vector3(
-                                    maxOf(scaleX * 3.5f, 1.2f), // Larger horizontal area for easy interaction
-                                    0.06f,                       // Very thin vertically
-                                    maxOf(scaleZ * 3.5f, 1.2f)
+                                    scaleX * 2.0f, // Reduced from 3.5x to 2x
+                                    0.03f,          // Very thin vertically
+                                    scaleZ * 2.0f   // Reduced from 3.5x to 2x
                                 )
                                 
-                                // Create a simple child node for floor-level collision detection
                                 val floorCollisionNode = Node()
                                 floorCollisionNode.collisionShape = Box(floorCollisionSize)
                                 
-                                // Position the floor collision node near the bottom of the object's collider
-                                // Place slightly above the lowest point to stay pickable
-                                val bottomY = -collisionSize.y / 2.0f + 0.03f
+                                // Position at the bottom of the main collision box
+                                val bottomY = -collisionSize.y / 2.0f + 0.01f
                                 floorCollisionNode.localPosition = Vector3(0.0f, bottomY, 0.0f)
-                                
-                                // Make it a child of the main transformable node
                                 floorCollisionNode.setParent(transformableNode)
                                 
-                                // (Optional visual floor collider indicator removed for stability)
-
-                                // Set up pan gesture detection on the floor collision node
-                                floorCollisionNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    Log.d(TAG, "🎯 Floor collision node touched for: $nodeName, action: ${motionEvent.action}")
-                                    
-                                    // Forward the touch to the parent transformable node
-                                    // This ensures pan gestures work on the floor area
+                                floorCollisionNode.setOnTouchListener { _, motionEvent ->
+                                    Log.d(TAG, "🎯 Floor helper touched for large object: $nodeName")
                                     transformationSystem?.selectNode(transformableNode)
-                                    
-                                    // Let the transformation system handle the actual gesture
-                                    false // Return false to allow transformation system to process
+                                    false
                                 }
                                 
-                                Log.d(TAG, "🏗️ Added floor-level collision helper for pan gestures: $nodeName, size: $floorCollisionSize")
-                                
-                                // Add a mid-height collision helper to make tapping beams/roof easier
-                                val midCollisionSize = Vector3(
-                                    maxOf(scaleX * 3.0f, 1.0f),
-                                    maxOf(scaleY * 1.0f, 0.5f),
-                                    maxOf(scaleZ * 3.0f, 1.0f)
-                                )
-                                val midCollisionNode = Node().apply {
-                                    collisionShape = Box(midCollisionSize)
-                                    // Place around the middle of the object height
-                                    localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                    setParent(transformableNode)
-                                    setOnTouchListener { _, me ->
-                                        Log.d(TAG, "🎯 Mid collision node touched for: $nodeName, action: ${me.action}")
-                                        transformationSystem?.selectNode(transformableNode)
-                                        false
-                                    }
-                                }
-                                Log.d(TAG, "🏗️ Added mid-height collision helper for pan gestures: $nodeName, size: $midCollisionSize")
+                                Log.d(TAG, "🏗️ Added floor collision helper for large object: $nodeName")
                                 
                             } catch (e: Exception) {
                                 Log.w(TAG, "⚠️ Failed to create floor collision helper: ${e.message}")
@@ -883,31 +856,23 @@ class ArCoreCompatView(
                             Log.d(TAG, "📍 Direct placement with built-in translation at world: $worldPos (from cam-rel: x=$positionX, y=$positionY, z=$positionZ)")
                         }
                         
-                        // 🎯 SIMPLE COLLISION IMPROVEMENT FOR BETTER UX (enlarged pick box)
-                        // Create a larger invisible collision box for easier object grabbing
-                        // This makes it much easier to grab and pan objects, especially at small scales
-                        if (enablePanGestures) {
-                            try {
-                                Log.d(TAG, "🎨 Creating larger collision area for easy object grabbing")
-                                
-                                // Create a larger collision box for easier interaction (invisible)
-                                val enlargedCollisionSize = Vector3(
-                                    maxOf(scaleX * 4.0f, 1.2f),  // Make it larger than the object, minimum ~1.2m
-                                    maxOf(scaleY * 4.0f, 1.0f),
-                                    maxOf(scaleZ * 4.0f, 1.2f)
-                                )
-                                
-                                // Apply the larger collision shape directly to the transformable node
-                                transformableNode.collisionShape = Box(enlargedCollisionSize)
-                                
-                                Log.d(TAG, "✅ Created enlarged collision area with size: $enlargedCollisionSize")
-                                // (Optional main collider visualization removed for stability)
-                                    
-                            } catch (e: Exception) {
-                                Log.w(TAG, "⚠️ Could not create enlarged collision area: ${e.message}")
-                                // Fallback to default collision
-                                transformableNode.collisionShape = Box(Vector3(scaleX, scaleY, scaleZ))
-                            }
+                        // 🎯 COLLISION SYSTEM: Use appropriate collision sizes based on object type
+                        // Fixed collision system to work properly for both small and large objects
+                        if (isLargeObject && enablePanGestures) {
+                            Log.d(TAG, "🎨 Setting up large object collision (pergola-style)")
+                            // For large objects: slightly larger collision for easier interaction
+                            val enlargedCollisionSize = Vector3(
+                                scaleX * 1.8f,  // Moderate enlargement for large objects
+                                scaleY * 1.8f,
+                                scaleZ * 1.8f
+                            )
+                            transformableNode.collisionShape = Box(enlargedCollisionSize)
+                            Log.d(TAG, "✅ Large object collision area: $enlargedCollisionSize")
+                        } else {
+                            Log.d(TAG, "🎨 Setting up normal object collision (precise)")
+                            // For normal objects: use actual object size for precise gestures
+                            transformableNode.collisionShape = Box(Vector3(scaleX, scaleY, scaleZ))
+                            Log.d(TAG, "✅ Normal object collision area: ($scaleX, $scaleY, $scaleZ)")
                         }
                         
                         // Store the node for cleanup (no anchor needed)
@@ -1123,56 +1088,46 @@ class ArCoreCompatView(
                         // CRITICAL: Enable the node for hit testing and selection
                         transformableNode.isEnabled = true
                         
-                        // CRITICAL: Set collision shape for hit testing
-                        // Make the box generous so taps/drags on the model are easy (similar to direct add path)
-                        val collisionSize = Vector3(
-                            maxOf(scaleX * 4.0f, 1.2f), // Wider pick area
-                            maxOf(scaleY * 4.0f, 1.0f), // Taller pick area
-                            maxOf(scaleZ * 4.0f, 1.2f)
-                        )
+                        // CRITICAL: Set collision shape for hit testing - Fixed collision system
+                        val isLargeObjectAnchored = scaleX > 2.0f || scaleY > 2.0f || scaleZ > 2.0f
+                        val collisionSize = if (isLargeObjectAnchored) {
+                            // For large objects (pergolas): slightly larger collision for easier interaction
+                            Vector3(
+                                scaleX * 1.5f, // Moderate enlargement for large objects
+                                scaleY * 1.5f,
+                                scaleZ * 1.5f
+                            )
+                        } else {
+                            // For normal objects: use actual object size for precise gestures
+                            Vector3(scaleX, scaleY, scaleZ)
+                        }
                         transformableNode.collisionShape = Box(collisionSize)
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
+                        Log.d(TAG, "🎯 Set collision shape for anchored object: $nodeName, size: $collisionSize (isLarge=$isLargeObjectAnchored)")
 
-                        // Add helper collision nodes (floor + mid) to improve tap/drag on thin or skeletal meshes
-                        try {
-                            // Floor-level helper
-                            val floorCollisionSize = Vector3(
-                                maxOf(scaleX * 3.5f, 1.2f),
-                                0.06f,
-                                maxOf(scaleZ * 3.5f, 1.2f)
-                            )
-                            val floorCollisionNode = Node().apply {
-                                collisionShape = Box(floorCollisionSize)
-                                val bottomY = -collisionSize.y / 2.0f + 0.03f
-                                localPosition = Vector3(0.0f, bottomY, 0.0f)
-                                setParent(transformableNode)
-                                setOnTouchListener { _, me ->
-                                    Log.d(TAG, "🎯 Floor helper touched for: $nodeName action=${me.action}")
-                                    transformationSystem?.selectNode(transformableNode)
-                                    false
+                        // Add helper collision nodes only for large objects that need them
+                        if (isLargeObjectAnchored && enablePanGestures) {
+                            try {
+                                // Floor-level helper - only for large complex objects
+                                val floorCollisionSize = Vector3(
+                                    scaleX * 2.0f, // Reduced from original large sizes
+                                    0.03f,
+                                    scaleZ * 2.0f
+                                )
+                                val floorCollisionNode = Node().apply {
+                                    collisionShape = Box(floorCollisionSize)
+                                    val bottomY = -collisionSize.y / 2.0f + 0.01f
+                                    localPosition = Vector3(0.0f, bottomY, 0.0f)
+                                    setParent(transformableNode)
+                                    setOnTouchListener { _, me ->
+                                        Log.d(TAG, "🎯 Floor helper touched for large anchored object: $nodeName")
+                                        transformationSystem?.selectNode(transformableNode)
+                                        false
+                                    }
                                 }
+                                Log.d(TAG, "🏗️ Added floor helper for large anchored object: $nodeName")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Failed to create helper colliders for anchored node: ${e.message}")
                             }
-                            Log.d(TAG, "🏗️ Added floor helper for anchored node: $nodeName, size: $floorCollisionSize")
-
-                            // Mid-height helper
-                            val midCollisionSize = Vector3(
-                                maxOf(scaleX * 3.0f, 1.0f),
-                                maxOf(scaleY * 1.0f, 0.5f),
-                                maxOf(scaleZ * 3.0f, 1.0f)
-                            )
-                            val midCollisionNode = Node().apply {
-                                collisionShape = Box(midCollisionSize)
-                                localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                setParent(transformableNode)
-                                setOnTouchListener { _, me ->
-                                    Log.d(TAG, "🎯 Mid helper touched for: $nodeName action=${me.action}")
-                                    transformationSystem?.selectNode(transformableNode)
-                                    false
-                                }
-                            }
-                            Log.d(TAG, "🏗️ Added mid helper for anchored node: $nodeName, size: $midCollisionSize")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Failed to create helper colliders for anchored node: ${e.message}")
                         }
                         
                         // Set up tap listener for node selection (like in arcore_flutter_plugin)

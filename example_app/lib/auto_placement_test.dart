@@ -1,12 +1,14 @@
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
-import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';  
+import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
+import 'package:ar_flutter_plugin_2/datatypes/hittest_result_types.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 import 'package:flutter/material.dart';
 
@@ -18,285 +20,170 @@ class AutoPlacementTestScreen extends StatefulWidget {
 class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   ARSessionManager? arSessionManager;
   ARObjectManager? arObjectManager;
-  ARLocationManager? arLocationManager;
   ARAnchorManager? arAnchorManager;
-
-  List<ARNode> nodes = <ARNode>[];
-  bool _isARInitialized = false;
-  String _statusText = "Initializing AR...";
+  List<ARNode> nodes = [];
+  List<ARAnchor> anchors = [];
+  bool _autoPlacementMode = true; // Start in auto placement mode
+  
+  @override
+  void dispose() {
+    super.dispose();
+    arSessionManager?.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Auto Placement Test"),
+        title: Text('Auto Placement Test'),
         backgroundColor: Colors.blue,
-      ),
-      body: Stack(
-        children: [
-          // AR View
-          ARView(
-            onARViewCreated: _onARViewCreated,
-            planeDetectionConfig: PlaneDetectionConfig.horizontal,
-          ),
-          // Status and Controls Overlay
-          Positioned(
-            top: 20,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _statusText,
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    "Objects placed: ${nodes.length}",
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Controls at bottom
-          Positioned(
-            bottom: 50,
-            left: 20,
-            right: 20,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton(
-                  onPressed: _isARInitialized ? _placeObjectAutomatically : null,
-                  child: Text("Auto Place"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: nodes.isNotEmpty ? _removeAllObjects : null,
-                  child: Text("Remove All"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-            ),
+        actions: [
+          IconButton(
+            icon: Icon(_autoPlacementMode ? Icons.auto_awesome : Icons.touch_app),
+            onPressed: _toggleAutoPlacement,
           ),
         ],
+      ),
+      body: Container(
+        child: Stack(
+          children: [
+            ARView(
+              onARViewCreated: onARViewCreated,
+              planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            ),
+            Align(
+              alignment: FractionalOffset.bottomCenter,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: onRemoveEverything,
+                    child: Text("Remove Everything"),
+                  ),
+                  ElevatedButton(
+                    onPressed: _toggleAutoPlacement,
+                    child: Text(_autoPlacementMode ? "Disable Auto" : "Enable Auto"),
+                  ),
+                ],
+              )
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  void _onARViewCreated(
-      ARSessionManager sessionManager,
-      ARObjectManager objectManager,
-      ARAnchorManager anchorManager,
-      ARLocationManager locationManager) {
+  void onARViewCreated(
+    ARSessionManager arSessionManager,
+    ARObjectManager arObjectManager,
+    ARAnchorManager arAnchorManager,
+    ARLocationManager arLocationManager,
+  ) {
+    print("🚀🚀🚀 FLUTTER: onARViewCreated called!");
     
-    setState(() {
-      arSessionManager = sessionManager;
-      arObjectManager = objectManager;
-      arLocationManager = locationManager;
-      arAnchorManager = anchorManager;
-      _statusText = "AR managers created, initializing session...";
-    });
+    this.arSessionManager = arSessionManager;
+    this.arObjectManager = arObjectManager;
+    this.arAnchorManager = arAnchorManager;
 
-    _initializeAR();
+    // EXACT same initialization as working object_gestures
+    this.arSessionManager!.onInitialize(
+      showFeaturePoints: false,
+      showPlanes: true,
+      customPlaneTexturePath: "Images/triangle.png",
+      showWorldOrigin: false,
+      handlePans: true,
+      handleRotation: true,
+    );
+    this.arObjectManager!.onInitialize();
+
+    // Set the callback - this is the key part
+    this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
+    print("🎯🎯🎯 FLUTTER: Callback set! Function: ${this.arSessionManager!.onPlaneOrPointTap}.");
   }
 
-  void _initializeAR() async {
-    try {
-      await arSessionManager!.onInitialize(
-        showPlanes: false,
-        customPlaneTexturePath: null,
-        showWorldOrigin: false,
-        showFeaturePoints: false,
-        handlePans: true,
-        handleRotation: true,
+  Future<void> onPlaneOrPointTapped(List<ARHitTestResult> hitTestResults) async {
+    print("🎯 onPlaneOrPointTapped called with ${hitTestResults.length} results");
+    print("🔄 Auto placement mode: $_autoPlacementMode");
+    
+    if (hitTestResults.isNotEmpty) {
+      var singleHitTestResult = hitTestResults.firstWhere(
+        (hitTestResult) => hitTestResult.type == ARHitTestResultType.plane,
+        orElse: () => hitTestResults.first
       );
 
-      await arObjectManager!.onInitialize();
-
-      // Set up gesture handlers for pan and rotation
-      arObjectManager!.onPanStart = (String nodeName) {
-        print("🔥 Pan started on node: $nodeName");
-        setState(() {
-          _statusText = "Panning object: $nodeName";
-        });
-      };
-
-      arObjectManager!.onPanChange = (String nodeName) {
-        print("🔥 Pan changing on node: $nodeName");
-      };
-
-      arObjectManager!.onPanEnd = (String nodeName, Matrix4 transform) {
-        print("🔥 Pan ended on node: $nodeName");
-        setState(() {
-          _statusText = "Pan gesture completed on: $nodeName";
-        });
-      };
-
-      arObjectManager!.onRotationStart = (String nodeName) {
-        print("🔥 Rotation started on node: $nodeName");
-        setState(() {
-          _statusText = "Rotating object: $nodeName";
-        });
-      };
-
-      arObjectManager!.onRotationChange = (String nodeName) {
-        print("🔥 Rotation changing on node: $nodeName");
-      };
-
-      arObjectManager!.onRotationEnd = (String nodeName, Matrix4 transform) {
-        print("🔥 Rotation ended on node: $nodeName");
-        setState(() {
-          _statusText = "Rotation gesture completed on: $nodeName";
-        });
-      };
-
-      arObjectManager!.onNodeTap = (List<String> nodeNames) {
-        print("🔥 Node tapped: $nodeNames");
-        setState(() {
-          _statusText = "Tapped on: ${nodeNames.join(', ')}";
-        });
-      };
-
-      // Set up plane/point tap handler for AR session manager
-      arSessionManager!.onPlaneOrPointTap = (List<ARHitTestResult> hits) {
-        print("🔥 Plane or point tapped with ${hits.length} hit results");
-        for (var hit in hits) {
-          print("🔥 Hit result type: ${hit.type}, distance: ${hit.distance}");
-        }
-        setState(() {
-          _statusText = "Tapped on plane/point with ${hits.length} hits";
-        });
-      };
-
-      setState(() {
-        _isARInitialized = true;
-        _statusText = "AR initialized. Tap 'Auto Place' to test automatic placement.";
-      });
-
-      print("✅ AR initialization completed");
-      
-      // Wait a moment for AR to stabilize, then test auto placement
-      await Future.delayed(Duration(seconds: 2));
-      
-      setState(() {
-        _statusText = "AR ready for automatic placement testing!";
-      });
-      
-    } catch (e) {
-      print("❌ Error initializing AR: $e");
-      setState(() {
-        _statusText = "Error initializing AR: $e";
-      });
-    }
-  }
-
-  Future<void> _placeObjectAutomatically() async {
-    if (!_isARInitialized || arObjectManager == null) {
-      print("❌ AR not initialized or object manager not available");
-      return;
-    }
-
-    setState(() {
-      _statusText = "Placing object automatically...";
-    });
-
-    try {
-      print("🎯 Testing automatic object placement on Android ARCore");
-      
-      // Create a node with a specific position (in front of the camera)
-  // Place 1m in front of the camera, keep Y at camera height for visibility
-  vm.Vector3 autoPosition = vm.Vector3(0.0, 0.0, -1.0);
-      
-      // Create transformation matrix for the position
-      Matrix4 transformation = Matrix4.identity();
-      transformation.setTranslationRaw(autoPosition.x, autoPosition.y, autoPosition.z);
-      
-      String nodeName = "AutoPlacedDuck_${DateTime.now().millisecondsSinceEpoch}";
-      
-      ARNode node = ARNode(
-        type: NodeType.webGLB,
-        uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
-        name: nodeName,
-        transformation: transformation,
-        scale: vm.Vector3(0.5, 0.5, 0.5), // Visible at 1m distance
-        isTransformable: true,
-        // Use built-in pan with native fallback for small model reliability
-        enablePanGestures: false,
-        enableRotationGestures: true,
-      );
-
-      print("📦 Created ARNode: $nodeName");
-      print("📍 Position: $autoPosition");
-      print("📏 Scale: ${node.scale}");
-      
-      // THE KEY TEST: Call addNode WITHOUT planeAnchor - this should now work on Android!
-      String? result = await arObjectManager!.addNode(node);
-      
-      if (result != null) {
-        print("✅ AUTO PLACEMENT SUCCESS! Node ID: $result");
-        nodes.add(node);
-        setState(() {
-    _statusText = "✅ Auto placement successful! Object is ~1m in front. Drag to pan, twist to rotate.";
-        });
+      if (_autoPlacementMode) {
+        // AUTO MODE: Place duck automatically when any plane is tapped
+        print("🦆 AUTO MODE: Placing duck automatically!");
+        _placeDuckAtHitResult(singleHitTestResult);
       } else {
-        print("❌ AUTO PLACEMENT FAILED! addNode returned null");
-        setState(() {
-          _statusText = "❌ Auto placement failed - addNode returned null";
-        });
+        // NORMAL MODE: Use the original object_gestures behavior
+        print("🎯 NORMAL MODE: Manual placement");
+        _placeDuckAtHitResult(singleHitTestResult);
       }
-      
-    } catch (e) {
-      print("❌ Exception during auto placement: $e");
-      setState(() {
-        _statusText = "❌ Auto placement error: $e";
-      });
     }
   }
 
-  Future<void> _removeAllObjects() async {
-    if (arObjectManager == null || nodes.isEmpty) return;
+  void _placeDuckAtHitResult(ARHitTestResult hitResult) async {
+    var newAnchor = ARPlaneAnchor(transformation: hitResult.worldTransform);
+    bool? didAddAnchor = await this.arAnchorManager!.addAnchor(newAnchor);
+    
+    if (didAddAnchor!) {
+      this.anchors.add(newAnchor);
+      
+      // Add duck at plane level (not eye level) - EXACT same as object_gestures
+      var newNode = ARNode(
+        type: NodeType.webGLB,
+        uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/main/2.0/Duck/glTF-Binary/Duck.glb",
+        scale: vm.Vector3(0.2, 0.2, 0.2),
+        position: vm.Vector3(0.0, 0.0, 0.0), // Place at anchor position, not above it
+        rotation: vm.Vector4(1.0, 0.0, 0.0, 0.0),
+        isTransformable: true,
+        enablePanGestures: false, // Use built-in pan for small model reliability
+        enableRotationGestures: true
+      );
+      
+      String? addedNodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
+      
+      if (addedNodeId != null) {
+        this.nodes.add(newNode);
+        print("✅ Duck placed at plane level!");
+      } else {
+        this.arAnchorManager!.removeAnchor(newAnchor);
+        print("❌ Failed to add duck node");
+      }
+    } else {
+      print("❌ Failed to add plane anchor");
+    }
+  }
 
+  void _toggleAutoPlacement() {
     setState(() {
-      _statusText = "Removing all objects...";
+      _autoPlacementMode = !_autoPlacementMode;
+      print("🔄 Auto placement mode: $_autoPlacementMode");
     });
-
-    try {
-      for (ARNode node in nodes) {
-        await arObjectManager!.removeNode(node);
-      }
-      
-      nodes.clear();
-      
-      setState(() {
-        _statusText = "All objects removed. Ready for new auto placement test.";
-      });
-      
-    } catch (e) {
-      print("❌ Error removing objects: $e");
-      setState(() {
-        _statusText = "Error removing objects: $e";
-      });
-    }
+    
+    // Show a clear message about the current mode
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(_autoPlacementMode 
+          ? "🔍 AUTO MODE: Tap any plane to place duck automatically!"
+          : "🎯 NORMAL MODE: Tap plane to place duck normally"),
+        backgroundColor: _autoPlacementMode ? Colors.green : Colors.blue,
+        duration: Duration(seconds: 2),
+      )
+    );
   }
 
-  @override
-  void dispose() {
-    arSessionManager?.dispose();
-    super.dispose();
+  onRemoveEverything() async {
+    print("🧹 Removing everything...");
+    for (var anchor in this.anchors) {
+      this.arAnchorManager!.removeAnchor(anchor);
+    }
+    this.anchors = [];
+    for (var node in this.nodes) {
+      this.arObjectManager!.removeNode(node);
+    }
+    this.nodes = [];
+    print("✅ Everything removed!");
   }
 }

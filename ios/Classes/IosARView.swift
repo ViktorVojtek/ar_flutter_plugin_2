@@ -1040,12 +1040,13 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         }
         
         if !standardNodeResults.isEmpty {
+            print("🎯 Standard hit detected: \(standardNodeResults)")
             return standardNodeResults
         }
         
-        // Enhanced hit testing for large objects - expand touch area
-        let expandedRadius: CGFloat = 50.0 // 50 points around the touch
-        var enhancedResults: [String] = []
+        // Enhanced hit testing for better gesture reliability
+        let baseRadius: CGFloat = 60.0 // Increased base radius for better reliability
+        var enhancedResults: [(String, Float)] = [] // Store with distance for sorting
         
         // Check all nodes in the scene to see if any are within the expanded touch area
         sceneView.scene.rootNode.enumerateChildNodes { (node, _) in
@@ -1053,40 +1054,40 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let screenPoint = sceneView.projectPoint(node.position)
                 let nodeScreenLocation = CGPoint(x: CGFloat(screenPoint.x), y: CGFloat(screenPoint.y))
                 
+                // Skip nodes that are behind the camera (z > 1.0 in screen space)
+                guard screenPoint.z >= 0.0 && screenPoint.z <= 1.0 else { return }
+                
                 // Calculate distance from touch to node's screen position
                 let dx = location.x - nodeScreenLocation.x
                 let dy = location.y - nodeScreenLocation.y
-                let distance = sqrt(dx * dx + dy * dy)
+                let screenDistance = sqrt(dx * dx + dy * dy)
                 
                 // Calculate dynamic touch radius based on node scale
                 let nodeScale = max(node.scale.x, max(node.scale.y, node.scale.z))
-                let dynamicRadius = max(expandedRadius, CGFloat(nodeScale) * 25.0) // Larger radius for large objects
+                let isLargeObject = nodeScale > 2.0
+                let dynamicRadius = isLargeObject ? 
+                    max(baseRadius, CGFloat(nodeScale) * 6.0) : // Reduced multiplier for large objects
+                    baseRadius // Standard radius for normal objects
                 
-                if distance <= dynamicRadius {
-                    // Additional depth check to prefer closer objects
+                if screenDistance <= dynamicRadius {
+                    // Calculate 3D distance to camera for prioritization
                     let cameraPosition = sceneView.pointOfView?.position ?? SCNVector3Zero
                     let nodeDistance = distance3D(from: cameraPosition, to: node.position)
                     
-                    enhancedResults.append(nodeName)
-                    print("🎯 Enhanced hit detected: \(nodeName), scale: \(nodeScale), distance: \(distance), radius: \(dynamicRadius)")
+                    enhancedResults.append((nodeName, nodeDistance))
+                    print("🎯 Enhanced hit candidate: \(nodeName), scale: \(nodeScale), screenDist: \(screenDistance), radius: \(dynamicRadius), 3dDist: \(nodeDistance)")
                 }
             }
         }
         
-        // Sort by proximity to camera (closer objects first)
-        enhancedResults.sort { name1, name2 in
-            guard let node1 = sceneView.scene.rootNode.childNode(withName: name1, recursively: true),
-                  let node2 = sceneView.scene.rootNode.childNode(withName: name2, recursively: true),
-                  let cameraPosition = sceneView.pointOfView?.position else {
-                return false
-            }
-            
-            let distance1 = distance3D(from: cameraPosition, to: node1.position)
-            let distance2 = distance3D(from: cameraPosition, to: node2.position)
-            return distance1 < distance2
+        // Sort by 3D distance to camera (closer objects first) and return just the names
+        let sortedResults = enhancedResults.sorted { $0.1 < $1.1 }.map { $0.0 }
+        
+        if !sortedResults.isEmpty {
+            print("🎯 Enhanced hit results (sorted by distance): \(sortedResults)")
         }
         
-        return enhancedResults
+        return sortedResults
     }
     
     // Helper function to calculate 3D distance between two points
@@ -1096,7 +1097,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         let dz = point1.z - point2.z
         return sqrt(dx * dx + dy * dy + dz * dz)
     }
-    
+
     func addPlaneAnchor(transform: Array<NSNumber>, name: String){
         let arAnchor = ARAnchor(transform: simd_float4x4(deserializeMatrix4(transform)))
         anchorCollection[name] = arAnchor
