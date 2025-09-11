@@ -12,6 +12,7 @@ import android.view.GestureDetector
 import java.util.concurrent.CompletableFuture
 import kotlin.math.pow
 import com.google.ar.core.*
+import com.google.ar.core.Pose
 import com.google.ar.sceneform.*
 import com.google.ar.sceneform.assets.RenderableSource
 import com.google.ar.sceneform.math.Vector3
@@ -102,7 +103,7 @@ class ArCoreCompatView(
                 }
             }
 
-            // Initialize TransformationSystem for gesture handling
+            // Initialize TransformationSystem for gesture handling with safety checks
             val selectionVisualizer = object : SelectionVisualizer {
                 override fun applySelectionVisual(node: BaseTransformableNode) {
                     // Send gesture start callbacks based on enabled controllers
@@ -117,19 +118,54 @@ class ArCoreCompatView(
                 }
                 
                 override fun removeSelectionVisual(node: BaseTransformableNode) {
-                    // Send gesture end callbacks
+                    // Send gesture end callbacks with safety checks
                     if (node is TransformableNode) {
-                        if (node.translationController.isEnabled) {
-                            objectChannel.invokeMethod("onPanEnd", node.name)
-                        }
-                        if (node.rotationController.isEnabled) {
-                            objectChannel.invokeMethod("onRotationEnd", node.name)
+                        try {
+                            // Check if node has proper parent hierarchy before sending callbacks
+                            val hasValidParent = node.parent != null && node.parent is AnchorNode
+                            if (hasValidParent) {
+                                if (node.translationController.isEnabled) {
+                                    objectChannel.invokeMethod("onPanEnd", node.name)
+                                }
+                                if (node.rotationController.isEnabled) {
+                                    objectChannel.invokeMethod("onRotationEnd", node.name)
+                                }
+                            } else {
+                                Log.w(TAG, "⚠️ Node ${node.name} has invalid parent hierarchy, skipping gesture end callbacks")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Error in removeSelectionVisual: ${e.message}")
                         }
                     }
                 }
             }
             
-            transformationSystem = TransformationSystem(activity.resources.displayMetrics, selectionVisualizer)
+            // Create TransformationSystem with enhanced error handling
+            transformationSystem = object : TransformationSystem(activity.resources.displayMetrics, selectionVisualizer) {
+                override fun onTouch(hitTestResult: HitTestResult?, motionEvent: MotionEvent?) {
+                    try {
+                        // Safety check before processing touch events
+                        if (hitTestResult != null && motionEvent != null) {
+                            // Check if selected node has valid parent hierarchy
+                            val selectedNode = this.selectedNode
+                            if (selectedNode is TransformableNode) {
+                                val hasValidParent = selectedNode.parent != null && selectedNode.parent is AnchorNode
+                                if (!hasValidParent && motionEvent.action == MotionEvent.ACTION_UP) {
+                                    Log.w(TAG, "⚠️ Preventing gesture completion on node with invalid parent hierarchy")
+                                    // Clear selection to prevent crash by calling the parent's selectNode method
+                                    selectNode(null)
+                                    return
+                                }
+                            }
+                            super.onTouch(hitTestResult, motionEvent)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error in TransformationSystem.onTouch: ${e.message}")
+                        // Clear selection to prevent further issues
+                        selectNode(null)
+                    }
+                }
+            }
 
             // Setup gesture detection for tap-to-place
             gestureDetector = GestureDetector(activity, object : GestureDetector.SimpleOnGestureListener() {
@@ -196,7 +232,18 @@ class ArCoreCompatView(
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
             "touch" -> handleTouch(call, result)
-            else -> result.notImplemented()
+            // Add common platform view methods that Flutter might call
+            "sendMotionEvent" -> handleSendMotionEvent(call, result)
+            "onTouchEvent" -> handleOnTouchEvent(call, result)
+            "performClick" -> handlePerformClick(call, result)
+            "clearFocus" -> handleClearFocus(call, result)
+            "requestFocus" -> handleRequestFocus(call, result)
+            "getOffset" -> handleGetOffset(call, result)
+            "resize" -> handleResize(call, result)
+            else -> {
+                Log.w(TAG, "⚠️ Unimplemented method called: ${call.method}")
+                result.notImplemented()
+            }
         }
     }
 
@@ -642,34 +689,130 @@ class ArCoreCompatView(
                                         nodesMap["${nodeName}_anchor"] = anchorNode
                                         
                                     } else {
-                                        Log.w(TAG, "⚠️ No suitable plane found, falling back to scene attachment")
-                                        // Fallback: Add directly to scene (gestures may not work optimally)
+                                        Log.w(TAG, "⚠️ No suitable plane found, creating virtual anchor for gesture support")
+                                        // Create a virtual anchor at the specified position to ensure proper parent hierarchy
+                                        try {
+                                            val session = arSceneView?.session
+                                            val virtualAnchor = session?.createAnchor(
+                                                Pose.makeTranslation(positionX, positionY, positionZ)
+                                            )
+                                            if (virtualAnchor != null) {
+                                                val anchorNode = AnchorNode(virtualAnchor)
+                                                anchorNode.setParent(arSceneView?.scene)
+                                                transformableNode.setParent(anchorNode)
+                                                transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                                
+                                                // Store both nodes
+                                                nodesMap[nodeName] = transformableNode
+                                                nodesMap["${nodeName}_anchor"] = anchorNode
+                                                Log.d(TAG, "✅ Created virtual anchor for gesture support")
+                                            } else {
+                                                Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
+                                                transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                                arSceneView?.scene?.addChild(transformableNode)
+                                                nodesMap[nodeName] = transformableNode
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
+                                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                            arSceneView?.scene?.addChild(transformableNode)
+                                            nodesMap[nodeName] = transformableNode
+                                        }
+                                    }
+                                } else {
+                                    Log.w(TAG, "⚠️ No tracked planes available, creating virtual anchor for gesture support")
+                                    // Create a virtual anchor at the specified position to ensure proper parent hierarchy
+                                    try {
+                                        val session = arSceneView?.session
+                                        val virtualAnchor = session?.createAnchor(
+                                            Pose.makeTranslation(positionX, positionY, positionZ)
+                                        )
+                                        if (virtualAnchor != null) {
+                                            val anchorNode = AnchorNode(virtualAnchor)
+                                            anchorNode.setParent(arSceneView?.scene)
+                                            transformableNode.setParent(anchorNode)
+                                            transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                            
+                                            // Store both nodes
+                                            nodesMap[nodeName] = transformableNode
+                                            nodesMap["${nodeName}_anchor"] = anchorNode
+                                            Log.d(TAG, "✅ Created virtual anchor for gesture support")
+                                        } else {
+                                            Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
+                                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                            arSceneView?.scene?.addChild(transformableNode)
+                                            nodesMap[nodeName] = transformableNode
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
                                         transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                         arSceneView?.scene?.addChild(transformableNode)
                                         nodesMap[nodeName] = transformableNode
                                     }
-                                } else {
-                                    Log.w(TAG, "⚠️ No tracked planes available, falling back to scene attachment")
-                                    // Fallback: Add directly to scene (gestures may not work optimally)
+                                }
+                                
+                            } else {
+                                Log.w(TAG, "⚠️ AR Session not available, creating virtual anchor for gesture support")
+                                // Create a virtual anchor at the specified position to ensure proper parent hierarchy
+                                try {
+                                    val session = arSceneView?.session
+                                    val virtualAnchor = session?.createAnchor(
+                                        Pose.makeTranslation(positionX, positionY, positionZ)
+                                    )
+                                    if (virtualAnchor != null) {
+                                        val anchorNode = AnchorNode(virtualAnchor)
+                                        anchorNode.setParent(arSceneView?.scene)
+                                        transformableNode.setParent(anchorNode)
+                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                        
+                                        // Store both nodes
+                                        nodesMap[nodeName] = transformableNode
+                                        nodesMap["${nodeName}_anchor"] = anchorNode
+                                        Log.d(TAG, "✅ Created virtual anchor for gesture support")
+                                    } else {
+                                        Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
+                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                        arSceneView?.scene?.addChild(transformableNode)
+                                        nodesMap[nodeName] = transformableNode
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
                                     transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                     arSceneView?.scene?.addChild(transformableNode)
                                     nodesMap[nodeName] = transformableNode
                                 }
-                                
-                            } else {
-                                Log.w(TAG, "⚠️ AR Session not available, falling back to direct scene attachment")
-                                // Fallback: Add the node directly to the scene (gestures may not work optimally)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Failed to find detected plane: ${e.message}")
+                            Log.d(TAG, "🔄 Creating virtual anchor for gesture support")
+                            // Create a virtual anchor at the specified position to ensure proper parent hierarchy
+                            try {
+                                val session = arSceneView?.session
+                                val virtualAnchor = session?.createAnchor(
+                                    Pose.makeTranslation(positionX, positionY, positionZ)
+                                )
+                                if (virtualAnchor != null) {
+                                    val anchorNode = AnchorNode(virtualAnchor)
+                                    anchorNode.setParent(arSceneView?.scene)
+                                    transformableNode.setParent(anchorNode)
+                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                    
+                                    // Store both nodes
+                                    nodesMap[nodeName] = transformableNode
+                                    nodesMap["${nodeName}_anchor"] = anchorNode
+                                    Log.d(TAG, "✅ Created virtual anchor for gesture support")
+                                } else {
+                                    Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
+                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                    arSceneView?.scene?.addChild(transformableNode)
+                                    nodesMap[nodeName] = transformableNode
+                                }
+                            } catch (anchorException: Exception) {
+                                Log.w(TAG, "⚠️ Exception creating virtual anchor: ${anchorException.message}, using direct scene attachment")
                                 transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                 arSceneView?.scene?.addChild(transformableNode)
                                 nodesMap[nodeName] = transformableNode
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "❌ Failed to find detected plane: ${e.message}")
-                            Log.d(TAG, "🔄 Falling back to direct scene attachment")
-                            // Fallback: Add the node directly to the scene
-                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                            arSceneView?.scene?.addChild(transformableNode)
-                            nodesMap[nodeName] = transformableNode
                         }
                         
                         Log.d(TAG, "✅ GLB model added with direct placement: $nodeName")
@@ -1427,6 +1570,99 @@ class ArCoreCompatView(
             result.success(null)
         } catch (e: Exception) {
             result.error("DISPOSE_ERROR", e.message, null)
+        }
+    }
+
+    // Handle sendMotionEvent method calls from Flutter platform view system
+    private fun handleSendMotionEvent(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleSendMotionEvent called")
+        // This is often called when gesture ends - just acknowledge it
+        result.success(true)
+    }
+
+    // Handle onTouchEvent method calls from Flutter platform view system  
+    private fun handleOnTouchEvent(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleOnTouchEvent called")
+        // Forward to our existing touch handler
+        handleTouch(call, result)
+    }
+
+    // Handle performClick method calls from Flutter platform view system
+    private fun handlePerformClick(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handlePerformClick called")
+        try {
+            val clicked = arSceneView?.performClick() ?: false
+            result.success(clicked)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error performing click: ${e.message}")
+            result.success(false)
+        }
+    }
+
+    // Handle clearFocus method calls from Flutter platform view system
+    private fun handleClearFocus(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleClearFocus called")
+        try {
+            arSceneView?.clearFocus()
+            result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error clearing focus: ${e.message}")
+            result.success(false)
+        }
+    }
+
+    // Handle requestFocus method calls from Flutter platform view system
+    private fun handleRequestFocus(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleRequestFocus called")
+        try {
+            val focused = arSceneView?.requestFocus() ?: false
+            result.success(focused)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error requesting focus: ${e.message}")
+            result.success(false)
+        }
+    }
+
+    // Handle getOffset method calls from Flutter platform view system
+    private fun handleGetOffset(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleGetOffset called")
+        try {
+            // Return default offset values
+            val offset = mapOf(
+                "dx" to 0.0,
+                "dy" to 0.0
+            )
+            result.success(offset)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error getting offset: ${e.message}")
+            result.error("OFFSET_ERROR", "Failed to get offset: ${e.message}", null)
+        }
+    }
+
+    // Handle resize method calls from Flutter platform view system
+    private fun handleResize(call: MethodCall, result: MethodChannel.Result) {
+        Log.d(TAG, "🎯 handleResize called")
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            val width = (arguments?.get("width") as? Number)?.toInt() ?: 0
+            val height = (arguments?.get("height") as? Number)?.toInt() ?: 0
+            
+            Log.d(TAG, "🎯 Resize requested: ${width}x${height}")
+            
+            // Apply resize if needed
+            arSceneView?.let { sceneView ->
+                val layoutParams = sceneView.layoutParams
+                if (layoutParams != null && width > 0 && height > 0) {
+                    layoutParams.width = width
+                    layoutParams.height = height
+                    sceneView.layoutParams = layoutParams
+                }
+            }
+            
+            result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error resizing: ${e.message}")
+            result.success(false)
         }
     }
 
