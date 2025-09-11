@@ -304,4 +304,72 @@ class ARObjectManager {
       return {};
     }
   }
+
+  // =================================================================
+  // Transform Gesture Control Methods for Android Single-Object Mode
+  // =================================================================
+
+  /// Enable transform gestures for a specific node (Android single-object mode)
+  Future<bool> enableTransformGestures(String nodeId) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Enabling transform gestures for node: $nodeId');
+      }
+      final result = await _channel.invokeMethod<bool>('enableTransformGestures', nodeId);
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in enableTransformGestures: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Disable transform gestures for a specific node
+  Future<bool> disableTransformGestures(String nodeId) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Disabling transform gestures for node: $nodeId');
+      }
+      final result = await _channel.invokeMethod<bool>('disableTransformGestures', nodeId);
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in disableTransformGestures: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Select a specific node in the transformation system
+  Future<bool> selectNode(String nodeId) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Selecting node: $nodeId');
+      }
+      final result = await _channel.invokeMethod<bool>('selectNode', nodeId);
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in selectNode: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Deselect all nodes in the transformation system
+  Future<bool> deselectAllNodes() async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Deselecting all nodes');
+      }
+      final result = await _channel.invokeMethod<bool>('deselectAllNodes');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in deselectAllNodes: $e');
+      }
+      return false;
+    }
+  }
 }

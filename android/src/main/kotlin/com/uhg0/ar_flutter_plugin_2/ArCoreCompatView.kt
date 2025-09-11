@@ -232,6 +232,11 @@ class ArCoreCompatView(
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
             "touch" -> handleTouch(call, result)
+            // Add transform gesture control methods for single-object mode
+            "enableTransformGestures" -> handleEnableTransformGestures(call, result)
+            "disableTransformGestures" -> handleDisableTransformGestures(call, result)
+            "selectNode" -> handleSelectNode(call, result)
+            "deselectAllNodes" -> handleDeselectAllNodes(call, result)
             // Add common platform view methods that Flutter might call
             "sendMotionEvent" -> handleSendMotionEvent(call, result)
             "onTouchEvent" -> handleOnTouchEvent(call, result)
@@ -244,6 +249,167 @@ class ArCoreCompatView(
                 Log.w(TAG, "⚠️ Unimplemented method called: ${call.method}")
                 result.notImplemented()
             }
+        }
+    }
+
+    // =================================================================
+    // Transform Gesture Control Methods
+    // =================================================================
+    
+    /**
+     * Enable transform gestures for a specific node (Android single-object mode)
+     */
+    private fun handleEnableTransformGestures(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeId = call.arguments as? String
+            if (nodeId == null) {
+                result.error("INVALID_ARGUMENT", "Node ID is required", null)
+                return
+            }
+            
+            Log.d(TAG, "🎯 ENABLE TRANSFORM: Enabling gestures for node: $nodeId")
+            
+            val node = nodesMap[nodeId]
+            if (node !is TransformableNode) {
+                Log.w(TAG, "⚠️ Node $nodeId is not a TransformableNode or doesn't exist")
+                result.error("NODE_NOT_FOUND", "Node $nodeId is not transformable", null)
+                return
+            }
+            
+            // CRITICAL: First disable ALL other nodes to ensure only one is active
+            disableAllTransformableNodes()
+            
+            // Enable gesture controllers for this specific node
+            node.translationController.isEnabled = true
+            node.rotationController.isEnabled = true
+            node.scaleController.isEnabled = true
+            
+            // Make sure the transformation system selects this node
+            transformationSystem?.selectNode(node)
+            
+            Log.d(TAG, "✅ ENABLE TRANSFORM: Successfully enabled gestures for node: $nodeId")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ ENABLE TRANSFORM: Error enabling gestures: ${e.message}")
+            result.error("ENABLE_ERROR", "Failed to enable gestures: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Disable transform gestures for a specific node
+     */
+    private fun handleDisableTransformGestures(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeId = call.arguments as? String
+            if (nodeId == null) {
+                result.error("INVALID_ARGUMENT", "Node ID is required", null)
+                return
+            }
+            
+            Log.d(TAG, "🎯 DISABLE TRANSFORM: Disabling gestures for node: $nodeId")
+            
+            val node = nodesMap[nodeId]
+            if (node !is TransformableNode) {
+                Log.w(TAG, "⚠️ Node $nodeId is not a TransformableNode or doesn't exist")
+                result.error("NODE_NOT_FOUND", "Node $nodeId is not transformable", null)
+                return
+            }
+            
+            // Disable gesture controllers for this specific node
+            node.translationController.isEnabled = false
+            node.rotationController.isEnabled = false
+            node.scaleController.isEnabled = false
+            
+            // If this was the selected node, deselect it
+            if (transformationSystem?.selectedNode == node) {
+                transformationSystem?.selectNode(null)
+            }
+            
+            Log.d(TAG, "✅ DISABLE TRANSFORM: Successfully disabled gestures for node: $nodeId")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ DISABLE TRANSFORM: Error disabling gestures: ${e.message}")
+            result.error("DISABLE_ERROR", "Failed to disable gestures: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Select a specific node in the transformation system
+     */
+    private fun handleSelectNode(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeId = call.arguments as? String
+            if (nodeId == null) {
+                result.error("INVALID_ARGUMENT", "Node ID is required", null)
+                return
+            }
+            
+            Log.d(TAG, "🎯 SELECT NODE: Selecting node: $nodeId")
+            
+            val node = nodesMap[nodeId]
+            if (node !is TransformableNode) {
+                Log.w(TAG, "⚠️ Node $nodeId is not a TransformableNode or doesn't exist")
+                result.error("NODE_NOT_FOUND", "Node $nodeId is not transformable", null)
+                return
+            }
+            
+            // Select the node in the transformation system
+            transformationSystem?.selectNode(node)
+            
+            Log.d(TAG, "✅ SELECT NODE: Successfully selected node: $nodeId")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ SELECT NODE: Error selecting node: ${e.message}")
+            result.error("SELECT_ERROR", "Failed to select node: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Deselect all nodes in the transformation system
+     */
+    private fun handleDeselectAllNodes(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            Log.d(TAG, "🎯 DESELECT ALL: Deselecting all nodes")
+            
+            // Deselect any currently selected node
+            transformationSystem?.selectNode(null)
+            
+            // Optionally disable all gesture controllers
+            disableAllTransformableNodes()
+            
+            Log.d(TAG, "✅ DESELECT ALL: Successfully deselected all nodes")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ DESELECT ALL: Error deselecting nodes: ${e.message}")
+            result.error("DESELECT_ERROR", "Failed to deselect nodes: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Disable all transformable nodes to ensure single-object mode
+     */
+    private fun disableAllTransformableNodes() {
+        try {
+            Log.d(TAG, "🔧 Disabling all transformable nodes for single-object mode")
+            
+            for ((nodeId, node) in nodesMap) {
+                if (node is TransformableNode) {
+                    node.translationController.isEnabled = false
+                    node.rotationController.isEnabled = false
+                    node.scaleController.isEnabled = false
+                    Log.d(TAG, "🔧 Disabled gestures for node: $nodeId")
+                }
+            }
+            
+            // Deselect any currently selected node
+            transformationSystem?.selectNode(null)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error disabling all transformable nodes: ${e.message}")
         }
     }
 
@@ -298,17 +464,12 @@ class ArCoreCompatView(
             }
         }
         
-        // If we found object hits, select the first one and notify Flutter
+        // If we found object hits, notify Flutter but DON'T auto-select
+        // Let Flutter handle the selection logic to maintain consistency
         if (reusableNodeHitResults.isNotEmpty()) {
-            val tappedNodeName = reusableNodeHitResults.first() // Select first/closest node
-            val tappedNode = nodesMap[tappedNodeName]
+            Log.d(TAG, "🎯 Object(s) tapped: ${reusableNodeHitResults.joinToString()}")
             
-            if (tappedNode is TransformableNode) {
-                Log.d(TAG, "🎯 Tap selecting node: $tappedNodeName")
-                transformationSystem?.selectNode(tappedNode)
-            }
-            
-            // Notify Flutter about the tap
+            // Notify Flutter about the tap - Flutter will handle selection
             val uniqueNodeHits = reusableNodeHitResults.toSet().toList()
             objectChannel.invokeMethod("onNodeTap", uniqueNodeHits)
             return

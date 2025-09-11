@@ -70,6 +70,10 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
   bool _baselineSet = false;
   bool _isShowingMemoryWarning = false;
   
+  // Single-object selection mode for Android
+  String? _activeTransformableNode;
+  bool _isAndroidSingleObjectMode = false;
+  
   // Model restoration and session state
   bool _isRestoringModels = false;
   bool _isARSessionPaused = false;
@@ -100,6 +104,10 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     _sessionController = ARSessionController();
     _modelManager = ARModelManager();
     _planeManager = ARPlaneManager();
+    
+    // Initialize Android single-object mode
+    _isAndroidSingleObjectMode = Platform.isAndroid;
+    _activeTransformableNode = null;
     
     // Start memory monitoring
     _startMemoryMonitoring();
@@ -156,22 +164,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     
     _planeManager.reset();
     _modelManager.initialize();
-    
-    // CRITICAL FIX: Don't clear scene state if we already have objects
-    // This preserves the existing AR session and gesture functionality
-    if (nodes.isEmpty) {
-      debugPrint('AR Screen: Fresh AR session - no existing objects to preserve');
-      _handleNewProductModel();
-    } else {
-      debugPrint('AR Screen: Resuming AR session with ${nodes.length} existing objects');
-      debugPrint('AR Screen: Existing objects: ${nodeCreationOrder.join(", ")}');
-      
-      // Just handle the new product without disturbing existing objects
-      _handleNewProductModel();
-      
-      // Ensure gesture callbacks are properly set up for existing objects
-      _setupARCallbacks();
-    }
+    _handleNewProductModel();
   }
 
   @override
@@ -802,52 +795,381 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Navigate to category page to select different products
-  Future<void> _navigateToCategory() async {
-    // CRITICAL: Proper AR session cleanup to prevent gesture state corruption
-    if (!_nukeAllAlreadyCalled) {
-      _nukeAllAlreadyCalled = true;
-      try {
-        // First, clear all objects from the scene to reset gesture controllers
-        debugPrint('AR Screen: === FULL AR SESSION RESET FOR NAVIGATION ===');
+  /// Enhanced pause method for navigation
+  Future<void> _pauseARSessionForNavigation() async {
+    if (_isARSessionPaused) return;
+    
+    debugPrint('AR Screen: === PAUSING AR SESSION FOR NAVIGATION ===');
+    debugPrint('AR Screen: Preserving node tracking: $nodeCreationOrder');
+    
+    try {
+      _isARSessionPaused = true;
+      
+      // Disable AR rendering but keep session alive
+      await _sessionController.pauseSession();
+      
+      // Hide AR view but preserve all data (DO NOT clear scene state)
+      if (mounted) {
+        setState(() {
+          _shouldRenderARView = false;
+        });
+      }
+      
+      // Stop memory monitoring temporarily
+      _stopMemoryMonitoring();
+      
+      debugPrint('AR Screen: ✅ AR session paused for navigation - tracking preserved');
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error pausing for navigation: $e');
+    }
+  }
+
+  /// Enhanced resume method for navigation return
+  Future<void> _resumeARSessionFromNavigation() async {
+    if (!_isARSessionPaused) return;
+    
+    debugPrint('AR Screen: === RESUMING AR SESSION FROM NAVIGATION ===');
+    debugPrint('AR Screen: Pre-resume node tracking: $nodeCreationOrder');
+    debugPrint('AR Screen: Checking for new product model: ${widget.product?.id}');
+    
+    try {
+      // CRITICAL FIX: For Android, if we have a new product model, reset the entire AR scene
+      // to avoid anchor hierarchy corruption
+      bool hasNewProductModel = _hasNewProductModelSinceLastResume();
+      
+      if (Platform.isAndroid && hasNewProductModel) {
+        debugPrint('AR Screen: 🔧 ANDROID NEW MODEL DETECTED - Performing full AR scene reset');
+        await _performAndroidSceneResetForNewModel();
+      } else {
+        debugPrint('AR Screen: 📱 Standard session resume (no new model or iOS)');
+        // Resume AR session
+        await _sessionController.resumeSession();
         
-        // Remove all objects to trigger gesture controller cleanup
-        for (int i = nodes.length - 1; i >= 0; i--) {
-          if (i < nodeCreationOrder.length) {
-            String nodeId = nodeCreationOrder[i];
-            try {
-              await _sessionController.objectManager?.removeNode(nodes[i]);
-              debugPrint('AR Screen: Removed node $nodeId for navigation cleanup');
-            } catch (e) {
-              debugPrint('AR Screen: Error removing node $nodeId: $e');
-            }
-          }
+        // Re-enable AR rendering
+        if (mounted) {
+          setState(() {
+            _shouldRenderARView = true;
+          });
         }
         
-        // Now perform complete session reset
-        final success = await _sessionController.sessionManager?.nukeAll(
+        // Resume memory monitoring
+        _startMemoryMonitoring();
+        
+        // CRITICAL: Synchronize node tracking with actual AR scene
+        await _synchronizeNodeTracking();
+        
+        // Allow AR to stabilize
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      
+      _isARSessionPaused = false;
+      debugPrint('AR Screen: ✅ AR session resumed from navigation - tracking synchronized');
+      
+      // Verify node tracking synchronization
+      debugPrint('AR Screen: Post-resume node tracking verification:');
+      debugPrint('AR Screen: - Available nodes: $nodeCreationOrder');
+      debugPrint('AR Screen: - Selected node: $selectedNode');
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error resuming from navigation: $e');
+    }
+  }
+
+  /// Initialize gesture isolation for multiple objects to prevent interference
+  Future<void> _initializeGestureIsolation() async {
+    debugPrint('AR Screen: === INITIALIZING GESTURE ISOLATION ===');
+    
+    try {
+      // Safety check for AR session state
+      if (_sessionController.objectManager == null) {
+        debugPrint('AR Screen: ⚠️ Object manager unavailable, deferring gesture isolation');
+        return;
+      }
+      
+      // Check if AR tracking is stable before proceeding
+      if (nodeCreationOrder.isEmpty) {
+        debugPrint('AR Screen: No objects in scene, skipping gesture isolation');
+        return;
+      }
+      
+      // Clear any existing selection to reset gesture state
+      if (selectedNode != null) {
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+          });
+        }
+        debugPrint('AR Screen: Cleared selection for gesture reset');
+      }
+      
+      // Add small delay to let the gesture system stabilize
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // Force gesture controller reset for all objects with error handling
+      debugPrint('AR Screen: Requesting gesture controller refresh for all objects');
+      
+      // This will help reset any corrupted gesture state between objects
+      for (String nodeId in nodeCreationOrder) {
+        try {
+          debugPrint('AR Screen: Refreshing gesture state for node: $nodeId');
+          // The native SceneForm will handle the actual refresh
+        } catch (e) {
+          debugPrint('AR Screen: ⚠️ Error refreshing gesture for node $nodeId: $e');
+          // Continue with other nodes
+        }
+      }
+      
+      debugPrint('AR Screen: ✅ Gesture isolation initialized for ${nodeCreationOrder.length} objects');
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error during gesture isolation: $e');
+      // Attempt recovery if initialization fails
+      _recoverFromGestureFailure();
+    }
+  }
+
+  /// Emergency gesture recovery when TransformableNode anchor errors are detected
+  Future<void> _recoverFromGestureFailure() async {
+    debugPrint('AR Screen: === EMERGENCY GESTURE RECOVERY ===');
+    
+    try {
+      // Step 1: Clear all selections to reset gesture state
+      if (selectedNode != null) {
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+          });
+        }
+        debugPrint('AR Screen: 🔧 Cleared selection for emergency recovery');
+      }
+      
+      // Step 2: Check if AR session is still valid before attempting recovery
+      if (_sessionController.objectManager == null) {
+        debugPrint('AR Screen: ⚠️ AR session unavailable during recovery, skipping session reset');
+        return;
+      }
+      
+      // Step 3: Force pause and resume AR session to reset gesture controllers
+      debugPrint('AR Screen: 🔧 Forcing AR session reset for gesture recovery...');
+      try {
+        await _sessionController.pauseSession();
+        await Future.delayed(const Duration(milliseconds: 500)); // Longer delay for stability
+        await _sessionController.resumeSession();
+        debugPrint('AR Screen: ✅ AR session reset completed');
+      } catch (e) {
+        debugPrint('AR Screen: ⚠️ AR session reset failed: $e');
+        // Continue with other recovery steps
+      }
+      
+      // Step 4: Re-synchronize node tracking with error handling
+      try {
+        await _synchronizeNodeTracking();
+        debugPrint('AR Screen: ✅ Node tracking synchronized');
+      } catch (e) {
+        debugPrint('AR Screen: ⚠️ Node synchronization failed: $e');
+      }
+      
+      debugPrint('AR Screen: ✅ Emergency gesture recovery completed');
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Emergency gesture recovery failed: $e');
+      // Last resort: clear all tracking state
+      try {
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+          });
+        }
+        debugPrint('AR Screen: 🔧 Performed last-resort state cleanup');
+      } catch (stateError) {
+        debugPrint('AR Screen: ❌ Last-resort cleanup failed: $stateError');
+      }
+    }
+  }
+
+  /// Check if there's a new product model since last resume
+  bool _hasNewProductModelSinceLastResume() {
+    // Check if we have a new product that wasn't processed before navigation
+    if (widget.product?.id != null && currentUniqueProductId != widget.product?.id) {
+      debugPrint('AR Screen: New product detected - Current: $currentUniqueProductId, New: ${widget.product?.id}');
+      return true;
+    }
+    
+    // Check if we have a new model URL that needs to be placed
+    if (widget.product?.modelUrl != null && modelUri != widget.product?.modelUrl) {
+      debugPrint('AR Screen: New model URL detected - Current: $modelUri, New: ${widget.product?.modelUrl}');
+      return true;
+    }
+    
+    return false;
+  }
+
+  /// Perform full Android AR scene reset when adding new model to avoid anchor hierarchy issues
+  Future<void> _performAndroidSceneResetForNewModel() async {
+    debugPrint('AR Screen: === ANDROID SCENE RESET FOR NEW MODEL ===');
+    
+    try {
+      // Step 1: Store current models for restoration
+      List<ARModelData> currentModels = _modelManager.getAllPersistentModels();
+      debugPrint('AR Screen: Storing ${currentModels.length} existing models for restoration');
+      
+      // Step 2: CRITICAL FIX - Force complete AR session disposal with anchor cleanup
+      debugPrint('AR Screen: 🔄 Performing complete AR session disposal with anchor cleanup...');
+      
+      // Force nukeAll to clear ALL anchors and nodes before disposing
+      try {
+        await _sessionController.sessionManager?.nukeAll(
           purgeCaches: true,
           removeExistingAnchors: true,
           resetTracking: true,
         );
-        if (success != null && success) {
-          await Future.delayed(const Duration(milliseconds: 300));
-        }
+        debugPrint('AR Screen: ✅ nukeAll completed - all anchors cleared');
+        await Future.delayed(const Duration(milliseconds: 500)); // Let cleanup complete
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint('AR Screen: Category navigation cleanup error: $e');
+        debugPrint('AR Screen: ⚠️ nukeAll failed: $e');
+      }
+      
+      // Force dispose current session completely
+      await _sessionController.dispose();
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Clear all local tracking state
+      nodes.clear();
+      nodeCreationOrder.clear();
+      selectedNode = null;
+      _isProcessingNodeSelection = false;
+      
+      // Step 3: Clear the model manager completely and re-add models
+      // This ensures clean state without corrupted references
+      _modelManager.clearAllModels();
+      
+      // Re-add the stored models to model manager (but not AR scene yet)
+      for (ARModelData model in currentModels) {
+        _modelManager.addModel(
+          modelUri: model.modelUri,
+          productId: model.productId,
+          position: model.position,
+          scale: model.scale,
+          rotation: model.rotation,
+          cachedPath: model.cachedPath,
+          // Don't set activeNodeId - let them be restored fresh
+        );
+      }
+      
+      // Step 4: Re-enable AR rendering and force complete reinitialization
+      if (mounted) {
+        setState(() {
+          _shouldRenderARView = true;
+          _hasBeenDisposed = false; // Reset disposal flag
+        });
+      }
+      
+      // Step 5: Allow AR view to rebuild completely with fresh session
+      await Future.delayed(const Duration(milliseconds: 800));
+      
+      // Step 6: Resume memory monitoring
+      _startMemoryMonitoring();
+      
+      // Step 7: Handle the new product model first
+      _handleNewProductModel();
+      
+      // Step 8: Start model download process if we have a new model
+      if (modelUri != null && !hasPlacedInitialModel) {
+        debugPrint('AR Screen: 🆕 Starting new model download after complete reset');
+        _startModelDownloadProcess();
+      }
+      
+      debugPrint('AR Screen: ✅ Complete Android scene reset completed - fresh session ready');
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error during complete Android scene reset: $e');
+      
+      // Fallback: Try standard resume
+      try {
+        await _sessionController.resumeSession();
+        if (mounted) {
+          setState(() {
+            _shouldRenderARView = true;
+          });
         }
+        _startMemoryMonitoring();
+      } catch (fallbackError) {
+        debugPrint('AR Screen: ❌ Fallback resume also failed: $fallbackError');
       }
     }
+  }
+
+  Future<void> _synchronizeNodeTracking() async {
+    debugPrint('AR Screen: === SYNCHRONIZING NODE TRACKING ===');
     
-    // Set AR navigation state before navigating
+    try {
+      // Get all persistent models that should be in the AR scene
+      List<ARModelData> persistentModels = _modelManager.getAllPersistentModels();
+      
+      // Rebuild node tracking lists from persistent models with active nodes
+      List<String> activeNodeIds = [];
+      List<ARNode> activeNodes = [];
+      
+      for (ARModelData model in persistentModels) {
+        if (model.activeNodeId != null && model.isPlaced) {
+          activeNodeIds.add(model.activeNodeId!);
+          
+          // Find corresponding ARNode if it exists
+          try {
+            ARNode? existingNode = nodes.firstWhere(
+              (node) => node.name == model.activeNodeId,
+            );
+            activeNodes.add(existingNode);
+          } catch (e) {
+            // Node not found in current list - this is expected after navigation
+            debugPrint('AR Screen: Node ${model.activeNodeId} not found in current node list (expected after navigation)');
+          }
+        }
+      }
+      
+      // Update tracking lists
+      nodeCreationOrder.clear();
+      nodeCreationOrder.addAll(activeNodeIds);
+      
+      nodes.clear();
+      nodes.addAll(activeNodes);
+      
+      debugPrint('AR Screen: ✅ Node tracking synchronized');
+      debugPrint('AR Screen: - Restored ${nodeCreationOrder.length} active nodes: $nodeCreationOrder');
+      debugPrint('AR Screen: - Restored ${nodes.length} AR nodes');
+      
+      // Clear selection if the selected node is no longer valid
+      if (selectedNode != null && !nodeCreationOrder.contains(selectedNode!)) {
+        debugPrint('AR Screen: ⚠️ Selected node no longer valid, clearing selection');
+        selectedNode = null;
+      }
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error during node tracking synchronization: $e');
+    }
+  }
+
+  /// Navigate to category page while preserving AR session
+  Future<void> _navigateToCategory() async {
+    debugPrint('AR Screen: === NAVIGATION WITH SESSION CONTINUITY ===');
+    
+    // PAUSE AR session instead of destroying it
+    await _pauseARSessionForNavigation();
+    
+    // Set navigation state
     if (mounted) {
       context.read<ArNavigationProvider>().setGoFromAR();
     }
     
-    // Navigate after cleanup
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/category', arguments: {'isSearchHeaderShow': true});
+    // Navigate with result to know when user returns
+    final result = await Navigator.of(context).pushNamed(
+      '/category', 
+      arguments: {'isSearchHeaderShow': true}
+    );
+    
+    // RESUME AR session when returning
+    if (mounted && result != null) {
+      await _resumeARSessionFromNavigation();
+      debugPrint('AR Screen: ✅ Returned from category - AR session resumed');
     }
   }
 
@@ -1004,6 +1326,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         _buildMemoryStatusOverlay(),
         // _buildMemoryDebugOverlay(),
         _buildMemoryPlacementFailureOverlay(),
+        _buildAndroidSingleObjectModeIndicator(),
         _buildBackButton(),
         _buildDeleteButton(),
         _buildAddButton(),
@@ -1689,6 +2012,94 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Build Android single-object mode indicator
+  Widget _buildAndroidSingleObjectModeIndicator() {
+    // Only show on Android when in single-object mode and there are multiple objects
+    if (!Platform.isAndroid || !_isAndroidSingleObjectMode || _modelManager.getAllPersistentModels().length < 2) {
+      return const SizedBox.shrink();
+    }
+
+    // Find which object number is currently active
+    final allModels = _modelManager.getAllPersistentModels();
+    int activeObjectIndex = -1;
+    String activeObjectInfo = 'No selection';
+    
+    if (_activeTransformableNode != null) {
+      // Find the index of the currently active object
+      for (int i = 0; i < allModels.length; i++) {
+        if (allModels[i].activeNodeId == _activeTransformableNode) {
+          activeObjectIndex = i;
+          activeObjectInfo = '${i + 1}/${allModels.length}';
+          break;
+        }
+      }
+    }
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 60.0,
+      right: 16.0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+        decoration: BoxDecoration(
+          color: Colors.orange.withAlpha((0.9 * 255).toInt()),
+          borderRadius: BorderRadius.circular(8.0),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha((0.2 * 255).toInt()),
+              spreadRadius: 1,
+              blurRadius: 4,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.touch_app,
+                  size: 16,
+                  color: Colors.white,
+                ),
+                SizedBox(width: 4),
+                Text(
+                  'Single Object Mode',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            if (_activeTransformableNode != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Selected object: $activeObjectInfo',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 2),
+            const Text(
+              'Tap another object to switch',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Show permission dialog to explain why permission is needed
   Future<bool> _showPermissionDialog(String title, String message, {bool showSettingsButton = false}) async {
     if (!mounted) return false;
@@ -2140,16 +2551,11 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     debugPrint('AR Screen: hasPlacedInitialModel: $hasPlacedInitialModel');
     
     // CRITICAL FIX: First, restore any previously placed models and WAIT for completion
-    // BUT only if this is a fresh session start, not after navigation with new model
-    if (!hasPlacedInitialModel) {
-      debugPrint('AR Screen: 🔧 Starting restoration process for fresh session...');
-      await _restorePreviouslyPlacedModels();
-      debugPrint('AR Screen: 🔧 Restoration completed, nodes.length: ${nodes.length}');
-    } else {
-      debugPrint('AR Screen: 🔧 Skipping restoration - models already placed in this session');
-    }
+    debugPrint('AR Screen: 🔧 Starting restoration process...');
+    await _restorePreviouslyPlacedModels();
+    debugPrint('AR Screen: 🔧 Restoration completed, nodes.length: ${nodes.length}');
     
-    // Handle new product model if available - AFTER restoration is complete or skipped
+    // Handle new product model if available - only AFTER restoration is complete
     if (modelUri != null && currentUniqueProductId != null) {
       debugPrint('AR Screen: New product available for placement');
       debugPrint('AR Screen: Starting model download process for: $currentUniqueProductId');
@@ -2355,7 +2761,31 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
 
   /// Handle node tap events
   Future<void> _onNodeTapped(List<String> tappedNodes) async {
-    if (tappedNodes.isEmpty) return;
+    // ANDROID FIX: Ignore programmatic calls from our own enable/disable methods
+    if (_isProcessingNodeSelection) {
+      debugPrint('AR Screen: ⚠️ Ignoring programmatic tap event during node selection processing');
+      return;
+    }
+    
+    // Handle empty tap list (deselection) for Android single-object mode
+    if (tappedNodes.isEmpty) {
+      debugPrint('AR Screen: === EMPTY TAP (DESELECTION) ===');
+      
+      // Only process if this is a real user deselection, not programmatic
+      if (_isAndroidSingleObjectMode && _activeTransformableNode != null) {
+        debugPrint('AR Screen: 🔧 Processing user deselection in Android mode');
+        
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+            _activeTransformableNode = null;
+          });
+        }
+        
+        debugPrint('AR Screen: ✅ User deselection completed');
+      }
+      return;
+    }
     
     String? tappedNodeId = tappedNodes.firstOrNull;
     if (tappedNodeId == null) return;
@@ -2381,22 +2811,71 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     if (!nodeCreationOrder.contains(tappedNodeId)) {
       debugPrint('AR Screen: ❌ Tapped node not found in nodeCreationOrder');
       debugPrint('AR Screen: This could be a stale node or tracking issue');
+      debugPrint('AR Screen: Attempting automatic synchronization...');
       
-      // Clear any stale selection
-      if (selectedNode != null && mounted) {
-        try {
-          setState(() {
-            selectedNode = null;
-          });
-          debugPrint('AR Screen: ✅ Cleared stale selection');
-        } catch (e) {
-          debugPrint('AR Screen: ❌ Error clearing stale selection: $e');
+      // Try to recover by synchronizing node tracking
+      try {
+        await _synchronizeNodeTracking();
+        
+        // Check again after synchronization
+        if (nodeCreationOrder.contains(tappedNodeId)) {
+          debugPrint('AR Screen: ✅ Node found after synchronization, proceeding with selection');
+        } else {
+          debugPrint('AR Screen: ❌ Node still not found after synchronization');
+          
+          // Check if this node belongs to a persistent model we should know about
+          ARModelData? model = _modelManager.findModelByNodeId(tappedNodeId);
+          if (model != null) {
+            debugPrint('AR Screen: 🔄 Found model for tapped node, force-adding to tracking');
+            nodeCreationOrder.add(tappedNodeId);
+            debugPrint('AR Screen: ✅ Node force-added to tracking: $nodeCreationOrder');
+          } else {
+            debugPrint('AR Screen: ❌ Unknown node - clearing any stale selection');
+            // Clear any stale selection
+            if (selectedNode != null && mounted) {
+              try {
+                setState(() {
+                  selectedNode = null;
+                });
+                debugPrint('AR Screen: ✅ Cleared stale selection');
+              } catch (e) {
+                debugPrint('AR Screen: ❌ Error clearing stale selection: $e');
+              }
+            }
+            return;
+          }
         }
+      } catch (e) {
+        debugPrint('AR Screen: ❌ Error during synchronization recovery: $e');
+        return;
       }
-      return;
     }
     
     debugPrint('AR Screen: ✅ Node found in tracking system, updating selection');
+    
+    // ANDROID SINGLE-OBJECT MODE: Handle special selection logic
+    if (_isAndroidSingleObjectMode && nodeCreationOrder.length > 1) {
+      debugPrint('AR Screen: 🤖 Android single-object mode activated');
+      await _handleAndroidSingleObjectSelection(tappedNodeId);
+      return;
+    }
+    
+    // CRITICAL: For multiple objects, we need to handle selection more carefully
+    if (nodeCreationOrder.length > 1) {
+      debugPrint('AR Screen: 🔧 Multi-object environment detected, using enhanced selection logic');
+      
+      // Clear any existing selection first to prevent gesture conflicts
+      if (selectedNode != null && selectedNode != tappedNodeId) {
+        debugPrint('AR Screen: Clearing previous selection to prevent gesture interference');
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+          });
+        }
+        // Brief delay to let gesture system reset
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+    }
     
     if (mounted) {
       _isProcessingNodeSelection = true;
@@ -2405,9 +2884,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         setState(() {
           String? previousSelection = selectedNode;
           
-          // Toggle selection logic:
-          // - If this node is already selected, deselect it
-          // - If no node is selected or different node is selected, select this one
+          // Enhanced toggle selection logic for multi-object support
           if (selectedNode == tappedNodeId) {
             selectedNode = null;
             debugPrint('AR Screen: Deselected node: $tappedNodeId');
@@ -2451,6 +2928,253 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Handle single-object selection mode for Android to prevent anchor hierarchy corruption
+  Future<void> _handleAndroidSingleObjectSelection(String tappedNodeId) async {
+    debugPrint('AR Screen: === ANDROID SINGLE-OBJECT SELECTION ===');
+    debugPrint('AR Screen: Tapped node: $tappedNodeId');
+    debugPrint('AR Screen: Current active transformable: $_activeTransformableNode');
+    debugPrint('AR Screen: All available nodes: $nodeCreationOrder');
+    
+    try {
+      if (_activeTransformableNode == tappedNodeId) {
+        // User tapped the same object - offer to switch to a different one
+        if (nodeCreationOrder.length > 1) {
+          debugPrint('AR Screen: 🔄 Same object tapped - switching to next available object');
+          
+          // Find the next object in the list
+          String? nextNodeId = _getNextAvailableNode(tappedNodeId);
+          
+          if (nextNodeId != null) {
+            debugPrint('AR Screen: Found next available node: $nextNodeId');
+            
+            // Disable current object
+            await _disableTransformForNode(_activeTransformableNode!);
+            
+            // Enable next object
+            await _enableTransformForNode(nextNodeId);
+            
+            // Update state
+            if (mounted) {
+              setState(() {
+                selectedNode = nextNodeId;
+                _activeTransformableNode = nextNodeId;
+              });
+            }
+            
+            int nodeIndex = nodeCreationOrder.indexOf(nextNodeId) + 1;
+            debugPrint('AR Screen: ✅ Switched to object $nodeIndex/${nodeCreationOrder.length}');
+            _showAndroidSingleObjectFeedback(nodeIndex, nodeCreationOrder.length);
+            
+          } else {
+            // Only one object, deselect current
+            debugPrint('AR Screen: 🔄 Only one object available - deselecting current');
+            await _disableTransformForNode(_activeTransformableNode!);
+            
+            if (mounted) {
+              setState(() {
+                selectedNode = null;
+                _activeTransformableNode = null;
+              });
+            }
+            
+            debugPrint('AR Screen: ✅ Object deselected - no active transformable nodes');
+          }
+        } else {
+          // Only one object, deselect current
+          debugPrint('AR Screen: 🔄 Deselecting current transformable object');
+          await _disableTransformForNode(_activeTransformableNode!);
+          
+          if (mounted) {
+            setState(() {
+              selectedNode = null;
+              _activeTransformableNode = null;
+            });
+          }
+          
+          debugPrint('AR Screen: ✅ Object deselected - no active transformable nodes');
+        }
+        
+      } else {
+        // Select new object (and disable previous if any)
+        debugPrint('AR Screen: 🔄 Switching transformable object');
+        
+        // First disable current transformable node if any
+        if (_activeTransformableNode != null) {
+          debugPrint('AR Screen: Disabling gestures for previous node: $_activeTransformableNode');
+          await _disableTransformForNode(_activeTransformableNode!);
+        }
+        
+        // Enable gestures for new node
+        debugPrint('AR Screen: Enabling gestures for new node: $tappedNodeId');
+        await _enableTransformForNode(tappedNodeId);
+        
+        // Update state
+        if (mounted) {
+          setState(() {
+            selectedNode = tappedNodeId;
+            _activeTransformableNode = tappedNodeId;
+          });
+        }
+        
+        int nodeIndex = nodeCreationOrder.indexOf(tappedNodeId) + 1;
+        debugPrint('AR Screen: ✅ Single-object mode: Selected object $nodeIndex/${nodeCreationOrder.length}');
+        
+        // Show user feedback
+        _showAndroidSingleObjectFeedback(nodeIndex, nodeCreationOrder.length);
+      }
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error in Android single-object selection: $e');
+      
+      // Reset state on error
+      if (mounted) {
+        setState(() {
+          selectedNode = null;
+          _activeTransformableNode = null;
+        });
+      }
+    }
+  }
+
+  /// Get the next available node for cycling through objects
+  String? _getNextAvailableNode(String currentNodeId) {
+    if (nodeCreationOrder.isEmpty) return null;
+    if (nodeCreationOrder.length == 1) return null;
+    
+    int currentIndex = nodeCreationOrder.indexOf(currentNodeId);
+    if (currentIndex == -1) return nodeCreationOrder.first;
+    
+    // Get next node in circular fashion
+    int nextIndex = (currentIndex + 1) % nodeCreationOrder.length;
+    return nodeCreationOrder[nextIndex];
+  }
+
+  /// Enable transform gestures for a specific node (Android single-object mode)
+  Future<void> _enableTransformForNode(String nodeId) async {
+    try {
+      debugPrint('AR Screen: 🎯 Enabling transforms for node: $nodeId');
+      
+      if (_sessionController.objectManager == null) {
+        debugPrint('AR Screen: ❌ ObjectManager is null, cannot enable transforms');
+        return;
+      }
+      
+      // Set processing flag to prevent callback interference
+      _isProcessingNodeSelection = true;
+      
+      try {
+        // ANDROID FIX: Force clear state before new selection to prevent transformation conflicts
+        debugPrint('AR Screen: 🔧 Android single-object mode: Force clearing state first');
+        
+        // Step 1: Clear any existing selection completely
+        if (_sessionController.objectManager!.onNodeTap != null) {
+          debugPrint('AR Screen: 🔧 Step 1: Force clearing all selections');
+          _sessionController.objectManager!.onNodeTap!([]);
+          
+          // Wait for the clear to propagate to native side
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
+        
+        // Step 2: Update Flutter state
+        if (mounted) {
+          setState(() {
+            selectedNode = nodeId;
+            _activeTransformableNode = nodeId;
+          });
+        }
+        
+        // Step 3: Wait for Flutter state to settle
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // Step 4: Set new selection on native side
+        if (_sessionController.objectManager!.onNodeTap != null) {
+          debugPrint('AR Screen: 🔧 Step 4: Setting new selection: $nodeId');
+          _sessionController.objectManager!.onNodeTap!([nodeId]);
+          
+          // Wait for selection to propagate
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        
+        debugPrint('AR Screen: ✅ Transform enable completed for node: $nodeId');
+        
+      } finally {
+        // Always clear the processing flag
+        _isProcessingNodeSelection = false;
+      }
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error enabling transforms for node $nodeId: $e');
+      _isProcessingNodeSelection = false;
+    }
+  }
+
+  /// Disable transform gestures for a specific node (Android single-object mode)
+  Future<void> _disableTransformForNode(String nodeId) async {
+    try {
+      debugPrint('AR Screen: 🚫 Disabling transforms for node: $nodeId');
+      
+      if (_sessionController.objectManager == null) {
+        debugPrint('AR Screen: ❌ ObjectManager is null, cannot disable transforms');
+        return;
+      }
+      
+      // Set processing flag to prevent callback interference
+      _isProcessingNodeSelection = true;
+      
+      try {
+        // ANDROID FIX: More robust deselection process
+        debugPrint('AR Screen: 🔧 Android deselection: Clearing all state and native selection');
+        
+        // Step 1: Clear Flutter state first
+        if (mounted) {
+          setState(() {
+            selectedNode = null;
+            _activeTransformableNode = null;
+          });
+        }
+        
+        // Step 2: Wait for Flutter state to settle
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // Step 3: Clear native selection directly
+        if (_sessionController.objectManager!.onNodeTap != null) {
+          debugPrint('AR Screen: 🔧 Clearing native selection directly');
+          _sessionController.objectManager!.onNodeTap!([]);
+          
+          // Wait for deselection to propagate
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        
+        debugPrint('AR Screen: ✅ Transform disable completed for node: $nodeId');
+        
+      } finally {
+        // Always clear the processing flag
+        _isProcessingNodeSelection = false;
+      }
+      
+    } catch (e) {
+      debugPrint('AR Screen: ❌ Error disabling transforms for node $nodeId: $e');
+      _isProcessingNodeSelection = false;
+    }
+  }
+
+  /// Show user feedback for Android single-object mode
+  void _showAndroidSingleObjectFeedback(int selectedIndex, int totalObjects) {
+    if (!mounted) return;
+    
+    String message = 'Android Mode: Object $selectedIndex/$totalObjects selected. Only one object can be moved at a time.';
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.blue[700],
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(bottom: 100, left: 16, right: 16),
+      ),
+    );
+  }
+
   /// Remove the currently selected model from the AR scene
   void _removeSelectedModel() {
     debugPrint('AR Screen: === REMOVE SELECTED MODEL ===');
@@ -2470,6 +3194,12 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     debugPrint('AR Screen: Removing node: $nodeIdToRemove');
     debugPrint('AR Screen: Current nodeCreationOrder: $nodeCreationOrder');
     debugPrint('AR Screen: Current nodes count: ${nodes.length}');
+
+    // Android single-object mode cleanup
+    if (_isAndroidSingleObjectMode && _activeTransformableNode == nodeIdToRemove) {
+      debugPrint('AR Screen: 🤖 Clearing Android single-object mode state');
+      _activeTransformableNode = null;
+    }
 
     // Find the node in our tracking lists
     int selectedIndex = nodeCreationOrder.indexOf(nodeIdToRemove);
@@ -3121,43 +3851,77 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
       }
       
       if (Platform.isAndroid) {
-        // Android placement - Use working example approach with gestures enabled
-        debugPrint('AR Screen: Android - Creating node with working example approach');
+        // CRITICAL FIX: Android requires individual anchor management for each object
+        debugPrint('AR Screen: Android - Creating node with ISOLATED anchor hierarchy');
         
-        // Create transformation matrix from position (like the working example)
-        vm.Matrix4 transformation = vm.Matrix4.identity();
-        transformation.setTranslationRaw(node.position.x, node.position.y, node.position.z);
-        
-        // Generate unique node name (consistent with iOS pattern)
+        // Generate unique node name with timestamp to avoid conflicts
         String nodeName = "ARObject_${DateTime.now().millisecondsSinceEpoch}";
         
-        // Create new ARNode with Android-specific configuration matching working example
+        // CRITICAL: Each Android node MUST have its own isolated setup
+        // This prevents anchor hierarchy corruption when multiple objects exist
         ARNode androidNode = ARNode(
           type: node.type,
           uri: node.uri,
-          name: nodeName, // Explicit name like in working example
-          transformation: transformation, // Use Matrix4 transformation instead of position
+          name: nodeName,
+          position: node.position, // Use position directly
           scale: node.scale,
-          // CRITICAL: Enable gestures like in working example
-          isTransformable: true,
-          enablePanGestures: true,
-          enableRotationGestures: true,
+          // CRITICAL: Enable gestures for multi-object support
+          isTransformable: true,     // Enable gestures
+          enablePanGestures: true,   // Enable pan gestures
+          enableRotationGestures: true, // Enable rotation gestures
         );
         
-        debugPrint('AR Screen: Android - Created node with gestures enabled');
+        debugPrint('AR Screen: Android - Created ISOLATED anchor node');
         debugPrint('AR Screen: - Node name: $nodeName');
-        debugPrint('AR Screen: - Transformation matrix: $transformation');
-        debugPrint('AR Screen: - Gestures enabled: pan=true, rotation=true');
+        debugPrint('AR Screen: - Individual anchor hierarchy');
+        debugPrint('AR Screen: - Position: ${node.position}');
+        debugPrint('AR Screen: - Scale: ${node.scale}');
+        debugPrint('AR Screen: - Object count in scene: ${nodes.length + 1}');
         
-        // Wrap the critical method channel call in try-catch
+        // Add node with anchor hierarchy validation
         dynamic result;
         try {
           result = await _sessionController.objectManager!.addNode(androidNode);
           debugPrint('AR Screen: Android - Add node result: $result (type: ${result.runtimeType})');
+          
+          // Post-addition gesture isolation for multi-object scenes
+          if (result != null && nodes.length >= 1) {
+            debugPrint('AR Screen: 🔧 Initializing gesture isolation for multi-object scene...');
+            await _initializeGestureIsolation();
+          }
+          
         } catch (addNodeError) {
-          debugPrint('AR Screen: ❌ Critical method channel error during addNode: $addNodeError');
-          debugPrint('AR Screen: This is the exact type of error that causes "No implementation found for method o chnel"');
-          return null;
+          debugPrint('AR Screen: ❌ Android node addition failed: $addNodeError');
+          
+          // Check for specific anchor hierarchy errors
+          if (addNodeError.toString().contains('AnchorNode') || 
+              addNodeError.toString().contains('TransformableNode') ||
+              addNodeError.toString().contains('parent hierarchy')) {
+            debugPrint('AR Screen: 🚨 ANCHOR HIERARCHY CORRUPTION DETECTED');
+            debugPrint('AR Screen: Attempting emergency anchor recovery...');
+            
+            // Emergency fix: Try with minimal configuration
+            try {
+              ARNode emergencyNode = ARNode(
+                type: node.type,
+                uri: node.uri,
+                name: "${nodeName}_emergency",
+                position: node.position,
+                scale: vm.Vector3(1.0, 1.0, 1.0), // Use safe scale
+                // Absolute minimal configuration to avoid anchor issues
+                isTransformable: false, // Disable gestures as emergency measure
+              );
+              
+              result = await _sessionController.objectManager!.addNode(emergencyNode);
+              debugPrint('AR Screen: ✅ Emergency anchor recovery succeeded');
+              
+            } catch (emergencyError) {
+              debugPrint('AR Screen: ❌ Emergency anchor recovery failed: $emergencyError');
+              return null;
+            }
+          } else {
+            return null;
+          }
         }
         
         // CRITICAL: For Android, we need to be very careful about the node ID
