@@ -146,74 +146,25 @@ class ArCoreCompatView(
                 transformationSystem?.onTouch(hitTestResult, motionEvent)
             }
 
-            // Setup touch listener to forward gestures to transformation system
+            // Setup touch listener - let TransformationSystem handle gestures naturally
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
-                Log.d(TAG, "🔥 ANDROID: onTouch called! Action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
+                Log.d(TAG, "🔥 Touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
-                // Handle touch DOWN events - this is where object selection happens
-                if (motionEvent.action == MotionEvent.ACTION_DOWN) {
-                    Log.d(TAG, "👆 Touch DOWN - checking for object selection")
-                    
-                    // Check if we're touching a transformable node
-                    var foundTransformableNode: TransformableNode? = null
-                    
-                    // Check all our tracked nodes to see if any were hit
-                    for ((nodeName, node) in nodesMap) {
-                        if (node is TransformableNode) {
-                            try {
-                                // Get the node's world position and convert to screen
-                                val worldPosition = node.worldPosition
-                                val camera = arSceneView?.scene?.camera
-                                if (camera != null) {
-                                    val screenPosition = camera.worldToScreenPoint(worldPosition)
-                                    val distance = kotlin.math.sqrt(
-                                        (screenPosition.x - motionEvent.x).pow(2) + 
-                                        (screenPosition.y - motionEvent.y).pow(2)
-                                    )
-                                    
-                                    // If tap is close enough to this node, it's selected
-                                    if (distance < 150.0) {
-                                        foundTransformableNode = node
-                                        Log.d(TAG, "🎯 Found touched node: $nodeName (distance: $distance)")
-                                        break // Use first/closest match
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                // Continue checking other nodes
-                            }
-                        }
-                    }
-                    
-                    // CRITICAL FIX: Clear selection first, then select the touched node (if any)
-                    val previousSelection = transformationSystem?.selectedNode
-                    
-                    if (foundTransformableNode != null) {
-                        // Select the touched node
-                        if (previousSelection != foundTransformableNode) {
-                            Log.d(TAG, "🔄 Changing selection from ${previousSelection?.name} to ${foundTransformableNode.name}")
-                            transformationSystem?.selectNode(foundTransformableNode)
-                        } else {
-                            Log.d(TAG, "✅ Node ${foundTransformableNode.name} already selected")
-                        }
-                    } else {
-                        // No node was touched - clear selection to prevent ghost gestures
-                        if (previousSelection != null) {
-                            Log.d(TAG, "🚫 No node touched - clearing selection (was: ${previousSelection.name})")
-                            transformationSystem?.selectNode(null)
-                        }
-                    }
-                }
-                
-                // Let TransformationSystem handle the touch event
+                // CRITICAL: Always forward to TransformationSystem FIRST
+                // This ensures proper gesture handling and object selection
                 transformationSystem?.onTouch(hitTestResult, motionEvent)
                 
-                // Also pass to gesture detector for plane tap detection
+                // Also forward to gesture detector for tap-to-place functionality
                 val gestureHandled = gestureDetector?.onTouchEvent(motionEvent) ?: false
                 
-                Log.d(TAG, "🚀 Gesture handling - tap: $gestureHandled")
+                // Log current selection state for debugging
+                val currentSelection = transformationSystem?.selectedNode
+                if (motionEvent.action == MotionEvent.ACTION_DOWN) {
+                    Log.d(TAG, "🎯 Current selection after touch: ${currentSelection?.name ?: "none"}")
+                }
                 
-                // Return true if gesture detector handled the touch
-                return@setOnTouchListener gestureHandled
+                // Always return true to ensure we receive the complete gesture sequence
+                return@setOnTouchListener true
             }
 
         } catch (e: Exception) {
@@ -545,8 +496,20 @@ class ArCoreCompatView(
                         transformableNode.collisionShape = Box(collisionSize)
                         Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
                         
-                        // Node selection is now handled by the main touch listener above
-                        // This prevents conflicts and ensures proper single-object selection
+                        // CRITICAL: Set up tap listener for proper object selection
+                        // This is needed for TransformationSystem to identify which node was tapped
+                        transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
+                            Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
+                            // Don't manually select - let TransformationSystem handle it naturally
+                            // Just notify Flutter about the tap
+                            try {
+                                val tappedNodesList = listOf(nodeName)
+                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
+                            }
+                            true
+                        }
                         
                         // Apply gesture properties from Flutter
                         if (isTransformable) {
@@ -883,8 +846,20 @@ class ArCoreCompatView(
                         transformableNode.collisionShape = Box(collisionSize)
                         Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
                         
-                        // Node selection is now handled by the main touch listener above
-                        // This prevents conflicts and ensures proper single-object selection
+                        // CRITICAL: Set up tap listener for proper object selection
+                        // This is needed for TransformationSystem to identify which node was tapped
+                        transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
+                            Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
+                            // Don't manually select - let TransformationSystem handle it naturally
+                            // Just notify Flutter about the tap
+                            try {
+                                val tappedNodesList = listOf(nodeName)
+                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
+                            }
+                            true
+                        }
                         
                         // Apply gesture properties from Flutter
                         if (isTransformable) {
