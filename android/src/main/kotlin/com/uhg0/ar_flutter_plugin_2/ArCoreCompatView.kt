@@ -255,6 +255,9 @@ class ArCoreCompatView(
     private fun handleTap(motionEvent: MotionEvent) {        
         Log.d(TAG, "🎯🎯🎯 ANDROID: handleTap called! MotionEvent: x=${motionEvent.x}, y=${motionEvent.y}")
         
+        // CRITICAL: Check for and restore any disappeared nodes before processing tap
+        restoreDisappearedNodes()
+        
         // FIRST: Check for node/object hits (like iOS implementation)
         // This is the critical missing piece that makes object selection work globally
         reusableNodeHitResults.clear() // Reuse collection to reduce GC pressure
@@ -1793,6 +1796,102 @@ class ArCoreCompatView(
             override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {}
             override fun notImplemented() {}
         })
+    }
+
+    /**
+     * Attempts to restore nodes that have disappeared from the scene due to hierarchy corruption
+     */
+    private fun restoreDisappearedNodes() {
+        try {
+            val scene = arSceneView?.scene
+            if (scene == null) {
+                Log.w(TAG, "⚠️ Cannot restore nodes - scene is null")
+                return
+            }
+
+            // Check all tracked nodes
+            val nodesToRestore = mutableListOf<String>()
+            for ((nodeName, node) in nodesMap) {
+                if (node is TransformableNode && !nodeName.endsWith("_anchor")) {
+                    // Check if node is still in the scene hierarchy
+                    val isInScene = isNodeInSceneHierarchy(node, scene)
+                    if (!isInScene) {
+                        Log.w(TAG, "⚠️ Node $nodeName has disappeared from scene, marking for restoration")
+                        nodesToRestore.add(nodeName)
+                    }
+                }
+            }
+
+            // Restore disappeared nodes
+            for (nodeName in nodesToRestore) {
+                val node = nodesMap[nodeName] as? TransformableNode
+                if (node != null) {
+                    restoreNodeToScene(node, nodeName)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during node restoration: ${e.message}")
+        }
+    }
+
+    /**
+     * Recursively checks if a node is still part of the scene hierarchy
+     */
+    private fun isNodeInSceneHierarchy(node: Node, scene: Scene): Boolean {
+        var currentNode: Node? = node
+        while (currentNode != null) {
+            if (currentNode == scene) {
+                return true
+            }
+            currentNode = currentNode.parent
+        }
+        return false
+    }
+
+    /**
+     * Restores a specific node to the scene with proper hierarchy
+     */
+    private fun restoreNodeToScene(transformableNode: TransformableNode, nodeName: String) {
+        try {
+            val session = arSceneView?.session
+            val scene = arSceneView?.scene
+            
+            if (session == null || scene == null) {
+                Log.e(TAG, "❌ Cannot restore node - missing session or scene")
+                return
+            }
+
+            Log.d(TAG, "🔧 Restoring disappeared node: $nodeName")
+            
+            // Detach from any existing parent
+            transformableNode.setParent(null)
+            
+            // Get current world position or use default position
+            var worldPosition = transformableNode.worldPosition
+            if (worldPosition == null) {
+                worldPosition = Vector3(0.0f, -1.0f, -2.0f) // Default position in front of camera
+                Log.d(TAG, "🔧 Using default position for restoration")
+            }
+            
+            // Create new anchor for the node
+            val anchor = session.createAnchor(
+                Pose.makeTranslation(worldPosition.x, worldPosition.y, worldPosition.z)
+            )
+            val anchorNode = AnchorNode(anchor)
+            anchorNode.setParent(scene)
+            
+            // Attach transformable node to anchor
+            transformableNode.setParent(anchorNode)
+            transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+            
+            // Update tracking
+            nodesMap["${nodeName}_anchor"] = anchorNode
+            
+            Log.d(TAG, "✅ Successfully restored node: $nodeName")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to restore node $nodeName: ${e.message}")
+        }
     }
 
     // Extension function to convert pose matrix to list for Flutter
