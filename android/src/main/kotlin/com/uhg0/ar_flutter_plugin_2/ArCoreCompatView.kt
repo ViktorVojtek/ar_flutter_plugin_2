@@ -496,8 +496,40 @@ class ArCoreCompatView(
                         // This is needed for TransformationSystem to identify which node was tapped
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
                             Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
-                            // Don't manually select - let TransformationSystem handle it naturally
-                            // Just notify Flutter about the tap
+                            
+                            // CRITICAL: Force gesture controller reset on tap to fix "works once then fails" issue
+                            // This ensures the gesture controllers are in a clean state for the next gesture
+                            if (isTransformable) {
+                                Handler(Looper.getMainLooper()).post {
+                                    try {
+                                        // Reset each gesture controller to ensure clean state
+                                        transformableNode.translationController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Translation controller reset for $nodeName")
+                                        }
+                                        
+                                        transformableNode.rotationController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Rotation controller reset for $nodeName")
+                                        }
+                                        
+                                        transformableNode.scaleController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Scale controller reset for $nodeName")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "❌ Failed to reset gesture controllers: ${e.message}")
+                                    }
+                                }
+                            }
+                            
+                            // Notify Flutter about the tap
                             try {
                                 val tappedNodesList = listOf(nodeName)
                                 objectChannel.invokeMethod("onNodeTap", tappedNodesList)
@@ -519,6 +551,18 @@ class ArCoreCompatView(
                                 // Allow movement only on horizontal plane (Y locked to current position)
                                 // This prevents objects from flying off into space during pan operations
                                 Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
+                            }
+                            
+                            // CRITICAL: Ensure rotation controller is properly configured
+                            transformableNode.rotationController.apply {
+                                isEnabled = enableRotationGestures
+                                Log.d(TAG, "🎯 Rotation controller configured - enabled: $isEnabled")
+                            }
+                            
+                            // CRITICAL: Ensure scale controller is properly configured
+                            transformableNode.scaleController.apply {
+                                isEnabled = true // Always allow scale for now
+                                Log.d(TAG, "🎯 Scale controller configured - enabled: $isEnabled")
                             }
                             
                             // CRITICAL: Don't interfere with TransformationSystem's gesture handling
@@ -841,8 +885,40 @@ class ArCoreCompatView(
                         // This is needed for TransformationSystem to identify which node was tapped
                         transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
                             Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
-                            // Don't manually select - let TransformationSystem handle it naturally
-                            // Just notify Flutter about the tap
+                            
+                            // CRITICAL: Force gesture controller reset on tap to fix "works once then fails" issue
+                            // This ensures the gesture controllers are in a clean state for the next gesture
+                            if (isTransformable) {
+                                Handler(Looper.getMainLooper()).post {
+                                    try {
+                                        // Reset each gesture controller to ensure clean state
+                                        transformableNode.translationController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Translation controller reset for $nodeName")
+                                        }
+                                        
+                                        transformableNode.rotationController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Rotation controller reset for $nodeName")
+                                        }
+                                        
+                                        transformableNode.scaleController.apply {
+                                            val wasEnabled = isEnabled
+                                            isEnabled = false
+                                            isEnabled = wasEnabled
+                                            Log.d(TAG, "🔄 Scale controller reset for $nodeName")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "❌ Failed to reset gesture controllers: ${e.message}")
+                                    }
+                                }
+                            }
+                            
+                            // Notify Flutter about the tap
                             try {
                                 val tappedNodesList = listOf(nodeName)
                                 objectChannel.invokeMethod("onNodeTap", tappedNodesList)
