@@ -550,7 +550,43 @@ class ArCoreCompatView(
                             if (isTransformable) {
                                 Handler(Looper.getMainLooper()).post {
                                     try {
-                                        // Reset each gesture controller to ensure clean state
+                                        // CRITICAL: Validate parent hierarchy before attempting gesture controller reset
+                                        val hasValidParent = transformableNode.parent != null && transformableNode.parent is AnchorNode
+                                        if (!hasValidParent) {
+                                            Log.w(TAG, "⚠️ Node $nodeName has invalid parent hierarchy, attempting to restore")
+                                            
+                                            // Try to restore parent hierarchy by creating/finding an anchor
+                                            val currentPosition = transformableNode.worldPosition
+                                            val session = arSceneView?.session
+                                            
+                                            if (session != null && currentPosition != null) {
+                                                try {
+                                                    // Create new virtual anchor at current position
+                                                    val restoreAnchor = session.createAnchor(
+                                                        Pose.makeTranslation(currentPosition.x, currentPosition.y, currentPosition.z)
+                                                    )
+                                                    val restoreAnchorNode = AnchorNode(restoreAnchor)
+                                                    restoreAnchorNode.setParent(arSceneView?.scene)
+                                                    
+                                                    // Re-parent the transformable node
+                                                    transformableNode.setParent(restoreAnchorNode)
+                                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                                    
+                                                    // Update node tracking
+                                                    nodesMap["${nodeName}_anchor"] = restoreAnchorNode
+                                                    
+                                                    Log.d(TAG, "✅ Restored parent hierarchy for $nodeName")
+                                                } catch (restoreException: Exception) {
+                                                    Log.e(TAG, "❌ Failed to restore parent hierarchy: ${restoreException.message}")
+                                                    return@post
+                                                }
+                                            } else {
+                                                Log.e(TAG, "❌ Cannot restore hierarchy - missing session or position")
+                                                return@post
+                                            }
+                                        }
+                                        
+                                        // Now safely reset gesture controllers with valid parent hierarchy
                                         transformableNode.translationController.apply {
                                             val wasEnabled = isEnabled
                                             isEnabled = false
@@ -1035,7 +1071,43 @@ class ArCoreCompatView(
                             if (isTransformable) {
                                 Handler(Looper.getMainLooper()).post {
                                     try {
-                                        // Reset each gesture controller to ensure clean state
+                                        // CRITICAL: Validate parent hierarchy before attempting gesture controller reset
+                                        val hasValidParent = transformableNode.parent != null && transformableNode.parent is AnchorNode
+                                        if (!hasValidParent) {
+                                            Log.w(TAG, "⚠️ Node $nodeName has invalid parent hierarchy, attempting to restore")
+                                            
+                                            // Try to restore parent hierarchy by creating/finding an anchor
+                                            val currentPosition = transformableNode.worldPosition
+                                            val session = arSceneView?.session
+                                            
+                                            if (session != null && currentPosition != null) {
+                                                try {
+                                                    // Create new virtual anchor at current position
+                                                    val restoreAnchor = session.createAnchor(
+                                                        Pose.makeTranslation(currentPosition.x, currentPosition.y, currentPosition.z)
+                                                    )
+                                                    val restoreAnchorNode = AnchorNode(restoreAnchor)
+                                                    restoreAnchorNode.setParent(arSceneView?.scene)
+                                                    
+                                                    // Re-parent the transformable node
+                                                    transformableNode.setParent(restoreAnchorNode)
+                                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                                    
+                                                    // Update node tracking
+                                                    nodesMap["${nodeName}_anchor"] = restoreAnchorNode
+                                                    
+                                                    Log.d(TAG, "✅ Restored parent hierarchy for $nodeName")
+                                                } catch (restoreException: Exception) {
+                                                    Log.e(TAG, "❌ Failed to restore parent hierarchy: ${restoreException.message}")
+                                                    return@post
+                                                }
+                                            } else {
+                                                Log.e(TAG, "❌ Cannot restore hierarchy - missing session or position")
+                                                return@post
+                                            }
+                                        }
+                                        
+                                        // Now safely reset gesture controllers with valid parent hierarchy
                                         transformableNode.translationController.apply {
                                             val wasEnabled = isEnabled
                                             isEnabled = false
