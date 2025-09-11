@@ -238,13 +238,14 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let purgeCaches = arguments?["purgeCaches"] as? Bool ?? true
                 let removeAnchors = arguments?["removeExistingAnchors"] as? Bool ?? true
                 let resetTracking = arguments?["resetTracking"] as? Bool ?? false
-                self.nukeAllNonBlocking(
+                
+                // Start cleanup immediately and return true (fire and forget for now)
+                self.nukeAllNonBlockingFireAndForget(
                     purgeCaches: purgeCaches,
                     removeAnchors: removeAnchors,
                     resetTracking: resetTracking
-                ) { success in
-                    result(success)
-                }
+                )
+                result(true) // Return immediately
                 break
             case "ar#getPluginState":
                 let state = self.getPluginState()
@@ -1389,19 +1390,62 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     
     // MARK: - Non-Blocking Memory Cleanup (Camera Freeze Fix)
     
+    private func nukeAllNonBlockingAsync(
+        purgeCaches: Bool,
+        removeAnchors: Bool,
+        resetTracking: Bool
+    ) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                
+                print("🔄 Starting non-blocking memory cleanup...")
+                
+                // Phase 1: Background cleanup (no session interruption)
+                self.performBackgroundCleanup(purgeCaches: purgeCaches, removeAnchors: removeAnchors)
+                
+                // Phase 2: Optional soft reset on main thread
+                if resetTracking {
+                    DispatchQueue.main.async {
+                        self.performSoftReset { success in
+                            continuation.resume(returning: success)
+                        }
+                    }
+                } else {
+                    continuation.resume(returning: true)
+                }
+            }
+        }
+    }
+    
     private func nukeAllNonBlocking(
         purgeCaches: Bool,
         removeAnchors: Bool,
         resetTracking: Bool,
         completion: @escaping (Bool) -> Void
     ) {
+        Task {
+            let success = await nukeAllNonBlockingAsync(
+                purgeCaches: purgeCaches,
+                removeAnchors: removeAnchors,
+                resetTracking: resetTracking
+            )
+            completion(success)
+        }
+    }
+    
+    private func nukeAllNonBlockingFireAndForget(
+        purgeCaches: Bool,
+        removeAnchors: Bool,
+        resetTracking: Bool
+    ) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
+            guard let self = self else { return }
             
-            print("🔄 Starting non-blocking memory cleanup...")
+            print("🔄 Starting fire-and-forget memory cleanup...")
             
             // Phase 1: Background cleanup (no session interruption)
             self.performBackgroundCleanup(purgeCaches: purgeCaches, removeAnchors: removeAnchors)
@@ -1410,15 +1454,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             if resetTracking {
                 DispatchQueue.main.async {
                     self.performSoftReset { success in
-                        DispatchQueue.main.async {
-                            completion(success)
-                        }
+                        print("🔄 Soft reset completed: \(success)")
                     }
                 }
             } else {
-                DispatchQueue.main.async {
-                    completion(true)
-                }
+                print("🔄 Fire-and-forget cleanup completed")
             }
         }
     }

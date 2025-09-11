@@ -321,6 +321,7 @@ class ARSessionManager {
   /// TIMING CRITICAL: Must be called BEFORE widget disposal/navigation.
   /// Enhanced nukeAll that prevents camera freezing
   /// This method performs memory cleanup without interrupting the camera feed
+  /// Returns immediately while cleanup continues in background
   Future<bool> nukeAllNonBlocking({
     bool purgeCaches = true,
     bool removeExistingAnchors = true,
@@ -341,8 +342,11 @@ class ARSessionManager {
       final success = result ?? false;
       
       if (debug) {
-        print('📍 ARSessionManager: Non-blocking cleanup ${success ? "completed" : "failed"}');
+        print('📍 ARSessionManager: Non-blocking cleanup initiated - continuing in background');
       }
+      
+      // Give a moment for cleanup to start
+      await Future.delayed(const Duration(milliseconds: 100));
       
       return success;
       
