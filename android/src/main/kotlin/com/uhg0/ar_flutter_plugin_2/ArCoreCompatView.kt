@@ -146,16 +146,12 @@ class ArCoreCompatView(
                 transformationSystem?.onTouch(hitTestResult, motionEvent)
             }
 
-            // Setup touch listener - let TransformationSystem handle gestures naturally
+            // Setup touch listener - forward to gesture detector for tap-to-place
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
-                Log.d(TAG, "🔥 Touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
+                Log.d(TAG, "🔥 Scene touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
-                // CRITICAL: Always forward to TransformationSystem FIRST
-                // This ensures proper gesture handling and object selection
-                transformationSystem?.onTouch(hitTestResult, motionEvent)
-                
-                // Also forward to gesture detector for tap-to-place functionality
-                val gestureHandled = gestureDetector?.onTouchEvent(motionEvent) ?: false
+                // Forward to gesture detector for tap-to-place functionality
+                gestureDetector?.onTouchEvent(motionEvent)
                 
                 // Log current selection state for debugging
                 val currentSelection = transformationSystem?.selectedNode
@@ -163,8 +159,8 @@ class ArCoreCompatView(
                     Log.d(TAG, "🎯 Current selection after touch: ${currentSelection?.name ?: "none"}")
                 }
                 
-                // Always return true to ensure we receive the complete gesture sequence
-                return@setOnTouchListener true
+                // Return false to allow TransformationSystem to handle gestures naturally
+                false
             }
 
         } catch (e: Exception) {
@@ -525,14 +521,9 @@ class ArCoreCompatView(
                                 Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
                             }
                             
-                            // CRITICAL: Ensure the transformation system can properly handle the node
-                            if (enablePanGestures) {
-                                // Pre-configure the transformation system for this node
-                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
-                                    false // Return false to allow the transformation system to handle it
-                                }
-                            }
+                            // CRITICAL: Don't interfere with TransformationSystem's gesture handling
+                            // The TransformationSystem will handle touch events through its own mechanisms
+                            // Additional touch listeners can cause conflicts and gesture failures
                             
                             Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
                             Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
@@ -874,14 +865,9 @@ class ArCoreCompatView(
                                 Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
                             }
                             
-                            // CRITICAL: Ensure the transformation system can properly handle the node
-                            if (enablePanGestures) {
-                                // Pre-configure the transformation system for this node
-                                transformableNode.setOnTouchListener { hitTestResult, motionEvent ->
-                                    Log.d(TAG, "👁️ Touch event on node: $nodeName, action: ${motionEvent.action}")
-                                    false // Return false to allow the transformation system to handle it
-                                }
-                            }
+                            // CRITICAL: Don't interfere with TransformationSystem's gesture handling
+                            // The TransformationSystem will handle touch events through its own mechanisms
+                            // Additional touch listeners can cause conflicts and gesture failures
                             
                             Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
                             Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
