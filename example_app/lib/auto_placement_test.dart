@@ -294,7 +294,33 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
 
   @override
   void dispose() {
-    arSessionManager?.dispose();
+    // Use non-blocking cleanup to prevent camera freeze
+    _performNonBlockingCleanup();
     super.dispose();
+  }
+
+  Future<void> _performNonBlockingCleanup() async {
+    try {
+      print('🔄 Starting non-blocking cleanup to prevent camera freeze...');
+      
+      final success = await arSessionManager?.nukeAllNonBlocking(
+        purgeCaches: true,
+        removeExistingAnchors: true,
+        resetTracking: false, // Keep camera active
+      );
+      
+      if (success == true) {
+        print('✅ Non-blocking cleanup completed - camera should stay active');
+      } else {
+        print('⚠️ Non-blocking cleanup failed - using fallback');
+        // Fallback to basic cleanup without session pause
+        await _removeAllObjects();
+      }
+    } catch (e) {
+      print('❌ Cleanup error: $e');
+    }
+    
+    // Standard disposal
+    await arSessionManager?.dispose();
   }
 }

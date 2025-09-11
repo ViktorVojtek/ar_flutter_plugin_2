@@ -234,6 +234,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 )
                 result(success)
                 break
+            case "ar#nukeAllNonBlocking":
+                let purgeCaches = arguments?["purgeCaches"] as? Bool ?? true
+                let removeAnchors = arguments?["removeExistingAnchors"] as? Bool ?? true
+                let resetTracking = arguments?["resetTracking"] as? Bool ?? false
+                self.nukeAllNonBlocking(
+                    purgeCaches: purgeCaches,
+                    removeAnchors: removeAnchors,
+                    resetTracking: resetTracking
+                ) { success in
+                    result(success)
+                }
+                break
             case "ar#getPluginState":
                 let state = self.getPluginState()
                 result(state)
@@ -1372,6 +1384,112 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
             print("🎉 PHASE 3 NUKE ALL COMPLETED - Memory should approach cold start levels")
             return true
+        }
+    }
+    
+    // MARK: - Non-Blocking Memory Cleanup (Camera Freeze Fix)
+    
+    private func nukeAllNonBlocking(
+        purgeCaches: Bool,
+        removeAnchors: Bool,
+        resetTracking: Bool,
+        completion: @escaping (Bool) -> Void
+    ) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            
+            print("🔄 Starting non-blocking memory cleanup...")
+            
+            // Phase 1: Background cleanup (no session interruption)
+            self.performBackgroundCleanup(purgeCaches: purgeCaches, removeAnchors: removeAnchors)
+            
+            // Phase 2: Optional soft reset on main thread
+            if resetTracking {
+                DispatchQueue.main.async {
+                    self.performSoftReset { success in
+                        DispatchQueue.main.async {
+                            completion(success)
+                        }
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    completion(true)
+                }
+            }
+        }
+    }
+    
+    private func performBackgroundCleanup(purgeCaches: Bool, removeAnchors: Bool) {
+        // 1. Clear object caches (background safe)
+        if purgeCaches {
+            assetCache.removeAll()
+            print("✅ Asset caches cleared")
+        }
+        
+        // 2. Remove resource handles (background safe)
+        if removeAnchors {
+            DispatchQueue.main.sync {
+                for (_, handle) in resourceHandles {
+                    handle.node.removeFromParentNode()
+                }
+                resourceHandles.removeAll()
+                anchorCollection.removeAll()
+            }
+            print("✅ Nodes and anchors removed")
+        }
+        
+        // 3. Gentle memory pressure (background safe)
+        autoreleasepool {
+            // Light cleanup without memory warnings
+            URLCache.shared.removeAllCachedResponses()
+        }
+        
+        // 4. Progressive GC (background safe)
+        for _ in 0..<3 {
+            autoreleasepool {
+                // Allow natural cleanup cycles
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+        
+        print("✅ Background cleanup completed")
+    }
+    
+    private func performSoftReset(completion: @escaping (Bool) -> Void) {
+        print("🔄 Performing soft session reset...")
+        
+        // Save current configuration
+        let currentConfig = sceneView.session.configuration
+        
+        guard let config = currentConfig else {
+            completion(false)
+            return
+        }
+        
+        // Quick pause/resume cycle
+        sceneView.session.pause()
+        print("⏸️ Session paused briefly")
+        
+        // Minimal delay for cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Resume with reset options
+            var options: ARSession.RunOptions = []
+            options.insert(.resetTracking)
+            options.insert(.removeExistingAnchors)
+            
+            self.sceneView.session.run(config, options: options)
+            print("▶️ Session resumed with reset")
+            
+            // Verify session is running
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                let isRunning = self.sceneView.session.currentFrame != nil
+                print("✅ Session restoration: \(isRunning ? "Success" : "Failed")")
+                completion(isRunning)
+            }
         }
     }
     

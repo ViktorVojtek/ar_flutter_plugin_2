@@ -209,6 +209,7 @@ class ArCoreCompatView(
             "getMemoryInfo" -> handleGetMemoryInfo(call, result)
             "createNodeFromAsset" -> handleCreateNodeFromAsset(call, result)
             "ar#nukeAll" -> handleNukeAll(call, result)
+            "ar#nukeAllNonBlocking" -> handleNukeAllNonBlocking(call, result)
             "ar#getPluginState" -> handleGetPluginState(call, result)
             "removeAllObjects" -> handleRemoveAllObjects(call, result)
             "removeAnchor" -> handleRemoveAnchor(call, result)
@@ -1181,6 +1182,117 @@ class ArCoreCompatView(
             Log.e(TAG, "❌ Error in nuke all: ${e.message}")
             result.error("NUKE_ALL_ERROR", e.message ?: "Unknown error", null)
         }
+    }
+
+    // MARK: - Non-Blocking Memory Cleanup (Camera Freeze Fix)
+
+    private fun handleNukeAllNonBlocking(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            val purgeCaches = arguments?.get("purgeCaches") as? Boolean ?: true
+            val removeAnchors = arguments?.get("removeExistingAnchors") as? Boolean ?: true
+            val resetTracking = arguments?.get("resetTracking") as? Boolean ?: false
+
+            Log.d(TAG, "🔄 Starting non-blocking memory cleanup...")
+
+            // Phase 1: Background cleanup without session interruption
+            Thread {
+                performBackgroundCleanup(purgeCaches, removeAnchors)
+                
+                // Phase 2: Optional soft reset on main thread
+                if (resetTracking) {
+                    (context as? Activity)?.runOnUiThread {
+                        performSoftReset { success ->
+                            result.success(success)
+                        }
+                    } ?: result.success(true)
+                } else {
+                    (context as? Activity)?.runOnUiThread {
+                        result.success(true)
+                    } ?: result.success(true)
+                }
+            }.start()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in non-blocking cleanup: ${e.message}")
+            result.error("CLEANUP_ERROR", e.message ?: "Unknown error", null)
+        }
+    }
+
+    private fun performBackgroundCleanup(purgeCaches: Boolean, removeAnchors: Boolean) {
+        // 1. Clear object references (thread safe)
+        if (removeAnchors) {
+            (context as? Activity)?.runOnUiThread {
+                nodesMap.values.forEach { node ->
+                    node.setParent(null)
+                    if (node is TransformableNode) {
+                        node.renderable = null
+                    }
+                }
+                nodesMap.clear()
+            }
+            Log.d(TAG, "✅ Nodes and anchors removed")
+        }
+        
+        // 2. Gentle memory cleanup (background safe)
+        if (purgeCaches) {
+            System.runFinalization()
+            Log.d(TAG, "✅ Caches purged")
+        }
+        
+        // 3. Progressive GC (background safe)
+        repeat(2) {
+            System.gc()
+            Thread.sleep(50)
+        }
+        
+        Log.d(TAG, "✅ Background cleanup completed")
+    }
+
+    private fun performSoftReset(callback: (Boolean) -> Unit) {
+        arSceneView?.let { sceneView ->
+            try {
+                Log.d(TAG, "🔄 Performing soft session reset...")
+                
+                // Get current session
+                val session = sceneView.session
+                
+                if (session != null) {
+                    // Quick pause/resume cycle
+                    session.pause()
+                    Log.d(TAG, "⏸️ Session paused briefly")
+                    
+                    // Resume after minimal delay
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        try {
+                            session.resume()
+                            Log.d(TAG, "▶️ Session resumed")
+                            
+                            // Verify session is running
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                val isRunning = try {
+                                    session.camera.trackingState != TrackingState.STOPPED
+                                } catch (e: Exception) {
+                                    false
+                                }
+                                Log.d(TAG, "✅ Session restoration: ${if (isRunning) "Success" : "Failed"}")
+                                callback(isRunning)
+                            }, 200)
+                            
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Session resume failed: ${e.message}")
+                            callback(false)
+                        }
+                    }, 100)
+                } else {
+                    callback(false)
+                }
+                
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Soft reset failed: ${e.message}")
+                callback(false)
+            }
+        } ?: callback(false)
     }
 
     private fun handleGetPluginState(call: MethodCall, result: MethodChannel.Result) {
