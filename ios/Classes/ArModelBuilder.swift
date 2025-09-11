@@ -75,7 +75,9 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
+                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
+                // Let Flutter handle all scaling for cross-platform consistency
+                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
                 //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 node.addChildNode(child.flattenedClone())
@@ -111,7 +113,9 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
+                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
+                // Let Flutter handle all scaling for cross-platform consistency
+                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
                 //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 node.addChildNode(child.flattenedClone())
@@ -147,7 +151,9 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
+                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
+                // Let Flutter handle all scaling for cross-platform consistency
+                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
                 //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                 node.addChildNode(child.flattenedClone())
@@ -211,7 +217,9 @@ class ArModelBuilder: NSObject {
                             }
 
                             for child in scene.rootNode.childNodes {
-                                child.scale = SCNVector3(0.01,0.01,0.01) // Compensate for the different model dimension definitions in iOS and Android (meters vs. millimeters)
+                                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
+                                // Let Flutter handle all scaling for cross-platform consistency
+                                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
                                 //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                                 //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                                 node?.addChildNode(child)
