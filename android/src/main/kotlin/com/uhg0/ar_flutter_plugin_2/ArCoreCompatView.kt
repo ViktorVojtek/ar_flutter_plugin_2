@@ -195,6 +195,7 @@ class ArCoreCompatView(
             "removeAllObjects" -> handleRemoveAllObjects(call, result)
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
+            "touch" -> handleTouch(call, result)
             else -> result.notImplemented()
         }
     }
@@ -1426,6 +1427,53 @@ class ArCoreCompatView(
             result.success(null)
         } catch (e: Exception) {
             result.error("DISPOSE_ERROR", e.message, null)
+        }
+    }
+
+    // Handle touch method calls from Flutter platform view system
+    private fun handleTouch(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            Log.d(TAG, "🎯 handleTouch called from Flutter platform view")
+            
+            // Extract touch event data from method call arguments
+            val arguments = call.arguments as? Map<String, Any>
+            if (arguments == null) {
+                Log.w(TAG, "Touch arguments are null")
+                result.success(false)
+                return
+            }
+            
+            // Get motion event parameters
+            val action = arguments["action"] as? Int ?: MotionEvent.ACTION_DOWN
+            val x = (arguments["x"] as? Number)?.toFloat() ?: 0f
+            val y = (arguments["y"] as? Number)?.toFloat() ?: 0f
+            val downTime = (arguments["downTime"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            val eventTime = (arguments["eventTime"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            
+            Log.d(TAG, "🎯 Touch event - action: $action, x: $x, y: $y")
+            
+            // Create a synthetic MotionEvent
+            val motionEvent = MotionEvent.obtain(
+                downTime,
+                eventTime,
+                action,
+                x,
+                y,
+                0 // metaState
+            )
+            
+            // Forward the touch event to the AR scene view
+            val handled = arSceneView?.onTouchEvent(motionEvent) ?: false
+            
+            // Clean up the MotionEvent
+            motionEvent.recycle()
+            
+            Log.d(TAG, "🎯 Touch event handled: $handled")
+            result.success(handled)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error handling touch event: ${e.message}", e)
+            result.error("TOUCH_ERROR", "Failed to handle touch event: ${e.message}", null)
         }
     }
 

@@ -156,7 +156,22 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     
     _planeManager.reset();
     _modelManager.initialize();
-    _handleNewProductModel();
+    
+    // CRITICAL FIX: Don't clear scene state if we already have objects
+    // This preserves the existing AR session and gesture functionality
+    if (nodes.isEmpty) {
+      debugPrint('AR Screen: Fresh AR session - no existing objects to preserve');
+      _handleNewProductModel();
+    } else {
+      debugPrint('AR Screen: Resuming AR session with ${nodes.length} existing objects');
+      debugPrint('AR Screen: Existing objects: ${nodeCreationOrder.join(", ")}');
+      
+      // Just handle the new product without disturbing existing objects
+      _handleNewProductModel();
+      
+      // Ensure gesture callbacks are properly set up for existing objects
+      _setupARCallbacks();
+    }
   }
 
   @override
@@ -789,10 +804,27 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
 
   /// Navigate to category page to select different products
   Future<void> _navigateToCategory() async {
-    // Immediate cleanup BEFORE navigation
+    // CRITICAL: Proper AR session cleanup to prevent gesture state corruption
     if (!_nukeAllAlreadyCalled) {
       _nukeAllAlreadyCalled = true;
       try {
+        // First, clear all objects from the scene to reset gesture controllers
+        debugPrint('AR Screen: === FULL AR SESSION RESET FOR NAVIGATION ===');
+        
+        // Remove all objects to trigger gesture controller cleanup
+        for (int i = nodes.length - 1; i >= 0; i--) {
+          if (i < nodeCreationOrder.length) {
+            String nodeId = nodeCreationOrder[i];
+            try {
+              await _sessionController.objectManager?.removeNode(nodes[i]);
+              debugPrint('AR Screen: Removed node $nodeId for navigation cleanup');
+            } catch (e) {
+              debugPrint('AR Screen: Error removing node $nodeId: $e');
+            }
+          }
+        }
+        
+        // Now perform complete session reset
         final success = await _sessionController.sessionManager?.nukeAll(
           purgeCaches: true,
           removeExistingAnchors: true,
@@ -2108,11 +2140,16 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     debugPrint('AR Screen: hasPlacedInitialModel: $hasPlacedInitialModel');
     
     // CRITICAL FIX: First, restore any previously placed models and WAIT for completion
-    debugPrint('AR Screen: 🔧 Starting restoration process...');
-    await _restorePreviouslyPlacedModels();
-    debugPrint('AR Screen: 🔧 Restoration completed, nodes.length: ${nodes.length}');
+    // BUT only if this is a fresh session start, not after navigation with new model
+    if (!hasPlacedInitialModel) {
+      debugPrint('AR Screen: 🔧 Starting restoration process for fresh session...');
+      await _restorePreviouslyPlacedModels();
+      debugPrint('AR Screen: 🔧 Restoration completed, nodes.length: ${nodes.length}');
+    } else {
+      debugPrint('AR Screen: 🔧 Skipping restoration - models already placed in this session');
+    }
     
-    // Handle new product model if available - only AFTER restoration is complete
+    // Handle new product model if available - AFTER restoration is complete or skipped
     if (modelUri != null && currentUniqueProductId != null) {
       debugPrint('AR Screen: New product available for placement');
       debugPrint('AR Screen: Starting model download process for: $currentUniqueProductId');
