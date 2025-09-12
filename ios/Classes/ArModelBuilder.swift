@@ -83,7 +83,8 @@ class ArModelBuilder: NSObject {
                 node.addChildNode(child.flattenedClone())
             }
 
-            node.name = name
+            // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
+            node.name = "[#\(name)"
             if let transform = transformation {
                 node.transform = deserializeMatrix4(transform)
             }
@@ -121,7 +122,8 @@ class ArModelBuilder: NSObject {
                 node.addChildNode(child.flattenedClone())
             }
 
-            node.name = name
+            // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
+            node.name = "[#\(name)"
             if let transform = transformation {
                 node.transform = deserializeMatrix4(transform)
             }
@@ -159,7 +161,8 @@ class ArModelBuilder: NSObject {
                 node.addChildNode(child.flattenedClone())
             }
 
-            node.name = name
+            // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
+            node.name = "[#\(name)"
             if let transform = transformation {
                 node.transform = deserializeMatrix4(transform)
             }
@@ -225,7 +228,8 @@ class ArModelBuilder: NSObject {
                                 node?.addChildNode(child)
                             }
 
-                            node?.name = name
+                            // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
+                            node?.name = "[#\(name)"
                             if let transform = transformation {
                                 node?.transform = deserializeMatrix4(transform)
                             }

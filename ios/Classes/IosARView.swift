@@ -1616,7 +1616,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                     }
                                     
                                     // Set node name and add to scene
-                                    let nodeName = "SharedAsset_\(Date().timeIntervalSince1970)"
+                                    let nodeName = "[#SharedAsset_\(Date().timeIntervalSince1970)"
                                     webNode.name = nodeName
                                     self.sceneView.scene.rootNode.addChildNode(webNode)
                                     
@@ -1675,8 +1675,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     finalNode.transform = transform
                 }
                 
-                // Set node name
-                let nodeName = "SharedAsset_\(Date().timeIntervalSince1970)"
+                // Set node name with "[#" prefix for gesture detection
+                let nodeName = "[#SharedAsset_\(Date().timeIntervalSince1970)"
                 finalNode.name = nodeName
                 
                 // Add to scene
