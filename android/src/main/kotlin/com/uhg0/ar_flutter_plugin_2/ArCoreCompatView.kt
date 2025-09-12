@@ -16,6 +16,7 @@ import com.google.ar.core.Pose
 import com.google.ar.sceneform.*
 import com.google.ar.sceneform.assets.RenderableSource
 import com.google.ar.sceneform.math.Vector3
+import com.google.ar.sceneform.math.Quaternion
 import com.google.ar.sceneform.rendering.ModelRenderable
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
@@ -57,6 +58,19 @@ class ArCoreCompatView(
     // Performance optimization: Reuse collections to reduce garbage collection
     private val reusableNodeHitResults = mutableListOf<String>()
     private val reusableMatrixArray = FloatArray(16)
+    
+    // Scene state persistence for navigation lifecycle management
+    private data class NodeState(
+        val nodeName: String,
+        val position: Vector3,
+        val rotation: Quaternion,
+        val scale: Vector3,
+        val modelUri: String,
+        val anchorPose: Pose?
+    )
+    
+    private val persistentNodeStates = mutableMapOf<String, NodeState>()
+    private var isRestoringScene = false
 
     init {
         setupMethodChannels()
@@ -97,8 +111,15 @@ class ArCoreCompatView(
                 Handler(Looper.getMainLooper()).post {
                     try {
                         resume()
+                        
+                        // NAVIGATION LIFECYCLE FIX: Restore scene state after session resume
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            Log.d(TAG, "🔄 AR session resumed, checking for scene restoration...")
+                            restoreSceneStateFromPersistence()
+                        }, 500) // Small delay to ensure session is fully ready
+                        
                     } catch (e: Exception) {
-                        // Silently handle resume errors
+                        Log.w(TAG, "⚠️ Error during AR session resume: ${e.message}")
                     }
                 }
             }
@@ -280,18 +301,65 @@ class ArCoreCompatView(
             
             Log.d(TAG, "⚡ INSTANT ENABLE: Found TransformableNode: $nodeId")
             
-            // INSTANT OPERATIONS: Single-pass operation for zero-delay switching
+            // CRITICAL: PROACTIVE HIERARCHY FIX - Check and restore anchor hierarchy BEFORE gesture operations
+            Log.d(TAG, "🔧 HIERARCHY CHECK: Verifying node anchor hierarchy before gesture enable")
+            val hasValidParent = node.parent != null && node.parent is AnchorNode
+            
+            if (!hasValidParent) {
+                Log.w(TAG, "🚨 HIERARCHY FIX: Node $nodeId missing anchor parent, attempting immediate restore")
+                
+                // Try to find existing anchor or create new one
+                val anchorNodeId = "${nodeId}_anchor"
+                var anchorNode = nodesMap[anchorNodeId] as? AnchorNode
+                
+                if (anchorNode == null) {
+                    Log.d(TAG, "🔧 HIERARCHY FIX: Creating new anchor for orphaned node")
+                    // Create emergency anchor at current world position
+                    val currentPosition = node.worldPosition
+                    val session = arSceneView?.session
+                    
+                    if (session != null && currentPosition != null) {
+                        try {
+                            val emergencyAnchor = session.createAnchor(
+                                Pose.makeTranslation(currentPosition.x, currentPosition.y, currentPosition.z)
+                            )
+                            anchorNode = AnchorNode(emergencyAnchor)
+                            anchorNode.setParent(arSceneView?.scene)
+                            nodesMap[anchorNodeId] = anchorNode
+                            Log.d(TAG, "✅ HIERARCHY FIX: Created emergency anchor at position: $currentPosition")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ HIERARCHY FIX: Failed to create emergency anchor: ${e.message}")
+                            result.error("HIERARCHY_ERROR", "Cannot restore node hierarchy", null)
+                            return
+                        }
+                    } else {
+                        Log.e(TAG, "❌ HIERARCHY FIX: Cannot create anchor - missing session or position")
+                        result.error("HIERARCHY_ERROR", "Missing session or node position", null)
+                        return
+                    }
+                }
+                
+                // Re-parent the node to the anchor
+                Log.d(TAG, "🔧 HIERARCHY FIX: Re-parenting node to anchor")
+                node.setParent(anchorNode)
+                node.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                Log.d(TAG, "✅ HIERARCHY FIX: Successfully restored hierarchy for $nodeId")
+            } else {
+                Log.d(TAG, "✅ HIERARCHY CHECK: Node $nodeId has valid anchor parent")
+            }
+            
+            // INSTANT OPERATIONS: Single-pass operation for zero-delay switching (now with valid hierarchy)
             Log.d(TAG, "⚡ INSTANT SWITCH: Performing single-pass gesture switch operation")
             
             // Step 1: Instantly disable all nodes and enable target in one loop
             for ((id, existingNode) in nodesMap) {
                 if (existingNode is TransformableNode) {
                     if (id == nodeId) {
-                        // Enable the target node
+                        // Enable the target node (now guaranteed to have valid parent)
                         existingNode.translationController.isEnabled = true
                         existingNode.rotationController.isEnabled = true
                         existingNode.scaleController.isEnabled = true
-                        Log.d(TAG, "⚡ ENABLED: $id")
+                        Log.d(TAG, "⚡ ENABLED: $id (with valid hierarchy)")
                     } else {
                         // Disable all other nodes
                         existingNode.translationController.isEnabled = false
@@ -1031,18 +1099,28 @@ class ArCoreCompatView(
                                     // Store both nodes
                                     nodesMap[nodeName] = transformableNode
                                     nodesMap["${nodeName}_anchor"] = anchorNode
+                                    
+                                    // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
+                                    saveNodeToPersistentState(nodeName, transformableNode, uri)
+                                    
                                     Log.d(TAG, "✅ Created virtual anchor for gesture support")
                                 } else {
                                     Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
                                     transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                     arSceneView?.scene?.addChild(transformableNode)
                                     nodesMap[nodeName] = transformableNode
+                                    
+                                    // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
+                                    saveNodeToPersistentState(nodeName, transformableNode, uri)
                                 }
                             } catch (anchorException: Exception) {
                                 Log.w(TAG, "⚠️ Exception creating virtual anchor: ${anchorException.message}, using direct scene attachment")
                                 transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                 arSceneView?.scene?.addChild(transformableNode)
                                 nodesMap[nodeName] = transformableNode
+                                
+                                // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
+                                saveNodeToPersistentState(nodeName, transformableNode, uri)
                             }
                         }
                         
@@ -1413,6 +1491,10 @@ class ArCoreCompatView(
                     Log.d(TAG, "🗑️ Removing node by name: $nodeName")
                     node.setParent(null) // Remove from scene
                     nodesMap.remove(nodeName)
+                    
+                    // NAVIGATION LIFECYCLE FIX: Remove from persistent state
+                    persistentNodeStates.remove(nodeName)
+                    Log.d(TAG, "🗑️ Removed node from persistent state: $nodeName")
                     
                     // Also remove associated virtual anchor if it exists
                     val virtualAnchorName = "${nodeName}_anchor"
@@ -1883,6 +1965,11 @@ class ArCoreCompatView(
 
     private fun handleDispose(call: MethodCall, result: MethodChannel.Result) {
         try {
+            Log.d(TAG, "🔄 Starting AR scene disposal with state preservation...")
+            
+            // CRITICAL: Save scene state before disposal for restoration after navigation
+            captureSceneStateForPersistence()
+            
             arSceneView?.let { sceneView ->
                 try {
                     // CRITICAL: Stop render loop first to prevent crashes
@@ -1892,21 +1979,24 @@ class ArCoreCompatView(
                     sceneView.session?.close()
                 } catch (e: Exception) {
                     // Silently handle cleanup errors to prevent crashes
+                    Log.w(TAG, "⚠️ Error during session cleanup: ${e.message}")
                 }
             }
             
             // CRITICAL: Clear transformation system selection first to prevent ghost gestures
             transformationSystem?.selectNode(null)
             
-            // Clear references efficiently
+            // Clear references efficiently (but keep persistent state)
             arSceneView = null
             nodesMap.clear()
             reusableNodeHitResults.clear()
             transformationSystem = null
             gestureDetector = null
             
+            Log.d(TAG, "✅ AR scene disposal completed, state preserved for restoration")
             result.success(null)
         } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in handleDispose: ${e.message}")
             result.error("DISPOSE_ERROR", e.message, null)
         }
     }
@@ -2059,6 +2149,209 @@ class ArCoreCompatView(
             override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {}
             override fun notImplemented() {}
         })
+    }
+    
+    // MARK: - Scene State Persistence (Navigation Lifecycle Fix)
+    
+    /**
+     * Capture current scene state before disposal for restoration after navigation
+     */
+    private fun captureSceneStateForPersistence() {
+        Log.d(TAG, "📸 Capturing scene state for persistence...")
+        
+        try {
+            persistentNodeStates.clear()
+            
+            for ((nodeName, node) in nodesMap) {
+                when (node) {
+                    is TransformableNode -> {
+                        try {
+                            // Capture the transformable node's state
+                            val position = node.worldPosition
+                            val rotation = node.worldRotation
+                            val scale = node.localScale
+                            
+                            // Try to get the model URI from the node (if available)
+                            val modelUri = node.name ?: nodeName
+                            
+                            // Get the anchor pose if the node has an anchor parent
+                            val anchorPose = when (val parent = node.parent) {
+                                is AnchorNode -> parent.anchor?.pose
+                                else -> null
+                            }
+                            
+                            val nodeState = NodeState(
+                                nodeName = nodeName,
+                                position = position,
+                                rotation = rotation,
+                                scale = scale,
+                                modelUri = modelUri,
+                                anchorPose = anchorPose
+                            )
+                            
+                            persistentNodeStates[nodeName] = nodeState
+                            Log.d(TAG, "💾 Captured state for node: $nodeName")
+                            Log.d(TAG, "   Position: $position")
+                            Log.d(TAG, "   Scale: $scale")
+                            Log.d(TAG, "   Has anchor: ${anchorPose != null}")
+                            
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to capture state for node $nodeName: ${e.message}")
+                        }
+                    }
+                    else -> {
+                        Log.d(TAG, "⏭️ Skipping non-transformable node: $nodeName")
+                    }
+                }
+            }
+            
+            Log.d(TAG, "✅ Scene state captured: ${persistentNodeStates.size} nodes saved")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error capturing scene state: ${e.message}")
+        }
+    }
+    
+    /**
+     * Restore scene state after AR session is recreated
+     */
+    private fun restoreSceneStateFromPersistence() {
+        if (persistentNodeStates.isEmpty()) {
+            Log.d(TAG, "📭 No persistent scene state to restore")
+            return
+        }
+        
+        Log.d(TAG, "🔄 Restoring scene state from persistence...")
+        Log.d(TAG, "📦 Found ${persistentNodeStates.size} nodes to restore")
+        
+        isRestoringScene = true
+        
+        try {
+            for ((nodeName, nodeState) in persistentNodeStates) {
+                Log.d(TAG, "🔧 Restoring node: $nodeName")
+                
+                try {
+                    restoreNodeFromState(nodeName, nodeState)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Failed to restore node $nodeName: ${e.message}")
+                    // Continue with other nodes
+                }
+            }
+            
+            Log.d(TAG, "✅ Scene state restoration completed")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during scene state restoration: ${e.message}")
+        } finally {
+            isRestoringScene = false
+        }
+    }
+    
+    /**
+     * Restore a single node from its captured state
+     */
+    private fun restoreNodeFromState(nodeName: String, nodeState: NodeState) {
+        val session = arSceneView?.session
+        if (session == null) {
+            Log.w(TAG, "⚠️ Cannot restore node $nodeName: AR session not available")
+            return
+        }
+        
+        Log.d(TAG, "🛠️ Restoring node: $nodeName")
+        Log.d(TAG, "   Original position: ${nodeState.position}")
+        Log.d(TAG, "   Original scale: ${nodeState.scale}")
+        Log.d(TAG, "   Had anchor: ${nodeState.anchorPose != null}")
+        
+        try {
+            // Create the restored transformable node
+            val transformableNode = TransformableNode(transformationSystem)
+            transformableNode.setParent(arSceneView?.scene)
+            
+            // Restore position, rotation, and scale
+            transformableNode.worldPosition = nodeState.position
+            transformableNode.worldRotation = nodeState.rotation
+            transformableNode.localScale = nodeState.scale
+            
+            // If the node had an anchor, try to restore it
+            if (nodeState.anchorPose != null) {
+                try {
+                    Log.d(TAG, "🔗 Restoring anchor for node: $nodeName")
+                    
+                    // Create new anchor at the same pose
+                    val restoredAnchor = session.createAnchor(nodeState.anchorPose)
+                    val anchorNode = AnchorNode(restoredAnchor)
+                    anchorNode.setParent(arSceneView?.scene)
+                    
+                    // Re-parent the transformable node to the restored anchor
+                    transformableNode.setParent(anchorNode)
+                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                    
+                    // Store both nodes
+                    nodesMap[nodeName] = transformableNode
+                    nodesMap["${nodeName}_anchor"] = anchorNode
+                    
+                    Log.d(TAG, "✅ Successfully restored node with anchor: $nodeName")
+                    
+                } catch (anchorError: Exception) {
+                    Log.w(TAG, "⚠️ Failed to restore anchor for $nodeName: ${anchorError.message}")
+                    // Fallback: place node without anchor (emergency hierarchy creation will handle it)
+                    nodesMap[nodeName] = transformableNode
+                    Log.d(TAG, "⚡ Node restored without anchor, emergency hierarchy will handle it")
+                }
+            } else {
+                // Node didn't have an anchor originally
+                nodesMap[nodeName] = transformableNode
+                Log.d(TAG, "✅ Successfully restored node without anchor: $nodeName")
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to restore node $nodeName: ${e.message}")
+            throw e
+        }
+    }
+    
+    /**
+     * Save a newly added node to persistent state for future restoration
+     */
+    private fun saveNodeToPersistentState(nodeName: String, transformableNode: TransformableNode, modelUri: String) {
+        try {
+            // Skip saving during restoration to avoid circular references
+            if (isRestoringScene) {
+                Log.d(TAG, "⏭️ Skipping persistent state save during restoration: $nodeName")
+                return
+            }
+            
+            Log.d(TAG, "💾 Saving new node to persistent state: $nodeName")
+            
+            val position = transformableNode.worldPosition
+            val rotation = transformableNode.worldRotation
+            val scale = transformableNode.localScale
+            
+            // Get the anchor pose if the node has an anchor parent
+            val anchorPose = when (val parent = transformableNode.parent) {
+                is AnchorNode -> parent.anchor?.pose
+                else -> null
+            }
+            
+            val nodeState = NodeState(
+                nodeName = nodeName,
+                position = position,
+                rotation = rotation,
+                scale = scale,
+                modelUri = modelUri,
+                anchorPose = anchorPose
+            )
+            
+            persistentNodeStates[nodeName] = nodeState
+            
+            Log.d(TAG, "✅ Node saved to persistent state: $nodeName")
+            Log.d(TAG, "   Position: $position")
+            Log.d(TAG, "   Scale: $scale")
+            Log.d(TAG, "   Has anchor: ${anchorPose != null}")
+            
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Failed to save node $nodeName to persistent state: ${e.message}")
+        }
     }
 
     /**
