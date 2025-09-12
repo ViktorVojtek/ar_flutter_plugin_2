@@ -3052,28 +3052,51 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
   /// Enable transform gestures for a specific node (Android single-object mode)
   Future<void> _enableTransformForNode(String nodeId) async {
     try {
-      debugPrint('AR Screen: 🎯 Enabling transforms for node: $nodeId');
+      debugPrint('AR Screen: 🔵 ENABLE TRANSFORM: Starting for node: $nodeId');
+      debugPrint('AR Screen: 🔵 ENABLE TRANSFORM: Current nodeCreationOrder: $nodeCreationOrder');
+      debugPrint('AR Screen: 🔵 ENABLE TRANSFORM: Current selectedNode: $selectedNode');
       
       if (_sessionController.objectManager == null) {
-        debugPrint('AR Screen: ❌ ObjectManager is null, cannot enable transforms');
+        debugPrint('AR Screen: ❌ ENABLE TRANSFORM: ObjectManager is null, cannot enable transforms');
         return;
+      }
+      
+      // Verify that the nodeId exists in our tracking
+      if (!nodeCreationOrder.contains(nodeId)) {
+        debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Node $nodeId not found in nodeCreationOrder');
+        debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Available nodes: $nodeCreationOrder');
+        // Try to recover by checking if it's a known model node
+        bool foundInModels = false;
+        try {
+          // Check if this node belongs to a persistent model
+          for (var model in _modelManager.getAllPersistentModels()) {
+            if (model.activeNodeId == nodeId) {
+              debugPrint('AR Screen: 🔄 ENABLE TRANSFORM: Found node in persistent models, adding to tracking');
+              nodeCreationOrder.add(nodeId);
+              foundInModels = true;
+              break;
+            }
+          }
+        } catch (e) {
+          debugPrint('AR Screen: ❌ ENABLE TRANSFORM: Error checking persistent models: $e');
+        }
+        
+        if (!foundInModels) {
+          debugPrint('AR Screen: ❌ ENABLE TRANSFORM: Node $nodeId not found anywhere, aborting');
+          return;
+        }
       }
       
       // Set processing flag to prevent callback interference
       _isProcessingNodeSelection = true;
       
       try {
-        // ANDROID FIX: Force clear state before new selection to prevent transformation conflicts
-        debugPrint('AR Screen: 🔧 Android single-object mode: Force clearing state first');
+        // NEW APPROACH: Use native gesture control methods for proper synchronization
+        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Using native gesture control for Android single-object mode');
         
-        // Step 1: Clear any existing selection completely
-        if (_sessionController.objectManager!.onNodeTap != null) {
-          debugPrint('AR Screen: 🔧 Step 1: Force clearing all selections');
-          _sessionController.objectManager!.onNodeTap!([]);
-          
-          // Wait for the clear to propagate to native side
-          await Future.delayed(const Duration(milliseconds: 150));
-        }
+        // Step 1: Disable all other nodes using native method
+        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Step 1: Disabling all nodes via native method');
+        await _sessionController.objectManager!.deselectAllNodes();
         
         // Step 2: Update Flutter state
         if (mounted) {
@@ -3083,27 +3106,28 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
           });
         }
         
-        // Step 3: Wait for Flutter state to settle
-        await Future.delayed(const Duration(milliseconds: 100));
+        // Step 3: Enable gestures for the specific node using native method
+        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Step 3: Enabling gestures for node: $nodeId');
+        bool success = await _sessionController.objectManager!.enableTransformGestures(nodeId);
         
-        // Step 4: Set new selection on native side
-        if (_sessionController.objectManager!.onNodeTap != null) {
-          debugPrint('AR Screen: 🔧 Step 4: Setting new selection: $nodeId');
-          _sessionController.objectManager!.onNodeTap!([nodeId]);
-          
-          // Wait for selection to propagate
-          await Future.delayed(const Duration(milliseconds: 100));
+        if (success) {
+          debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Native transform enable successful for node: $nodeId');
+          debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Flutter state updated - selectedNode: $selectedNode, _activeTransformableNode: $_activeTransformableNode');
+        } else {
+          debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Native transform enable failed for node: $nodeId');
+          debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: This could indicate nodeId mismatch between Flutter and Android');
         }
         
-        debugPrint('AR Screen: ✅ Transform enable completed for node: $nodeId');
+        debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Transform enable completed for node: $nodeId');
         
       } finally {
-        // Always clear the processing flag
+        // Clear processing flag
+        await Future.delayed(const Duration(milliseconds: 50));
         _isProcessingNodeSelection = false;
       }
       
     } catch (e) {
-      debugPrint('AR Screen: ❌ Error enabling transforms for node $nodeId: $e');
+      debugPrint('AR Screen: ❌ ENABLE TRANSFORM: Error enabling transforms for $nodeId: $e');
       _isProcessingNodeSelection = false;
     }
   }
@@ -3111,21 +3135,34 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
   /// Disable transform gestures for a specific node (Android single-object mode)
   Future<void> _disableTransformForNode(String nodeId) async {
     try {
-      debugPrint('AR Screen: 🚫 Disabling transforms for node: $nodeId');
+      debugPrint('AR Screen: � DISABLE TRANSFORM: Starting for node: $nodeId');
+      debugPrint('AR Screen: 🔴 DISABLE TRANSFORM: Current nodeCreationOrder: $nodeCreationOrder');
+      debugPrint('AR Screen: 🔴 DISABLE TRANSFORM: Current selectedNode: $selectedNode');
       
       if (_sessionController.objectManager == null) {
-        debugPrint('AR Screen: ❌ ObjectManager is null, cannot disable transforms');
+        debugPrint('AR Screen: ❌ DISABLE TRANSFORM: ObjectManager is null, cannot disable transforms');
         return;
+      }
+      
+      // Verify that the nodeId exists in our tracking
+      if (!nodeCreationOrder.contains(nodeId)) {
+        debugPrint('AR Screen: ⚠️ DISABLE TRANSFORM: Node $nodeId not found in nodeCreationOrder');
+        debugPrint('AR Screen: ⚠️ DISABLE TRANSFORM: Available nodes: $nodeCreationOrder');
+        // Still proceed with disable attempt in case it exists in Android
       }
       
       // Set processing flag to prevent callback interference
       _isProcessingNodeSelection = true;
       
       try {
-        // ANDROID FIX: More robust deselection process
-        debugPrint('AR Screen: 🔧 Android deselection: Clearing all state and native selection');
+        // NEW APPROACH: Use native gesture control method for proper deselection
+        debugPrint('AR Screen: 🔧 DISABLE TRANSFORM: Using native gesture control for Android single-object mode');
         
-        // Step 1: Clear Flutter state first
+        // Step 1: Disable gestures for the specific node using native method
+        debugPrint('AR Screen: 🔧 DISABLE TRANSFORM: Step 1: Disabling gestures for node: $nodeId');
+        bool success = await _sessionController.objectManager!.disableTransformGestures(nodeId);
+        
+        // Step 2: Clear Flutter state
         if (mounted) {
           setState(() {
             selectedNode = null;
@@ -3133,27 +3170,24 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
           });
         }
         
-        // Step 2: Wait for Flutter state to settle
-        await Future.delayed(const Duration(milliseconds: 100));
-        
-        // Step 3: Clear native selection directly
-        if (_sessionController.objectManager!.onNodeTap != null) {
-          debugPrint('AR Screen: 🔧 Clearing native selection directly');
-          _sessionController.objectManager!.onNodeTap!([]);
-          
-          // Wait for deselection to propagate
-          await Future.delayed(const Duration(milliseconds: 100));
+        if (success) {
+          debugPrint('AR Screen: ✅ DISABLE TRANSFORM: Native transform disable successful for node: $nodeId');
+          debugPrint('AR Screen: ✅ DISABLE TRANSFORM: Flutter state updated - selectedNode: $selectedNode, _activeTransformableNode: $_activeTransformableNode');
+        } else {
+          debugPrint('AR Screen: ⚠️ DISABLE TRANSFORM: Native transform disable failed for node: $nodeId');
+          debugPrint('AR Screen: ⚠️ DISABLE TRANSFORM: This could indicate nodeId mismatch between Flutter and Android');
         }
         
-        debugPrint('AR Screen: ✅ Transform disable completed for node: $nodeId');
+        debugPrint('AR Screen: ✅ DISABLE TRANSFORM: Transform disable completed for node: $nodeId');
         
       } finally {
-        // Always clear the processing flag
+        // Clear processing flag
+        await Future.delayed(const Duration(milliseconds: 50));
         _isProcessingNodeSelection = false;
       }
       
     } catch (e) {
-      debugPrint('AR Screen: ❌ Error disabling transforms for node $nodeId: $e');
+      debugPrint('AR Screen: ❌ DISABLE TRANSFORM: Error disabling transforms for $nodeId: $e');
       _isProcessingNodeSelection = false;
     }
   }
@@ -3178,38 +3212,40 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
   /// Remove the currently selected model from the AR scene
   void _removeSelectedModel() {
     debugPrint('AR Screen: === REMOVE SELECTED MODEL ===');
+    debugPrint('AR Screen: 🗑️ REMOVE: selectedNode: $selectedNode');
+    debugPrint('AR Screen: 🗑️ REMOVE: Current nodeCreationOrder: $nodeCreationOrder');
+    debugPrint('AR Screen: 🗑️ REMOVE: Current nodes count: ${nodes.length}');
+    debugPrint('AR Screen: 🗑️ REMOVE: _activeTransformableNode: $_activeTransformableNode');
     
     if (selectedNode == null) {
-      debugPrint('AR Screen: No selected node to remove');
+      debugPrint('AR Screen: ❌ REMOVE: No selected node to remove');
       return;
     }
 
     if (_sessionController.objectManager == null) {
-      debugPrint('AR Screen: Object Manager not available, clearing local state only');
+      debugPrint('AR Screen: ❌ REMOVE: Object Manager not available, clearing local state only');
       _clearLocalModelState();
       return;
     }
 
     String nodeIdToRemove = selectedNode!;
-    debugPrint('AR Screen: Removing node: $nodeIdToRemove');
-    debugPrint('AR Screen: Current nodeCreationOrder: $nodeCreationOrder');
-    debugPrint('AR Screen: Current nodes count: ${nodes.length}');
+    debugPrint('AR Screen: 🗑️ REMOVE: Attempting to remove node: $nodeIdToRemove');
 
     // Android single-object mode cleanup
     if (_isAndroidSingleObjectMode && _activeTransformableNode == nodeIdToRemove) {
-      debugPrint('AR Screen: 🤖 Clearing Android single-object mode state');
+      debugPrint('AR Screen: 🤖 REMOVE: Clearing Android single-object mode state');
       _activeTransformableNode = null;
     }
 
     // Find the node in our tracking lists
     int selectedIndex = nodeCreationOrder.indexOf(nodeIdToRemove);
-    debugPrint('AR Screen: Selected index in nodeCreationOrder: $selectedIndex');
+    debugPrint('AR Screen: 🗑️ REMOVE: Selected index in nodeCreationOrder: $selectedIndex');
     
     if (selectedIndex >= 0 && selectedIndex < nodes.length) {
       ARNode nodeToRemove = nodes[selectedIndex];
       
-      debugPrint('AR Screen: Found node to remove at index $selectedIndex');
-      debugPrint('AR Screen: Node details - Position: ${nodeToRemove.position}, Scale: ${nodeToRemove.scale}');
+      debugPrint('AR Screen: ✅ REMOVE: Found node to remove at index $selectedIndex');
+      debugPrint('AR Screen: 🗑️ REMOVE: Node details - Name: ${nodeToRemove.name}, Position: ${nodeToRemove.position}, Scale: ${nodeToRemove.scale}');
       
       // CRITICAL: Clear selection FIRST to prevent UI issues
       String nodeIdBeingRemoved = nodeIdToRemove; // Store for async operations
@@ -3236,29 +3272,41 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         debugPrint('AR Screen: ✅ Selection cleared and tracking updated in UI');
       }
       
+      // CRITICAL: Remove from tracking lists BEFORE calling async operations
+      // Store the original state for comparison
+      List<String> originalNodeOrder = List.from(nodeCreationOrder);
+      List<ARNode> originalNodes = List.from(nodes);
+      
       // Remove from tracking lists
       nodes.removeAt(selectedIndex);
       nodeCreationOrder.removeAt(selectedIndex);
-      debugPrint('AR Screen: ✅ Removed from local tracking lists');
+      debugPrint('AR Screen: ✅ REMOVE: Removed from local tracking lists');
+      debugPrint('AR Screen: 🗑️ REMOVE: Before removal - nodes: ${originalNodes.length}, order: ${originalNodeOrder.length}');
+      debugPrint('AR Screen: 🗑️ REMOVE: After removal - nodes: ${nodes.length}, order: ${nodeCreationOrder.length}');
+      debugPrint('AR Screen: 🗑️ REMOVE: Remaining nodeCreationOrder: $nodeCreationOrder');
       
       // Remove from model manager persistent storage
+      debugPrint('AR Screen: 🗑️ REMOVE: Removing from model manager persistent storage');
       _modelManager.removeModelByNodeId(nodeIdBeingRemoved);
-      debugPrint('AR Screen: ✅ Removed from model manager');
+      debugPrint('AR Screen: ✅ REMOVE: Removed from model manager');
       
       // Remove from AR scene (async operation)
+      debugPrint('AR Screen: 🗑️ REMOVE: Starting async removal from AR scene');
       _removeNodeFromARScene(nodeToRemove, nodeIdBeingRemoved);
       
       int remainingModels = nodes.length;
-      debugPrint('AR Screen: ✅ Model removal completed. Remaining models: $remainingModels');
+      debugPrint('AR Screen: ✅ REMOVE: Model removal completed. Remaining models: $remainingModels');
+      debugPrint('AR Screen: 🗑️ REMOVE: Final nodeCreationOrder: $nodeCreationOrder');
       
       // Update memory information after model removal
       _updateMemoryInfo();
       // _showSnackBar('Model deleted. Remaining models: $remainingModels');
       
     } else {
-      debugPrint('AR Screen: ❌ Selected node not found in tracking lists');
+      debugPrint('AR Screen: ❌ REMOVE: Selected node not found in tracking lists');
       debugPrint('AR Screen: - Looking for: $nodeIdToRemove');
       debugPrint('AR Screen: - Available nodes: $nodeCreationOrder');
+      debugPrint('AR Screen: - Index found: $selectedIndex (should be between 0 and ${nodes.length - 1})');
       
       // Clear selection anyway to prevent UI getting stuck
       if (mounted) {
@@ -3269,6 +3317,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
       }
       
       // Try to remove from model manager anyway
+      debugPrint('AR Screen: 🗑️ REMOVE: Attempting cleanup from model manager anyway');
       _modelManager.removeModelByNodeId(nodeIdToRemove);
       debugPrint('AR Screen: ✅ Attempted cleanup from model manager');
     }

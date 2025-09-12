@@ -268,15 +268,20 @@ class ArCoreCompatView(
             }
             
             Log.d(TAG, "🎯 ENABLE TRANSFORM: Enabling gestures for node: $nodeId")
+            Log.d(TAG, "🎯 ENABLE TRANSFORM: Available nodes: ${nodesMap.keys}")
             
             val node = nodesMap[nodeId]
             if (node !is TransformableNode) {
-                Log.w(TAG, "⚠️ Node $nodeId is not a TransformableNode or doesn't exist")
+                Log.w(TAG, "⚠️ ENABLE TRANSFORM: Node $nodeId is not a TransformableNode or doesn't exist")
+                Log.w(TAG, "⚠️ ENABLE TRANSFORM: Node type: ${node?.javaClass?.simpleName ?: "null"}")
                 result.error("NODE_NOT_FOUND", "Node $nodeId is not transformable", null)
                 return
             }
             
+            Log.d(TAG, "🎯 ENABLE TRANSFORM: Found TransformableNode: $nodeId")
+            
             // CRITICAL: First disable ALL other nodes to ensure only one is active
+            Log.d(TAG, "🎯 ENABLE TRANSFORM: Disabling all other transformable nodes")
             disableAllTransformableNodes()
             
             // Enable gesture controllers for this specific node
@@ -288,6 +293,7 @@ class ArCoreCompatView(
             transformationSystem?.selectNode(node)
             
             Log.d(TAG, "✅ ENABLE TRANSFORM: Successfully enabled gestures for node: $nodeId")
+            Log.d(TAG, "✅ ENABLE TRANSFORM: Node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
             result.success(true)
             
         } catch (e: Exception) {
@@ -307,14 +313,18 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🎯 DISABLE TRANSFORM: Disabling gestures for node: $nodeId")
+            Log.d(TAG, "🚫 DISABLE TRANSFORM: Disabling gestures for node: $nodeId")
+            Log.d(TAG, "🚫 DISABLE TRANSFORM: Available nodes: ${nodesMap.keys}")
             
             val node = nodesMap[nodeId]
             if (node !is TransformableNode) {
-                Log.w(TAG, "⚠️ Node $nodeId is not a TransformableNode or doesn't exist")
+                Log.w(TAG, "⚠️ DISABLE TRANSFORM: Node $nodeId is not a TransformableNode or doesn't exist")
+                Log.w(TAG, "⚠️ DISABLE TRANSFORM: Node type: ${node?.javaClass?.simpleName ?: "null"}")
                 result.error("NODE_NOT_FOUND", "Node $nodeId is not transformable", null)
                 return
             }
+            
+            Log.d(TAG, "🚫 DISABLE TRANSFORM: Found TransformableNode: $nodeId")
             
             // Disable gesture controllers for this specific node
             node.translationController.isEnabled = false
@@ -324,9 +334,11 @@ class ArCoreCompatView(
             // If this was the selected node, deselect it
             if (transformationSystem?.selectedNode == node) {
                 transformationSystem?.selectNode(null)
+                Log.d(TAG, "🚫 DISABLE TRANSFORM: Deselected node from TransformationSystem")
             }
             
             Log.d(TAG, "✅ DISABLE TRANSFORM: Successfully disabled gestures for node: $nodeId")
+            Log.d(TAG, "✅ DISABLE TRANSFORM: Node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
             result.success(true)
             
         } catch (e: Exception) {
@@ -1412,35 +1424,77 @@ class ArCoreCompatView(
             val arguments = call.arguments as? Map<String, Any>
             val nodeId = arguments?.get("nodeId") as? String
             
+            Log.d(TAG, "🗑️ REMOVE NODE DEEP: Request to remove nodeId: $nodeId")
+            Log.d(TAG, "🗑️ REMOVE NODE DEEP: Current nodesMap keys: ${nodesMap.keys}")
+            
             if (nodeId != null) {
                 val node = nodesMap[nodeId]
                 if (node != null) {
-                    Log.d(TAG, "🗑️ Deep removing node with ID: $nodeId")
+                    Log.d(TAG, "🗑️ REMOVE NODE DEEP: Found node to remove: $nodeId (type: ${node.javaClass.simpleName})")
                     
-                    // Remove from scene graph
-                    node.setParent(null)
-                    
-                    // If it's a TransformableNode, disable it
-                    if (node is TransformableNode) {
-                        node.isEnabled = false
-                        node.renderable = null
+                    // First, deselect this node from TransformationSystem to prevent gesture conflicts
+                    if (node is TransformableNode && transformationSystem != null) {
+                        try {
+                            transformationSystem?.selectNode(null) // Deselect any selected node
+                            Log.d(TAG, "🗑️ Deselected node from TransformationSystem")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Could not deselect node from TransformationSystem: ${e.message}")
+                        }
                     }
                     
-                    // Remove from our tracking
+                    // Disable TransformableNode properties first
+                    if (node is TransformableNode) {
+                        try {
+                            node.isEnabled = false
+                            node.translationController.isEnabled = false
+                            node.rotationController.isEnabled = false
+                            node.scaleController.isEnabled = false
+                            node.renderable = null
+                            Log.d(TAG, "🗑️ Disabled TransformableNode properties")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Error disabling TransformableNode properties: ${e.message}")
+                        }
+                    }
+                    
+                    // Remove from scene graph
+                    try {
+                        node.setParent(null)
+                        Log.d(TAG, "🗑️ Removed node from scene graph")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "⚠️ Error removing node from scene graph: ${e.message}")
+                    }
+                    
+                    // Remove from our tracking map
                     nodesMap.remove(nodeId)
                     
-                    Log.d(TAG, "✅ Successfully removed node: $nodeId")
+                    // Also remove associated anchor if it exists
+                    val anchorNodeId = "${nodeId}_anchor"
+                    val anchorNode = nodesMap[anchorNodeId]
+                    if (anchorNode != null) {
+                        Log.d(TAG, "🗑️ Also removing associated anchor: $anchorNodeId")
+                        try {
+                            anchorNode.setParent(null)
+                            nodesMap.remove(anchorNodeId)
+                            Log.d(TAG, "🗑️ Successfully removed anchor: $anchorNodeId")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Error removing anchor: ${e.message}")
+                        }
+                    }
+                    
+                    Log.d(TAG, "✅ REMOVE NODE DEEP: Successfully removed node: $nodeId")
+                    Log.d(TAG, "✅ REMOVE NODE DEEP: Remaining nodesMap keys: ${nodesMap.keys}")
                     result.success(true)
                 } else {
-                    Log.w(TAG, "⚠️ Node not found for deep removal: $nodeId")
+                    Log.w(TAG, "⚠️ REMOVE NODE DEEP: Node not found for nodeId: $nodeId")
+                    Log.w(TAG, "⚠️ REMOVE NODE DEEP: Available nodes: ${nodesMap.keys}")
                     result.success(false)
                 }
             } else {
-                Log.w(TAG, "⚠️ Node ID not provided for deep removal")
+                Log.w(TAG, "⚠️ REMOVE NODE DEEP: Node ID not provided")
                 result.success(false)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error in deep node removal: ${e.message}")
+            Log.e(TAG, "❌ REMOVE NODE DEEP: Error in deep node removal: ${e.message}")
             result.error("REMOVE_NODE_DEEP_ERROR", e.message ?: "Unknown error", null)
         }
     }
