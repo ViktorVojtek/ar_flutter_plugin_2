@@ -58,7 +58,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Auto Placement Test"),
+        title: Text("Auto Placement Test - Multiple Models"),
         backgroundColor: Colors.blue,
       ),
       body: Stack(
@@ -137,6 +137,14 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         ],
       ),
     );
+  }
+
+  String _getNextButtonText() {
+    if (nodes.isEmpty) {
+      return "Place ${_testModels[0]['name']}";
+    }
+    int nextIndex = _modelIndex % _testModels.length;
+    return "Place ${_testModels[nextIndex]['name']} (${nodes.length + 1})";
   }
 
   void _onARViewCreated(
@@ -226,16 +234,16 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
 
       setState(() {
         _isARInitialized = true;
-        _statusText = "AR initialized. Tap 'Auto Place' to test automatic placement.";
+        _statusText = "AR initialized. Tap 'Place Model' to test multi-model placement.";
       });
 
       print("✅ AR initialization completed");
       
-      // Wait a moment for AR to stabilize, then test auto placement
+      // Wait a moment for AR to stabilize
       await Future.delayed(Duration(seconds: 2));
       
       setState(() {
-        _statusText = "AR ready for automatic placement testing!";
+        _statusText = "AR ready for multi-model placement testing!";
       });
       
     } catch (e) {
@@ -246,15 +254,6 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     }
   }
 
-  String _getNextButtonText() {
-    if (nodes.isEmpty) {
-      return "Place ${_testModels[0]['name']}";
-    }
-    int nextIndex = _modelIndex % _testModels.length;
-    return "Place ${_testModels[nextIndex]['name']} (${nodes.length + 1})";
-  }
-
-  Future<void> _placeNextModel() async {
   Future<void> _placeNextModel() async {
     if (!_isARInitialized || arObjectManager == null) {
       print("❌ AR not initialized or object manager not available");
@@ -341,9 +340,10 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       }
       
       nodes.clear();
+      _modelIndex = 0; // Reset for fresh testing
       
       setState(() {
-        _statusText = "All objects removed. Ready for new auto placement test.";
+        _statusText = "All objects removed. Ready for new multi-model test.";
       });
       
     } catch (e) {

@@ -11,7 +11,7 @@ import 'package:ar_flutter_plugin_2/datatypes/hittest_result_types.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:vector_math/vector_math_64.dart' as vector_math;
-import 'auto_placement_test.dart';
+import 'auto_placement_test_fixed.dart';
 
 void main() {
   runApp(MyApp());
