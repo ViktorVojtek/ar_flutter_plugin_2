@@ -267,8 +267,8 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🎯 ENABLE TRANSFORM: Enabling gestures for node: $nodeId")
-            Log.d(TAG, "🎯 ENABLE TRANSFORM: Available nodes: ${nodesMap.keys}")
+            Log.d(TAG, "⚡ INSTANT ENABLE: Starting instant gesture enable for node: $nodeId")
+            Log.d(TAG, "⚡ INSTANT ENABLE: Available nodes: ${nodesMap.keys}")
             
             val node = nodesMap[nodeId]
             if (node !is TransformableNode) {
@@ -278,22 +278,36 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🎯 ENABLE TRANSFORM: Found TransformableNode: $nodeId")
+            Log.d(TAG, "⚡ INSTANT ENABLE: Found TransformableNode: $nodeId")
             
-            // CRITICAL: First disable ALL other nodes to ensure only one is active
-            Log.d(TAG, "🎯 ENABLE TRANSFORM: Disabling all other transformable nodes")
-            disableAllTransformableNodes()
+            // INSTANT OPERATIONS: Single-pass operation for zero-delay switching
+            Log.d(TAG, "⚡ INSTANT SWITCH: Performing single-pass gesture switch operation")
             
-            // Enable gesture controllers for this specific node
-            node.translationController.isEnabled = true
-            node.rotationController.isEnabled = true
-            node.scaleController.isEnabled = true
+            // Step 1: Instantly disable all nodes and enable target in one loop
+            for ((id, existingNode) in nodesMap) {
+                if (existingNode is TransformableNode) {
+                    if (id == nodeId) {
+                        // Enable the target node
+                        existingNode.translationController.isEnabled = true
+                        existingNode.rotationController.isEnabled = true
+                        existingNode.scaleController.isEnabled = true
+                        Log.d(TAG, "⚡ ENABLED: $id")
+                    } else {
+                        // Disable all other nodes
+                        existingNode.translationController.isEnabled = false
+                        existingNode.rotationController.isEnabled = false
+                        existingNode.scaleController.isEnabled = false
+                    }
+                }
+            }
             
-            // Make sure the transformation system selects this node
+            // Step 2: Instantly update transformation system selection
             transformationSystem?.selectNode(node)
             
-            Log.d(TAG, "✅ ENABLE TRANSFORM: Successfully enabled gestures for node: $nodeId")
-            Log.d(TAG, "✅ ENABLE TRANSFORM: Node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
+            Log.d(TAG, "⚡ INSTANT SUCCESS: Gesture switching completed instantly for node: $nodeId")
+            Log.d(TAG, "⚡ INSTANT SUCCESS: Target node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
+            
+            // Return success immediately - zero delay response
             result.success(true)
             
         } catch (e: Exception) {
@@ -303,7 +317,7 @@ class ArCoreCompatView(
     }
     
     /**
-     * Disable transform gestures for a specific node
+     * Disable transform gestures for a specific node with instant response
      */
     private fun handleDisableTransformGestures(call: MethodCall, result: MethodChannel.Result) {
         try {
@@ -313,8 +327,8 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🚫 DISABLE TRANSFORM: Disabling gestures for node: $nodeId")
-            Log.d(TAG, "🚫 DISABLE TRANSFORM: Available nodes: ${nodesMap.keys}")
+            Log.d(TAG, "⚡ INSTANT DISABLE: Starting instant gesture disable for node: $nodeId")
+            Log.d(TAG, "⚡ INSTANT DISABLE: Available nodes: ${nodesMap.keys}")
             
             val node = nodesMap[nodeId]
             if (node !is TransformableNode) {
@@ -324,21 +338,26 @@ class ArCoreCompatView(
                 return
             }
             
-            Log.d(TAG, "🚫 DISABLE TRANSFORM: Found TransformableNode: $nodeId")
+            Log.d(TAG, "⚡ INSTANT DISABLE: Found TransformableNode: $nodeId")
             
-            // Disable gesture controllers for this specific node
+            // INSTANT OPERATIONS: Immediate disable for zero-delay response
+            Log.d(TAG, "⚡ INSTANT DISABLE: Performing immediate gesture disable")
+            
+            // Step 1: Instantly disable gesture controllers for this specific node
             node.translationController.isEnabled = false
             node.rotationController.isEnabled = false
             node.scaleController.isEnabled = false
             
-            // If this was the selected node, deselect it
+            // Step 2: Instantly deselect from transformation system
             if (transformationSystem?.selectedNode == node) {
                 transformationSystem?.selectNode(null)
-                Log.d(TAG, "🚫 DISABLE TRANSFORM: Deselected node from TransformationSystem")
+                Log.d(TAG, "⚡ INSTANT DESELECT: Deselected node from TransformationSystem")
             }
             
-            Log.d(TAG, "✅ DISABLE TRANSFORM: Successfully disabled gestures for node: $nodeId")
-            Log.d(TAG, "✅ DISABLE TRANSFORM: Node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
+            Log.d(TAG, "⚡ INSTANT SUCCESS: Gesture disable completed instantly for node: $nodeId")
+            Log.d(TAG, "⚡ INSTANT SUCCESS: Node controllers - Translation: ${node.translationController.isEnabled}, Rotation: ${node.rotationController.isEnabled}, Scale: ${node.scaleController.isEnabled}")
+            
+            // Return success immediately - zero delay response
             result.success(true)
             
         } catch (e: Exception) {
@@ -1424,25 +1443,36 @@ class ArCoreCompatView(
             val arguments = call.arguments as? Map<String, Any>
             val nodeId = arguments?.get("nodeId") as? String
             
-            Log.d(TAG, "🗑️ REMOVE NODE DEEP: Request to remove nodeId: $nodeId")
+            Log.d(TAG, "🗑️ REMOVE NODE DEEP: Request to remove SPECIFIC nodeId: $nodeId")
             Log.d(TAG, "🗑️ REMOVE NODE DEEP: Current nodesMap keys: ${nodesMap.keys}")
+            Log.d(TAG, "🔍 REMOVE SAFETY: Only this exact node should be removed, not all nodes!")
             
             if (nodeId != null) {
                 val node = nodesMap[nodeId]
                 if (node != null) {
-                    Log.d(TAG, "🗑️ REMOVE NODE DEEP: Found node to remove: $nodeId (type: ${node.javaClass.simpleName})")
+                    Log.d(TAG, "🗑️ REMOVE NODE DEEP: Found SPECIFIC node to remove: $nodeId (type: ${node.javaClass.simpleName})")
+                    Log.d(TAG, "🔍 REMOVE SAFETY: Removing only this node, preserving all others")
                     
-                    // First, deselect this node from TransformationSystem to prevent gesture conflicts
+                    // SAFETY CHECK: Count nodes before removal
+                    val nodeCountBefore = nodesMap.size
+                    Log.d(TAG, "🔍 REMOVE SAFETY: Node count BEFORE removal: $nodeCountBefore")
+                    
+                    // First, deselect this SPECIFIC node from TransformationSystem
                     if (node is TransformableNode && transformationSystem != null) {
                         try {
-                            transformationSystem?.selectNode(null) // Deselect any selected node
-                            Log.d(TAG, "🗑️ Deselected node from TransformationSystem")
+                            // Only deselect if THIS node is currently selected
+                            if (transformationSystem?.selectedNode == node) {
+                                transformationSystem?.selectNode(null)
+                                Log.d(TAG, "🗑️ SPECIFIC DESELECT: Deselected ONLY the target node from TransformationSystem")
+                            } else {
+                                Log.d(TAG, "🗑️ SKIP DESELECT: Target node was not selected, skipping deselection")
+                            }
                         } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Could not deselect node from TransformationSystem: ${e.message}")
+                            Log.w(TAG, "⚠️ Could not deselect specific node from TransformationSystem: ${e.message}")
                         }
                     }
                     
-                    // Disable TransformableNode properties first
+                    // Disable ONLY this specific TransformableNode's properties
                     if (node is TransformableNode) {
                         try {
                             node.isEnabled = false
@@ -1450,38 +1480,56 @@ class ArCoreCompatView(
                             node.rotationController.isEnabled = false
                             node.scaleController.isEnabled = false
                             node.renderable = null
-                            Log.d(TAG, "🗑️ Disabled TransformableNode properties")
+                            Log.d(TAG, "🗑️ SPECIFIC DISABLE: Disabled ONLY the target TransformableNode properties")
                         } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Error disabling TransformableNode properties: ${e.message}")
+                            Log.w(TAG, "⚠️ Error disabling specific TransformableNode properties: ${e.message}")
                         }
                     }
                     
-                    // Remove from scene graph
+                    // Remove ONLY this specific node from scene graph
                     try {
                         node.setParent(null)
-                        Log.d(TAG, "🗑️ Removed node from scene graph")
+                        Log.d(TAG, "🗑️ SPECIFIC REMOVAL: Removed ONLY the target node from scene graph")
                     } catch (e: Exception) {
-                        Log.w(TAG, "⚠️ Error removing node from scene graph: ${e.message}")
+                        Log.w(TAG, "⚠️ Error removing specific node from scene graph: ${e.message}")
                     }
                     
-                    // Remove from our tracking map
-                    nodesMap.remove(nodeId)
+                    // Remove ONLY this specific node from our tracking map
+                    val removedNode = nodesMap.remove(nodeId)
+                    if (removedNode != null) {
+                        Log.d(TAG, "🗑️ SPECIFIC TRACKING: Successfully removed ONLY target node from nodesMap")
+                    } else {
+                        Log.w(TAG, "⚠️ SPECIFIC TRACKING: Node was not in nodesMap during removal")
+                    }
                     
-                    // Also remove associated anchor if it exists
+                    // Also remove associated anchor if it exists (but ONLY for this node)
                     val anchorNodeId = "${nodeId}_anchor"
                     val anchorNode = nodesMap[anchorNodeId]
                     if (anchorNode != null) {
-                        Log.d(TAG, "🗑️ Also removing associated anchor: $anchorNodeId")
+                        Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Also removing associated anchor for SPECIFIC node: $anchorNodeId")
                         try {
                             anchorNode.setParent(null)
                             nodesMap.remove(anchorNodeId)
-                            Log.d(TAG, "🗑️ Successfully removed anchor: $anchorNodeId")
+                            Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Successfully removed ONLY the associated anchor: $anchorNodeId")
                         } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Error removing anchor: ${e.message}")
+                            Log.w(TAG, "⚠️ Error removing specific anchor: ${e.message}")
                         }
                     }
                     
-                    Log.d(TAG, "✅ REMOVE NODE DEEP: Successfully removed node: $nodeId")
+                    // SAFETY VERIFICATION: Count nodes after removal
+                    val nodeCountAfter = nodesMap.size
+                    val expectedCount = nodeCountBefore - if (anchorNode != null) 2 else 1
+                    Log.d(TAG, "🔍 REMOVE VERIFICATION: Node count AFTER removal: $nodeCountAfter")
+                    Log.d(TAG, "🔍 REMOVE VERIFICATION: Expected count: $expectedCount")
+                    Log.d(TAG, "🔍 REMOVE VERIFICATION: Actually removed: ${nodeCountBefore - nodeCountAfter} nodes")
+                    
+                    if (nodeCountAfter == expectedCount) {
+                        Log.d(TAG, "✅ REMOVE VERIFICATION: Correct number of nodes removed!")
+                    } else {
+                        Log.w(TAG, "⚠️ REMOVE VERIFICATION: Unexpected node count change!")
+                    }
+                    
+                    Log.d(TAG, "✅ REMOVE NODE DEEP: Successfully removed SPECIFIC node: $nodeId")
                     Log.d(TAG, "✅ REMOVE NODE DEEP: Remaining nodesMap keys: ${nodesMap.keys}")
                     result.success(true)
                 } else {

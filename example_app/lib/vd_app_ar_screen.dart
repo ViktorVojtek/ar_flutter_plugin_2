@@ -3061,6 +3061,15 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         return;
       }
       
+      // INSTANT FEEDBACK: Update UI state immediately for zero-delay user experience
+      if (mounted) {
+        setState(() {
+          selectedNode = nodeId;
+          _activeTransformableNode = nodeId;
+        });
+      }
+      debugPrint('AR Screen: ⚡ INSTANT UPDATE: UI state updated immediately for zero-delay UX');
+      
       // Verify that the nodeId exists in our tracking
       if (!nodeCreationOrder.contains(nodeId)) {
         debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Node $nodeId not found in nodeCreationOrder');
@@ -3091,38 +3100,37 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
       _isProcessingNodeSelection = true;
       
       try {
-        // NEW APPROACH: Use native gesture control methods for proper synchronization
-        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Using native gesture control for Android single-object mode');
+        // OPTIMIZED APPROACH: Parallel operations for faster switching
+        debugPrint('AR Screen: � ENABLE TRANSFORM: Using parallel operations for instant switching');
         
-        // Step 1: Disable all other nodes using native method
-        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Step 1: Disabling all nodes via native method');
-        await _sessionController.objectManager!.deselectAllNodes();
+        // Parallel operations for faster response
+        List<Future<void>> parallelOperations = [
+          // Operation 1: Disable all other nodes
+          _sessionController.objectManager!.deselectAllNodes().catchError((e) {
+            debugPrint('AR Screen: ⚠️ Deselect all failed: $e');
+          }),
+          
+          // Operation 2: Enable gestures for the specific node (can happen in parallel)
+          _sessionController.objectManager!.enableTransformGestures(nodeId).then((success) {
+            if (success) {
+              debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Native gesture enable successful for node: $nodeId');
+            } else {
+              debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Native gesture enable failed for node: $nodeId');
+            }
+            return success;
+          }).catchError((e) {
+            debugPrint('AR Screen: ❌ ENABLE TRANSFORM: Error in parallel enable: $e');
+          }),
+        ];
         
-        // Step 2: Update Flutter state
-        if (mounted) {
-          setState(() {
-            selectedNode = nodeId;
-            _activeTransformableNode = nodeId;
-          });
-        }
+        // Execute parallel operations with minimal delay
+        await Future.wait(parallelOperations, eagerError: false);
         
-        // Step 3: Enable gestures for the specific node using native method
-        debugPrint('AR Screen: 🔧 ENABLE TRANSFORM: Step 3: Enabling gestures for node: $nodeId');
-        bool success = await _sessionController.objectManager!.enableTransformGestures(nodeId);
-        
-        if (success) {
-          debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Native transform enable successful for node: $nodeId');
-          debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Flutter state updated - selectedNode: $selectedNode, _activeTransformableNode: $_activeTransformableNode');
-        } else {
-          debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: Native transform enable failed for node: $nodeId');
-          debugPrint('AR Screen: ⚠️ ENABLE TRANSFORM: This could indicate nodeId mismatch between Flutter and Android');
-        }
-        
-        debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Transform enable completed for node: $nodeId');
+        debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Parallel operations completed for node: $nodeId');
+        debugPrint('AR Screen: ✅ ENABLE TRANSFORM: Flutter state - selectedNode: $selectedNode, _activeTransformableNode: $_activeTransformableNode');
         
       } finally {
-        // Clear processing flag
-        await Future.delayed(const Duration(milliseconds: 50));
+        // Clear processing flag with minimal delay
         _isProcessingNodeSelection = false;
       }
       
@@ -3229,98 +3237,109 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     }
 
     String nodeIdToRemove = selectedNode!;
-    debugPrint('AR Screen: 🗑️ REMOVE: Attempting to remove node: $nodeIdToRemove');
+    debugPrint('AR Screen: 🗑️ REMOVE: Attempting to remove SPECIFIC node: $nodeIdToRemove');
+    debugPrint('AR Screen: 🔍 REMOVE SAFETY: Only this exact node should be removed, not all nodes!');
 
+    // CRITICAL SAFETY CHECK: Verify the node exists before removal
+    int selectedIndex = nodeCreationOrder.indexOf(nodeIdToRemove);
+    debugPrint('AR Screen: 🗑️ REMOVE: Selected index in nodeCreationOrder: $selectedIndex');
+    
+    if (selectedIndex < 0 || selectedIndex >= nodes.length) {
+      debugPrint('AR Screen: ❌ REMOVE SAFETY: Invalid index $selectedIndex for nodes.length ${nodes.length}');
+      debugPrint('AR Screen: ❌ REMOVE SAFETY: Node $nodeIdToRemove not found in tracking, aborting removal');
+      // Clear selection but don't remove anything
+      if (mounted) {
+        setState(() {
+          selectedNode = null;
+          _activeTransformableNode = null;
+        });
+      }
+      return;
+    }
+
+    ARNode nodeToRemove = nodes[selectedIndex];
+    debugPrint('AR Screen: ✅ REMOVE SAFETY: Found specific node to remove at index $selectedIndex');
+    debugPrint('AR Screen: 🗑️ REMOVE: Specific node details - Name: ${nodeToRemove.name}, ID: $nodeIdToRemove');
+    
+    // CRITICAL: Clear selection FIRST to prevent UI issues
+    String nodeIdBeingRemoved = nodeIdToRemove; // Store for async operations
+    
     // Android single-object mode cleanup
     if (_isAndroidSingleObjectMode && _activeTransformableNode == nodeIdToRemove) {
       debugPrint('AR Screen: 🤖 REMOVE: Clearing Android single-object mode state');
       _activeTransformableNode = null;
     }
-
-    // Find the node in our tracking lists
-    int selectedIndex = nodeCreationOrder.indexOf(nodeIdToRemove);
-    debugPrint('AR Screen: 🗑️ REMOVE: Selected index in nodeCreationOrder: $selectedIndex');
     
-    if (selectedIndex >= 0 && selectedIndex < nodes.length) {
-      ARNode nodeToRemove = nodes[selectedIndex];
+    if (mounted) {
+      setState(() {
+        selectedNode = null; // Clear selection immediately
+        
+        // Track object removal for smart memory management within setState
+        debugPrint('AR Screen: 🔍 REMOVAL TRACKING - Before removal:');
+        debugPrint('AR Screen: - _maxObjectsReachedBeforeMemoryLimit: $_maxObjectsReachedBeforeMemoryLimit');
+        debugPrint('AR Screen: - _objectsRemovedSinceMemoryLimit: $_objectsRemovedSinceMemoryLimit');
+        debugPrint('AR Screen: - Current nodes.length: ${nodes.length} (will be ${nodes.length - 1} after removal)');
+        
+        if (_maxObjectsReachedBeforeMemoryLimit > 0) {
+          _objectsRemovedSinceMemoryLimit++;
+          debugPrint('AR Screen: ✅ Updated removal tracking in setState - objects removed since limit: $_objectsRemovedSinceMemoryLimit');
+          debugPrint('AR Screen: This allows placing $_objectsRemovedSinceMemoryLimit more objects before hitting memory limit again');
+          debugPrint('AR Screen: Max reached : $_maxObjectsReachedBeforeMemoryLimit | removed: $_objectsRemovedSinceMemoryLimit Can add ${_maxObjectsReachedBeforeMemoryLimit - (nodes.length - 1)} more');
+        } else {
+          debugPrint('AR Screen: ⚠️ No memory limit history, not tracking removal');
+        }
+      });
+      debugPrint('AR Screen: ✅ Selection cleared and tracking updated in UI');
+    }
+    
+    // CRITICAL: Remove ONLY the specific node from tracking lists
+    // Store the original state for comparison
+    List<String> originalNodeOrder = List.from(nodeCreationOrder);
+    List<ARNode> originalNodes = List.from(nodes);
+    
+    // SAFETY: Verify index is still valid before removal
+    if (selectedIndex >= 0 && selectedIndex < nodes.length && selectedIndex < nodeCreationOrder.length) {
+      // Remove ONLY the specific node at the correct index
+      ARNode removedNode = nodes.removeAt(selectedIndex);
+      String removedNodeId = nodeCreationOrder.removeAt(selectedIndex);
       
-      debugPrint('AR Screen: ✅ REMOVE: Found node to remove at index $selectedIndex');
-      debugPrint('AR Screen: 🗑️ REMOVE: Node details - Name: ${nodeToRemove.name}, Position: ${nodeToRemove.position}, Scale: ${nodeToRemove.scale}');
+      debugPrint('AR Screen: ✅ REMOVE SPECIFIC: Removed specific node from local tracking lists');
+      debugPrint('AR Screen: 🗑️ REMOVE SPECIFIC: Removed node: ${removedNode.name} with ID: $removedNodeId');
+      debugPrint('AR Screen: 🗑️ REMOVE SPECIFIC: Before removal - nodes: ${originalNodes.length}, order: ${originalNodeOrder.length}');
+      debugPrint('AR Screen: 🗑️ REMOVE SPECIFIC: After removal - nodes: ${nodes.length}, order: ${nodeCreationOrder.length}');
+      debugPrint('AR Screen: 🗑️ REMOVE SPECIFIC: Remaining nodeCreationOrder: $nodeCreationOrder');
       
-      // CRITICAL: Clear selection FIRST to prevent UI issues
-      String nodeIdBeingRemoved = nodeIdToRemove; // Store for async operations
-      
-      if (mounted) {
-        setState(() {
-          selectedNode = null; // Clear selection immediately
-          
-          // Track object removal for smart memory management within setState
-          debugPrint('AR Screen: 🔍 REMOVAL TRACKING - Before removal:');
-          debugPrint('AR Screen: - _maxObjectsReachedBeforeMemoryLimit: $_maxObjectsReachedBeforeMemoryLimit');
-          debugPrint('AR Screen: - _objectsRemovedSinceMemoryLimit: $_objectsRemovedSinceMemoryLimit');
-          debugPrint('AR Screen: - Current nodes.length: ${nodes.length} (will be ${nodes.length - 1} after removal)');
-          
-          if (_maxObjectsReachedBeforeMemoryLimit > 0) {
-            _objectsRemovedSinceMemoryLimit++;
-            debugPrint('AR Screen: ✅ Updated removal tracking in setState - objects removed since limit: $_objectsRemovedSinceMemoryLimit');
-            debugPrint('AR Screen: This allows placing $_objectsRemovedSinceMemoryLimit more objects before hitting memory limit again');
-            debugPrint('AR Screen: Max reached : $_maxObjectsReachedBeforeMemoryLimit | removed: $_objectsRemovedSinceMemoryLimit Can add ${_maxObjectsReachedBeforeMemoryLimit - (nodes.length - 1)} more');
-          } else {
-            debugPrint('AR Screen: ⚠️ No memory limit history, not tracking removal');
-          }
-        });
-        debugPrint('AR Screen: ✅ Selection cleared and tracking updated in UI');
+      // Verify we removed the correct node
+      if (removedNodeId != nodeIdBeingRemoved) {
+        debugPrint('AR Screen: 🚨 REMOVE ERROR: Removed wrong node! Expected: $nodeIdBeingRemoved, Got: $removedNodeId');
+      } else {
+        debugPrint('AR Screen: ✅ REMOVE VERIFICATION: Successfully removed correct node: $nodeIdBeingRemoved');
       }
-      
-      // CRITICAL: Remove from tracking lists BEFORE calling async operations
-      // Store the original state for comparison
-      List<String> originalNodeOrder = List.from(nodeCreationOrder);
-      List<ARNode> originalNodes = List.from(nodes);
-      
-      // Remove from tracking lists
-      nodes.removeAt(selectedIndex);
-      nodeCreationOrder.removeAt(selectedIndex);
-      debugPrint('AR Screen: ✅ REMOVE: Removed from local tracking lists');
-      debugPrint('AR Screen: 🗑️ REMOVE: Before removal - nodes: ${originalNodes.length}, order: ${originalNodeOrder.length}');
-      debugPrint('AR Screen: 🗑️ REMOVE: After removal - nodes: ${nodes.length}, order: ${nodeCreationOrder.length}');
-      debugPrint('AR Screen: 🗑️ REMOVE: Remaining nodeCreationOrder: $nodeCreationOrder');
-      
-      // Remove from model manager persistent storage
-      debugPrint('AR Screen: 🗑️ REMOVE: Removing from model manager persistent storage');
-      _modelManager.removeModelByNodeId(nodeIdBeingRemoved);
-      debugPrint('AR Screen: ✅ REMOVE: Removed from model manager');
-      
-      // Remove from AR scene (async operation)
-      debugPrint('AR Screen: 🗑️ REMOVE: Starting async removal from AR scene');
-      _removeNodeFromARScene(nodeToRemove, nodeIdBeingRemoved);
-      
-      int remainingModels = nodes.length;
-      debugPrint('AR Screen: ✅ REMOVE: Model removal completed. Remaining models: $remainingModels');
-      debugPrint('AR Screen: 🗑️ REMOVE: Final nodeCreationOrder: $nodeCreationOrder');
-      
-      // Update memory information after model removal
-      _updateMemoryInfo();
-      // _showSnackBar('Model deleted. Remaining models: $remainingModels');
       
     } else {
-      debugPrint('AR Screen: ❌ REMOVE: Selected node not found in tracking lists');
-      debugPrint('AR Screen: - Looking for: $nodeIdToRemove');
-      debugPrint('AR Screen: - Available nodes: $nodeCreationOrder');
-      debugPrint('AR Screen: - Index found: $selectedIndex (should be between 0 and ${nodes.length - 1})');
-      
-      // Clear selection anyway to prevent UI getting stuck
-      if (mounted) {
-        setState(() {
-          selectedNode = null;
-        });
-        debugPrint('AR Screen: ✅ Cleared stuck selection');
-      }
-      
-      // Try to remove from model manager anyway
-      debugPrint('AR Screen: 🗑️ REMOVE: Attempting cleanup from model manager anyway');
-      _modelManager.removeModelByNodeId(nodeIdToRemove);
-      debugPrint('AR Screen: ✅ Attempted cleanup from model manager');
+      debugPrint('AR Screen: ❌ REMOVE ERROR: Index validation failed during removal');
+      debugPrint('AR Screen: - selectedIndex: $selectedIndex');
+      debugPrint('AR Screen: - nodes.length: ${nodes.length}');
+      debugPrint('AR Screen: - nodeCreationOrder.length: ${nodeCreationOrder.length}');
+      return;
     }
+    
+    // Remove from model manager persistent storage
+    debugPrint('AR Screen: 🗑️ REMOVE: Removing SPECIFIC node from model manager persistent storage: $nodeIdBeingRemoved');
+    _modelManager.removeModelByNodeId(nodeIdBeingRemoved);
+    debugPrint('AR Screen: ✅ REMOVE: Removed specific node from model manager');
+    
+    // Remove ONLY the specific node from AR scene (async operation)
+    debugPrint('AR Screen: 🗑️ REMOVE: Starting async removal of SPECIFIC node from AR scene: $nodeIdBeingRemoved');
+    _removeNodeFromARScene(nodeToRemove, nodeIdBeingRemoved);
+    
+    int remainingModels = nodes.length;
+    debugPrint('AR Screen: ✅ REMOVE COMPLETE: Specific model removal completed. Remaining models: $remainingModels');
+    debugPrint('AR Screen: 🗑️ REMOVE COMPLETE: Final nodeCreationOrder: $nodeCreationOrder');
+    
+    // Update memory information after model removal
+    _updateMemoryInfo();
+    // _showSnackBar('Model deleted. Remaining models: $remainingModels');
   }
 
   /// Remove node from AR scene (async operation)
