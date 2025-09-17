@@ -18,6 +18,13 @@ import com.google.ar.sceneform.assets.RenderableSource
 import com.google.ar.sceneform.math.Vector3
 import com.google.ar.sceneform.math.Quaternion
 import com.google.ar.sceneform.rendering.ModelRenderable
+// Cache system imports
+import com.uhg0.ar_flutter_plugin_2.services.ModelDownloadService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.io.File
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
 import com.google.ar.sceneform.collision.Box
@@ -58,6 +65,12 @@ class ArCoreCompatView(
     // Performance optimization: Reuse collections to reduce garbage collection
     private val reusableNodeHitResults = mutableListOf<String>()
     private val reusableMatrixArray = FloatArray(16)
+    
+    // Cache system for model downloading and storage
+    private val modelDownloadService: ModelDownloadService by lazy {
+        ModelDownloadService(activity.applicationContext)
+    }
+    private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     // Scene state persistence for navigation lifecycle management
     private data class NodeState(
