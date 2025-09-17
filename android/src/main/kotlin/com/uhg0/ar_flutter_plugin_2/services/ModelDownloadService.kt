@@ -50,40 +50,45 @@ class ModelDownloadService(private val context: Context) {
      * Download model if not cached, return local path
      */
     suspend fun ensureModelAvailable(modelUrl: String, onProgress: ((Float) -> Unit)? = null): String? {
-        Log.d(TAG, "🎯 Ensuring model available: $modelUrl")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] ensureModelAvailable called with URL: $modelUrl")
         
         // First check if already cached
         modelCache.checkModelCache(modelUrl)?.let { cachedPath ->
-            Log.d(TAG, "✅ Model already available locally: $cachedPath")
+            Log.d(TAG, "✅✅✅ [DEBUG] Model already available locally: $cachedPath")
             onProgress?.invoke(1.0f)
             return cachedPath
         }
         
         // Need to download
-        Log.d(TAG, "📥 Model not cached, starting download...")
+        Log.d(TAG, "📥📥📥 [DEBUG] Model not cached, starting download...")
+        Log.d(TAG, "🔍🔍🔍 [DEBUG] Cache directory: ${context.cacheDir}")
         
         return try {
             // Update progress
             updateDownloadProgress(modelUrl, true, 0.0f)
             onProgress?.invoke(0.1f)
+            Log.d(TAG, "⬇️⬇️⬇️ [DEBUG] Starting download process...")
             
             val startTime = System.currentTimeMillis()
             val localPath = modelCache.downloadAndCacheModel(modelUrl)
             val downloadTime = System.currentTimeMillis() - startTime
             
             if (localPath != null) {
-                Log.d(TAG, "✅ Model download completed in ${downloadTime}ms: $localPath")
+                Log.d(TAG, "✅✅✅ [DEBUG] Model download completed in ${downloadTime}ms: $localPath")
+                Log.d(TAG, "📁📁📁 [DEBUG] File exists: ${java.io.File(localPath).exists()}")
+                Log.d(TAG, "📏📏📏 [DEBUG] File size: ${java.io.File(localPath).length()} bytes")
                 updateDownloadProgress(modelUrl, false, 1.0f)
                 onProgress?.invoke(1.0f)
                 localPath
             } else {
-                Log.e(TAG, "❌ Model download failed: $modelUrl")
+                Log.e(TAG, "❌❌❌ [DEBUG] Model download failed: $modelUrl")
                 updateDownloadProgress(modelUrl, false, 0.0f, "Download failed")
                 onProgress?.invoke(0.0f)
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Exception during model download: ${e.message}")
+            Log.e(TAG, "❌❌❌ [DEBUG] Exception during model download: ${e.message}")
+            Log.e(TAG, "❌❌❌ [DEBUG] Exception stack trace:", e)
             updateDownloadProgress(modelUrl, false, 0.0f, e.message)
             onProgress?.invoke(0.0f)
             null

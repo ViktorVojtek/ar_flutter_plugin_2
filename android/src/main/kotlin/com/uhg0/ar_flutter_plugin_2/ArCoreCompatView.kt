@@ -28,16 +28,18 @@ import java.io.File
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
 import com.google.ar.sceneform.collision.Box
+// Flutter imports
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.platform.PlatformView
+// SceneForm imports
 import com.google.ar.sceneform.HitTestResult
 import com.google.ar.sceneform.ux.TransformationSystem
 import com.google.ar.sceneform.ux.SelectionVisualizer
 import com.google.ar.sceneform.ux.TransformableNode
 import com.google.ar.sceneform.ux.BaseTransformableNode
 import com.google.ar.sceneform.AnchorNode
-import io.flutter.plugin.common.BinaryMessenger
-import io.flutter.plugin.common.MethodCall
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.platform.PlatformView
 import java.util.concurrent.ConcurrentHashMap
 
 class ArCoreCompatView(
@@ -842,15 +844,90 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
-                // 🎯 Use async caching system for better performance and texture handling
-                Log.d(TAG, "🎯 Loading model with async caching: $uri")
-                loadModelWithAsyncCaching(
-                    uri, nodeName, positionX, positionY, positionZ,
-                    scaleX, scaleY, scaleZ, isTransformable, enablePanGestures, enableRotationGestures, result
-                )
+                // 🎯 TEMPORARY: Use direct loading to test if basic rendering works
+                Log.d(TAG, "🎯🎯🎯 [DEBUG] Loading model with DIRECT approach (no cache): $uri")
+                Log.d(TAG, "🎯🎯🎯 [DEBUG] Node name: $nodeName, Position: ($positionX, $positionY, $positionZ)")
+                Log.d(TAG, "🎯🎯🎯 [DEBUG] Scale: ($scaleX, $scaleY, $scaleZ)")
+                Log.d(TAG, "🎯🎯🎯 [DEBUG] Gestures - transformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
+                
+                // Direct ModelRenderable loading without caching
+                val modelRenderableBuilder = ModelRenderable.builder()
+                val renderableSourceBuilder = RenderableSource.builder()
+                
+                if (uri.endsWith(".glb")) {
+                    Log.d(TAG, "📂 Loading GLB file directly: $uri")
+                    renderableSourceBuilder
+                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
+                        .setScale(1.0f)
+                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                } else if (uri.endsWith(".gltf")) {
+                    Log.d(TAG, "📂 Loading GLTF file directly: $uri")
+                    renderableSourceBuilder
+                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
+                        .setScale(1.0f)
+                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                } else {
+                    Log.e(TAG, "❌ Unsupported file format: $uri")
+                    result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
+                    return
+                }
+                
+                modelRenderableBuilder
+                    .setSource(activity, renderableSourceBuilder.build())
+                    .setRegistryId(uri)
+                    .build()
+                    .thenAccept { renderable: ModelRenderable ->
+                        Log.d(TAG, "✅✅✅ [DEBUG] Model loaded successfully (direct): $uri")
+                        
+                        val transformableNode = TransformableNode(transformationSystem)
+                        transformableNode.renderable = renderable
+                        transformableNode.name = nodeName
+                        
+                        // Apply scale and position
+                        transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
+                        transformableNode.localPosition = Vector3(positionX, positionY, positionZ)
+                        
+                        // Configure gestures
+                        if (isTransformable) {
+                            transformableNode.translationController.isEnabled = enablePanGestures
+                            transformableNode.rotationController.isEnabled = enableRotationGestures
+                            transformableNode.scaleController.isEnabled = true
+                        } else {
+                            transformableNode.translationController.isEnabled = false
+                            transformableNode.rotationController.isEnabled = false
+                            transformableNode.scaleController.isEnabled = false
+                        }
+                        
+                        // Create virtual anchor in front of user
+                        val session = arSceneView?.session
+                        if (session != null) {
+                            val anchor = session.createAnchor(
+                                Pose.makeTranslation(positionX, positionY, positionZ)
+                            )
+                            val anchorNode = AnchorNode(anchor)
+                            anchorNode.setParent(arSceneView?.scene)
+                            
+                            transformableNode.setParent(anchorNode)
+                            nodesMap[nodeName] = transformableNode
+                            nodesMap["${nodeName}_anchor"] = anchorNode
+                            
+                            Log.d(TAG, "✅✅✅ [DEBUG] Node added successfully (direct): $nodeName")
+                            result.success(nodeName)
+                        } else {
+                            Log.e(TAG, "❌❌❌ [DEBUG] AR session not available")
+                            result.error("SESSION_ERROR", "AR session not available", null)
+                        }
+                    }
+                    .exceptionally { throwable: Throwable ->
+                        Log.e(TAG, "❌❌❌ [DEBUG] Failed to load model (direct): ${throwable.message}")
+                        Log.e(TAG, "❌❌❌ [DEBUG] Exception stack trace:", throwable)
+                        result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
+                        null
+                    }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Exception loading model for direct placement: ${e.message}")
+                Log.e(TAG, "❌❌❌ [DEBUG] Exception loading model for direct placement: ${e.message}")
+                Log.e(TAG, "❌❌❌ [DEBUG] Exception stack trace:", e)
                 result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
             }
                 
@@ -901,16 +978,23 @@ class ArCoreCompatView(
         enableRotationGestures: Boolean,
         result: MethodChannel.Result
     ) {
-        Log.d(TAG, "🎯 Starting async model loading with cache: $uri")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Starting async model loading with cache: $uri")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Parameters - nodeName: $nodeName")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Position: ($positionX, $positionY, $positionZ)")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Scale: ($scaleX, $scaleY, $scaleZ)")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Gestures: transformable=$isTransformable, pan=$enablePanGestures, rotation=$enableRotationGestures")
         
         // Use coroutine scope to download and cache model
         downloadScope.launch {
             try {
+                Log.d(TAG, "📥📥📥 [DEBUG] Coroutine launched, calling ensureModelAvailable...")
                 // This will download if not cached, or return cached path
                 val localPath = modelDownloadService.ensureModelAvailable(uri)
+                Log.d(TAG, "📁📁📁 [DEBUG] ensureModelAvailable returned: $localPath")
                 if (localPath == null) {
+                    Log.e(TAG, "❌❌❌ [DEBUG] localPath is null, download failed")
                     activity.runOnUiThread {
-                        Log.e(TAG, "❌ Failed to download/cache model: $uri")
+                        Log.e(TAG, "❌❌❌ [DEBUG] Failed to download/cache model: $uri")
                         result.error("DOWNLOAD_ERROR", "Failed to download or cache model", null)
                     }
                     return@launch
