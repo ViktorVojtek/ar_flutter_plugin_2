@@ -2,6 +2,8 @@ package com.uhg0.ar_flutter_plugin_2
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +11,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.GestureDetector
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CompletableFuture
 import kotlin.math.pow
 import com.google.ar.core.*
@@ -267,6 +270,7 @@ class ArCoreCompatView(
             "removeAllObjects" -> handleRemoveAllObjects(call, result)
             "removeAnchor" -> handleRemoveAnchor(call, result)
             "dispose" -> handleDispose(call, result)
+            "snapshot" -> handleSnapshot(call, result)
             "touch" -> handleTouch(call, result)
             // Add transform gesture control methods for single-object mode
             "enableTransformGestures" -> handleEnableTransformGestures(call, result)
@@ -1927,6 +1931,47 @@ class ArCoreCompatView(
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in handleDispose: ${e.message}")
             result.error("DISPOSE_ERROR", e.message, null)
+        }
+    }
+
+    /**
+     * Capture a screenshot of the current AR scene
+     */
+    private fun handleSnapshot(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val sceneView = arSceneView
+            if (sceneView == null) {
+                Log.w(TAG, "⚠️ ArSceneView is null, cannot take snapshot")
+                result.error("SNAPSHOT_ERROR", "AR scene is not initialized", null)
+                return
+            }
+
+            // Create a bitmap from the scene view
+            val bitmap = Bitmap.createBitmap(
+                sceneView.width,
+                sceneView.height,
+                Bitmap.Config.ARGB_8888
+            )
+            
+            // Draw the scene view content onto the bitmap
+            val canvas = Canvas(bitmap)
+            sceneView.draw(canvas)
+            
+            // Convert bitmap to PNG byte array
+            val outputStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            val pngBytes = outputStream.toByteArray()
+            
+            // Clean up
+            outputStream.close()
+            bitmap.recycle()
+            
+            Log.d(TAG, "📸 Snapshot captured successfully, size: ${pngBytes.size} bytes")
+            result.success(pngBytes)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error capturing snapshot: ${e.message}")
+            result.error("SNAPSHOT_ERROR", "Failed to capture snapshot: ${e.message}", null)
         }
     }
 
