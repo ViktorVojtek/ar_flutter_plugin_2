@@ -1253,7 +1253,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
     String? productModelUrl = modelUrl;
     debugPrint('AR Screen: Final productModelUrl: $productModelUrl');
     
-    if (modelUrl != null && productId != null) {
+    if (modelUrl != null) {
       // Create unique product identifier with timestamp to allow multiple instances
       currentUniqueProductId = "${productId}_${DateTime.now().millisecondsSinceEpoch}";
       modelUri = modelUrl;
@@ -1285,12 +1285,8 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         });
       }
       
-      if (cachedPath != null) {
-        debugPrint('AR Screen: ✅ Model found in cache: $cachedPath');
-      } else {
-        debugPrint('AR Screen: Model not in cache, will download on first placement');
-      }
-    } catch (e) {
+      debugPrint('AR Screen: ✅ Model found in cache: $cachedPath');
+        } catch (e) {
       debugPrint('AR Screen: Error checking model cache: $e');
       if (mounted) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2260,7 +2256,7 @@ class _ARScreenState extends State<ARScreen> with WidgetsBindingObserver {
         debugPrint('AR Screen: Downloading model...');
         downloadedPath = await ARModelCache.downloadAndCacheModel(modelUri!);
         
-        if (downloadedPath != null && mounted) {
+        if (mounted) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
               setState(() {

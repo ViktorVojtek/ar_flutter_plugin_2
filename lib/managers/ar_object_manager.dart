@@ -237,7 +237,7 @@ class ARObjectManager {
         String? nodeName = await _channel.invokeMethod<String>('addNode', node.toMap());
         return nodeName; // Return the node name directly from native side
       }
-    } on PlatformException catch (e) {
+    } on PlatformException {
       return null;
     }
   }

@@ -86,7 +86,7 @@ class ARAnchorManager {
   Future<bool?> addAnchor(ARAnchor anchor) async {
     try {
       return await _channel.invokeMethod<bool>('addAnchor', anchor.toJson());
-    } on PlatformException catch (e) {
+    } on PlatformException {
       return false;
     }
   }
@@ -103,7 +103,7 @@ class ARAnchorManager {
           await _channel.invokeMethod<bool>('uploadAnchor', anchor.toJson());
       pendingAnchors.add(anchor);
       return response;
-    } on PlatformException catch (e) {
+    } on PlatformException {
       return false;
     }
   }
@@ -113,5 +113,6 @@ class ARAnchorManager {
     print("TRYING TO DOWNLOAD ANCHOR WITH ID " + cloudanchorid);
     _channel
         .invokeMethod<bool>('downloadAnchor', {"cloudanchorid": cloudanchorid});
+    return null;
   }
 }

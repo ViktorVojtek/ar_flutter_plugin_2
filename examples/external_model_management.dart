@@ -292,42 +292,40 @@ class _ExternalModelManagementState extends State<ExternalModelManagement> {
       List<ARHitTestResult> hitTestResults) async {
     var singleHitTestResult = hitTestResults.firstWhere(
         (hitTestResult) => hitTestResult.type == ARHitTestResultType.plane);
-    if (singleHitTestResult != null) {
-      var newAnchor = ARPlaneAnchor(
-          transformation: singleHitTestResult.worldTransform, ttl: 2);
-      bool? didAddAnchor = await this.arAnchorManager!.addAnchor(newAnchor);
-      if (didAddAnchor!) {
-        this.anchors.add(newAnchor);
-        // Add note to anchor
-        var newNode = ARNode(
-            type: NodeType.webGLB,
-            uri: this.selectedModel.uri,
-            scale: VectorMath.Vector3(0.2, 0.2, 0.2),
-            position: VectorMath.Vector3(0.0, 0.0, 0.0),
-            rotation: VectorMath.Vector4(1.0, 0.0, 0.0, 0.0),
-            data: {"onTapText": "I am a " + this.selectedModel.name});
-        bool? didAddNodeToAnchor = await this
-            .arObjectManager!
-            .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor!) {
-          this.nodes.add(newNode);
-          setState(() {
-            readyToUpload = true;
-          });
-        } else {
-          AlertDialog(
-            title: Text("Error"),
-            content: Text("Adding Node to Anchor failed"),
-          );
-        }
+    var newAnchor = ARPlaneAnchor(
+        transformation: singleHitTestResult.worldTransform, ttl: 2);
+    bool? didAddAnchor = await this.arAnchorManager!.addAnchor(newAnchor);
+    if (didAddAnchor!) {
+      this.anchors.add(newAnchor);
+      // Add note to anchor
+      var newNode = ARNode(
+          type: NodeType.webGLB,
+          uri: this.selectedModel.uri,
+          scale: VectorMath.Vector3(0.2, 0.2, 0.2),
+          position: VectorMath.Vector3(0.0, 0.0, 0.0),
+          rotation: VectorMath.Vector4(1.0, 0.0, 0.0, 0.0),
+          data: {"onTapText": "I am a " + this.selectedModel.name});
+      bool? didAddNodeToAnchor = await this
+          .arObjectManager!
+          .addNode(newNode, planeAnchor: newAnchor);
+      if (didAddNodeToAnchor!) {
+        this.nodes.add(newNode);
+        setState(() {
+          readyToUpload = true;
+        });
       } else {
         AlertDialog(
           title: Text("Error"),
-          content: Text("Adding Anchor failed"),
+          content: Text("Adding Node to Anchor failed"),
         );
       }
+    } else {
+      AlertDialog(
+        title: Text("Error"),
+        content: Text("Adding Anchor failed"),
+      );
     }
-  }
+    }
 
   Future<void> onUploadButtonPressed() async {
     this.arAnchorManager!.uploadAnchor(this.anchors.last);
@@ -384,23 +382,16 @@ class _ExternalModelManagementState extends State<ExternalModelManagement> {
     //});
 
     // Get anchors within a radius of 100m of the current device's location
-    if (this.arLocationManager!.currentLocation != null) {
-      firebaseManager.downloadAnchorsByLocation((snapshot) {
-        final cloudAnchorId = snapshot.get("cloudanchorid");
-        anchorsInDownloadProgress[cloudAnchorId] =
-            snapshot.data() as Map<String, dynamic>;
-        arAnchorManager!.downloadAnchor(cloudAnchorId);
-      }, this.arLocationManager!.currentLocation, 0.1);
-      setState(() {
-        readyToDownload = false;
-      });
-    } else {
-      AlertDialog(
-        title: Text("Error"),
-        content: Text("Location updates not running, can't download anchors"),
-      );
+    firebaseManager.downloadAnchorsByLocation((snapshot) {
+      final cloudAnchorId = snapshot.get("cloudanchorid");
+      anchorsInDownloadProgress[cloudAnchorId] =
+          snapshot.data() as Map<String, dynamic>;
+      arAnchorManager!.downloadAnchor(cloudAnchorId);
+    }, this.arLocationManager!.currentLocation, 0.1);
+    setState(() {
+      readyToDownload = false;
+    });
     }
-  }
 
   void showAlertDialog(BuildContext context, String title, String content,
       String buttonText, Function buttonFunction, String cancelButtonText) {

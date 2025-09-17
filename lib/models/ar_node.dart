@@ -2,7 +2,6 @@
 
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter/foundation.dart';
 import 'package:vector_math/vector_math_64.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'dart:math' as math;

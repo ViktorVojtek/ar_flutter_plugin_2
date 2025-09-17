@@ -272,43 +272,41 @@ class _CloudAnchorState extends State<CloudAnchor> {
       List<ARHitTestResult> hitTestResults) async {
     var singleHitTestResult = hitTestResults.firstWhere(
         (hitTestResult) => hitTestResult.type == ARHitTestResultType.plane);
-    if (singleHitTestResult != null) {
-      var newAnchor = ARPlaneAnchor(
-          transformation: singleHitTestResult.worldTransform, ttl: 2);
-      bool? didAddAnchor = await this.arAnchorManager!.addAnchor(newAnchor);
-      if (didAddAnchor ?? false) {
-        this.anchors.add(newAnchor);
-        // Add note to anchor
-        var newNode = ARNode(
-            type: NodeType.webGLB,
-            uri:
-                "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
-            scale: Vector3(0.2, 0.2, 0.2),
-            position: Vector3(0.0, 0.0, 0.0),
-            rotation: Vector4(1.0, 0.0, 0.0, 0.0),
-            data: {"onTapText": "Ouch, that hurt!"});
-        bool? didAddNodeToAnchor = await this
-            .arObjectManager!
-            .addNode(newNode, planeAnchor: newAnchor);
-        if (didAddNodeToAnchor ?? false) {
-          this.nodes.add(newNode);
-          setState(() {
-            readyToUpload = true;
-          });
-        } else {
-          AlertDialog(
-            title: Text("Information"),
-            content: Text("Adding Node to Anchor failed"),
-          );
-        }
+    var newAnchor = ARPlaneAnchor(
+        transformation: singleHitTestResult.worldTransform, ttl: 2);
+    bool? didAddAnchor = await this.arAnchorManager!.addAnchor(newAnchor);
+    if (didAddAnchor ?? false) {
+      this.anchors.add(newAnchor);
+      // Add note to anchor
+      var newNode = ARNode(
+          type: NodeType.webGLB,
+          uri:
+              "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
+          scale: Vector3(0.2, 0.2, 0.2),
+          position: Vector3(0.0, 0.0, 0.0),
+          rotation: Vector4(1.0, 0.0, 0.0, 0.0),
+          data: {"onTapText": "Ouch, that hurt!"});
+      bool? didAddNodeToAnchor = await this
+          .arObjectManager!
+          .addNode(newNode, planeAnchor: newAnchor);
+      if (didAddNodeToAnchor ?? false) {
+        this.nodes.add(newNode);
+        setState(() {
+          readyToUpload = true;
+        });
       } else {
         AlertDialog(
           title: Text("Information"),
-          content: Text("Adding Anchor failed"),
+          content: Text("Adding Node to Anchor failed"),
         );
       }
+    } else {
+      AlertDialog(
+        title: Text("Information"),
+        content: Text("Adding Anchor failed"),
+      );
     }
-  }
+    }
 
   Future<void> onUploadButtonPressed() async {
     this.arAnchorManager!.uploadAnchor(this.anchors.last);
@@ -357,23 +355,16 @@ class _CloudAnchorState extends State<CloudAnchor> {
   }
 
   Future<void> onDownloadButtonPressed() async {
-    if (this.arLocationManager!.currentLocation != null) {
-      firebaseManager.downloadAnchorsByLocation((snapshot) {
-        final cloudAnchorId = snapshot.get("cloudanchorid");
-        anchorsInDownloadProgress[cloudAnchorId] =
-            snapshot.data() as Map<String, dynamic>;
-        arAnchorManager!.downloadAnchor(cloudAnchorId);
-      }, this.arLocationManager!.currentLocation, 0.1);
-      setState(() {
-        readyToDownload = false;
-      });
-    } else {
-      AlertDialog(
-        title: Text("Information"),
-        content: Text("Location updates not running, can't download anchors"),
-      );
+    firebaseManager.downloadAnchorsByLocation((snapshot) {
+      final cloudAnchorId = snapshot.get("cloudanchorid");
+      anchorsInDownloadProgress[cloudAnchorId] =
+          snapshot.data() as Map<String, dynamic>;
+      arAnchorManager!.downloadAnchor(cloudAnchorId);
+    }, this.arLocationManager!.currentLocation, 0.1);
+    setState(() {
+      readyToDownload = false;
+    });
     }
-  }
 
   void showAlertDialog(BuildContext context, String title, String content,
       String buttonText, Function buttonFunction, String cancelButtonText) {
