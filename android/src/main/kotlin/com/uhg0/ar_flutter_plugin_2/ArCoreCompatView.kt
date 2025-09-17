@@ -5,10 +5,15 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
+import android.view.PixelCopy
+import android.view.Surface
+import android.view.SurfaceView
 import android.view.View
 import android.view.GestureDetector
 import java.io.ByteArrayOutputStream
@@ -1935,7 +1940,7 @@ class ArCoreCompatView(
     }
 
     /**
-     * Capture a screenshot of the current AR scene
+     * Capture a screenshot of the current AR scene using multiple capture strategies
      */
     private fun handleSnapshot(call: MethodCall, result: MethodChannel.Result) {
         try {
@@ -1946,17 +1951,185 @@ class ArCoreCompatView(
                 return
             }
 
-            // Create a bitmap from the scene view
+            // Check if the view has valid dimensions
+            if (sceneView.width <= 0 || sceneView.height <= 0) {
+                Log.w(TAG, "⚠️ ArSceneView has invalid dimensions: ${sceneView.width}x${sceneView.height}")
+                result.error("SNAPSHOT_ERROR", "AR scene view is not properly sized", null)
+                return
+            }
+
+            Log.d(TAG, "📸 Attempting snapshot capture for ArSceneView (${sceneView.width}x${sceneView.height})")
+
+            // Strategy 0: Check if ArSceneView has a built-in screenshot method
+            try {
+                Log.d(TAG, "📸 Checking for built-in screenshot capability...")
+                val screenshotMethod = sceneView.javaClass.getMethod("screenshot")
+                val screenshotResult = screenshotMethod.invoke(sceneView)
+                
+                if (screenshotResult is Bitmap) {
+                    Log.d(TAG, "📸 ArSceneView built-in screenshot successful!")
+                    handleSuccessfulCapture(screenshotResult, result)
+                    return
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "📸 No built-in screenshot method found: ${e.message}")
+            }
+
+            // Create a bitmap to hold the captured pixels
+            val bitmap = Bitmap.createBitmap(
+                sceneView.width,
+                sceneView.height,
+                Bitmap.Config.ARGB_8888
+            )
+
+            // Strategy 1: Try using PixelCopy for API 24+ if ArSceneView has a surface
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Log.d(TAG, "📸 Attempting PixelCopy capture...")
+                
+                try {
+                    // Create a handler for the background thread
+                    val handlerThread = HandlerThread("PixelCopyThread")
+                    handlerThread.start()
+                    val handler = Handler(handlerThread.looper)
+                    
+                    // Try to get surface from the view
+                    val surface = when {
+                        sceneView is SurfaceView -> {
+                            Log.d(TAG, "📸 ArSceneView is SurfaceView, using holder surface")
+                            (sceneView as SurfaceView).holder.surface
+                        }
+                        else -> {
+                            Log.d(TAG, "📸 ArSceneView is not SurfaceView (${sceneView.javaClass.simpleName}), trying reflection...")
+                            // Try to get surface through reflection
+                            tryGetSurfaceFromView(sceneView)
+                        }
+                    }
+                    
+                    if (surface != null && surface.isValid) {
+                        Log.d(TAG, "📸 Valid surface found, using PixelCopy...")
+                        PixelCopy.request(
+                            surface,
+                            bitmap,
+                            { copyResult ->
+                                handlerThread.quitSafely()
+                                
+                                if (copyResult == PixelCopy.SUCCESS) {
+                                    handleSuccessfulCapture(bitmap, result)
+                                } else {
+                                    Log.w(TAG, "⚠️ PixelCopy failed ($copyResult), trying fallback method...")
+                                    // Try fallback method
+                                    tryFallbackCapture(sceneView, result)
+                                    bitmap.recycle()
+                                }
+                            },
+                            handler
+                        )
+                        return
+                    } else {
+                        Log.w(TAG, "⚠️ No valid surface found, trying fallback method...")
+                        handlerThread.quitSafely()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ PixelCopy setup failed: ${e.message}, trying fallback method...")
+                }
+            }
+            
+            // Strategy 2: Fallback to drawing the view
+            Log.d(TAG, "📸 Using fallback capture method...")
+            bitmap.recycle() // Clean up the unused bitmap
+            tryFallbackCapture(sceneView, result)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error capturing snapshot: ${e.message}")
+            result.error("SNAPSHOT_ERROR", "Failed to capture snapshot: ${e.message}", null)
+        }
+    }
+
+    /**
+     * Try to get surface from view using reflection
+     */
+    private fun tryGetSurfaceFromView(view: View): Surface? {
+        return try {
+            // Try common field names for surface holders
+            val possibleFields = listOf("mSurfaceHolder", "surfaceHolder", "mHolder", "holder")
+            
+            for (fieldName in possibleFields) {
+                try {
+                    val field = view.javaClass.getDeclaredField(fieldName)
+                    field.isAccessible = true
+                    val holder = field.get(view)
+                    
+                    if (holder != null) {
+                        val surfaceMethod = holder.javaClass.getMethod("getSurface")
+                        val surface = surfaceMethod.invoke(holder) as? Surface
+                        if (surface?.isValid == true) {
+                            Log.d(TAG, "📸 Found surface via reflection field: $fieldName")
+                            return surface
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Continue trying other fields
+                }
+            }
+            
+            Log.w(TAG, "⚠️ Could not find surface via reflection")
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Reflection attempt failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Fallback capture method using view drawing
+     */
+    private fun tryFallbackCapture(sceneView: View, result: MethodChannel.Result) {
+        try {
             val bitmap = Bitmap.createBitmap(
                 sceneView.width,
                 sceneView.height,
                 Bitmap.Config.ARGB_8888
             )
             
-            // Draw the scene view content onto the bitmap
             val canvas = Canvas(bitmap)
+            
+            // Try to force a draw
             sceneView.draw(canvas)
             
+            // Check if we got anything useful (not just white/black)
+            val pixels = IntArray(100) // Sample first 100 pixels
+            bitmap.getPixels(pixels, 0, 10, 0, 0, 10, 10)
+            
+            val hasVariation = pixels.any { pixel ->
+                val alpha = (pixel shr 24) and 0xFF
+                val red = (pixel shr 16) and 0xFF
+                val green = (pixel shr 8) and 0xFF
+                val blue = pixel and 0xFF
+                
+                // Check if it's not just transparent, white, or black
+                alpha > 0 && (red != green || green != blue || red in 1..254)
+            }
+            
+            if (hasVariation) {
+                Log.d(TAG, "📸 Fallback capture appears to have content")
+                handleSuccessfulCapture(bitmap, result)
+            } else {
+                Log.w(TAG, "⚠️ Fallback capture appears empty (solid color)")
+                bitmap.recycle()
+                result.error("SNAPSHOT_ERROR", "Captured image appears to be empty. This may be due to GPU rendering limitations.", null)
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Fallback capture failed: ${e.message}")
+            result.error("SNAPSHOT_ERROR", "All capture methods failed: ${e.message}", null)
+        }
+    }
+
+    /**
+     * Handle successful bitmap capture
+     */
+    private fun handleSuccessfulCapture(bitmap: Bitmap, result: MethodChannel.Result) {
+        try {
             // Convert bitmap to PNG byte array
             val outputStream = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
@@ -1967,11 +2140,17 @@ class ArCoreCompatView(
             bitmap.recycle()
             
             Log.d(TAG, "📸 Snapshot captured successfully, size: ${pngBytes.size} bytes")
-            result.success(pngBytes)
             
+            // Make sure to call result on main thread
+            Handler(Looper.getMainLooper()).post {
+                result.success(pngBytes)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error capturing snapshot: ${e.message}")
-            result.error("SNAPSHOT_ERROR", "Failed to capture snapshot: ${e.message}", null)
+            bitmap.recycle()
+            Log.e(TAG, "❌ Error processing captured bitmap: ${e.message}")
+            Handler(Looper.getMainLooper()).post {
+                result.error("SNAPSHOT_ERROR", "Failed to process captured image: ${e.message}", null)
+            }
         }
     }
 
