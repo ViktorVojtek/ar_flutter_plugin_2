@@ -842,385 +842,15 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
-                val modelRenderableBuilder = ModelRenderable.builder()
-                val renderableSourceBuilder = RenderableSource.builder()
-                
-                // Check file extension and set appropriate source type
-                if (uri.endsWith(".glb")) {
-                    Log.d(TAG, "📂 Loading GLB file for direct placement: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLB)
-                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else if (uri.endsWith(".gltf")) {
-                    Log.d(TAG, "📂 Loading GLTF file for direct placement: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLTF2)
-                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else {
-                    Log.e(TAG, "❌ Unsupported file format for direct placement: $uri")
-                    result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
-                    return
-                }
-                
-                modelRenderableBuilder
-                    .setSource(activity, renderableSourceBuilder.build())
-                    .setRegistryId(uri)
-                    .build()
-                    .thenAccept { renderable: ModelRenderable ->
-                        Log.d(TAG, "✅ GLB model loaded successfully for direct placement: $nodeName")
-                        
-                        val transformableNode = TransformableNode(transformationSystem)
-                        transformableNode.renderable = renderable
-                        transformableNode.name = nodeName
-                        
-                        // CRITICAL: Enable the node for hit testing and selection
-                        transformableNode.isEnabled = true
-                        
-                        // CRITICAL: Set collision shape for hit testing
-                        // Use a larger collision shape to improve hit testing during gestures
-                        // Scale the collision box based on the actual scale of the object
-                        val collisionSize = Vector3(
-                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
-                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
-                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
-                        )
-                        transformableNode.collisionShape = Box(collisionSize)
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
-                        
-                        // CRITICAL: Set up tap listener for proper object selection
-                        // This is needed for TransformationSystem to identify which node was tapped
-                        transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
-                            Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
-                            
-                            // CRITICAL: Force gesture controller reset on tap to fix "works once then fails" issue
-                            // This ensures the gesture controllers are in a clean state for the next gesture
-                            if (isTransformable) {
-                                Handler(Looper.getMainLooper()).post {
-                                    try {
-                                        // CRITICAL: Validate parent hierarchy before attempting gesture controller reset
-                                        val hasValidParent = transformableNode.parent != null && transformableNode.parent is AnchorNode
-                                        if (!hasValidParent) {
-                                            Log.w(TAG, "⚠️ Node $nodeName has invalid parent hierarchy, attempting to restore")
-                                            
-                                            // Try to restore parent hierarchy by creating/finding an anchor
-                                            val currentPosition = transformableNode.worldPosition
-                                            val session = arSceneView?.session
-                                            
-                                            if (session != null && currentPosition != null) {
-                                                try {
-                                                    // Create new virtual anchor at current position
-                                                    val restoreAnchor = session.createAnchor(
-                                                        Pose.makeTranslation(currentPosition.x, currentPosition.y, currentPosition.z)
-                                                    )
-                                                    val restoreAnchorNode = AnchorNode(restoreAnchor)
-                                                    restoreAnchorNode.setParent(arSceneView?.scene)
-                                                    
-                                                    // Re-parent the transformable node
-                                                    transformableNode.setParent(restoreAnchorNode)
-                                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                                    
-                                                    // Update node tracking
-                                                    nodesMap["${nodeName}_anchor"] = restoreAnchorNode
-                                                    
-                                                    Log.d(TAG, "✅ Restored parent hierarchy for $nodeName")
-                                                } catch (restoreException: Exception) {
-                                                    Log.e(TAG, "❌ Failed to restore parent hierarchy: ${restoreException.message}")
-                                                    return@post
-                                                }
-                                            } else {
-                                                Log.e(TAG, "❌ Cannot restore hierarchy - missing session or position")
-                                                return@post
-                                            }
-                                        }
-                                        
-                                        // Now safely reset gesture controllers with valid parent hierarchy
-                                        transformableNode.translationController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Translation controller reset for $nodeName")
-                                        }
-                                        
-                                        transformableNode.rotationController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Rotation controller reset for $nodeName")
-                                        }
-                                        
-                                        transformableNode.scaleController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Scale controller reset for $nodeName")
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "❌ Failed to reset gesture controllers: ${e.message}")
-                                    }
-                                }
-                            }
-                            
-                            // Notify Flutter about the tap
-                            try {
-                                val tappedNodesList = listOf(nodeName)
-                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
-                            }
-                            true
-                        }
-                        
-                        // Apply gesture properties from Flutter
-                        if (isTransformable) {
-                            transformableNode.translationController.isEnabled = enablePanGestures
-                            transformableNode.rotationController.isEnabled = enableRotationGestures
-                            transformableNode.scaleController.isEnabled = true // Always allow scale for now
-                            
-                            // Additional pan gesture configuration - CRITICAL for gesture functionality
-                            transformableNode.translationController.apply {
-                                isEnabled = enablePanGestures
-                                // Allow movement only on horizontal plane (Y locked to current position)
-                                // This prevents objects from flying off into space during pan operations
-                                Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
-                            }
-                            
-                            // CRITICAL: Ensure rotation controller is properly configured
-                            transformableNode.rotationController.apply {
-                                isEnabled = enableRotationGestures
-                                Log.d(TAG, "🎯 Rotation controller configured - enabled: $isEnabled")
-                            }
-                            
-                            // CRITICAL: Ensure scale controller is properly configured
-                            transformableNode.scaleController.apply {
-                                isEnabled = true // Always allow scale for now
-                                Log.d(TAG, "🎯 Scale controller configured - enabled: $isEnabled")
-                            }
-                            
-                            // CRITICAL: Don't interfere with TransformationSystem's gesture handling
-                            // The TransformationSystem will handle touch events through its own mechanisms
-                            // Additional touch listeners can cause conflicts and gesture failures
-                            
-                            Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
-                            Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
-                            Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
-                            Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
-                            
-                        } else {
-                            transformableNode.translationController.isEnabled = false
-                            transformableNode.rotationController.isEnabled = false
-                            transformableNode.scaleController.isEnabled = false
-                            Log.d(TAG, "🎯 All gesture controllers disabled (isTransformable=false)")
-                        }
-                        
-                        // Apply the scale from Flutter to the node
-                        transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
-                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
-                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
-                        
-                        // Set the world position directly (no anchor needed for direct placement)
-                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                        Log.d(TAG, "📍 Set world position for direct placement: ($positionX, $positionY, $positionZ)")
-                        
-                        // CRITICAL FIX: For gesture support, we need to find a detected plane
-                        // Instead of creating virtual anchors, use actual detected planes
-                        try {
-                            val session = arSceneView?.session
-                            if (session != null) {
-                                // Get all tracked planes from the current frame
-                                val frame = session.update()
-                                val trackedPlanes = session.getAllTrackables(Plane::class.java)
-                                    .filter { it.trackingState == TrackingState.TRACKING }
-                                
-                                Log.d(TAG, "🔍 Found ${trackedPlanes.size} tracked planes for auto placement")
-                                
-                                if (trackedPlanes.isNotEmpty()) {
-                                    // Find the best plane to place the object on
-                                    // Prefer horizontal planes that are close to the desired position
-                                    val targetPose = Pose.makeTranslation(positionX, positionY, positionZ)
-                                    
-                                    val bestPlane = trackedPlanes.minByOrNull { plane ->
-                                        val planeCenterPose = plane.centerPose
-                                        val distance = kotlin.math.sqrt(
-                                            (planeCenterPose.tx() - targetPose.tx()).pow(2) +
-                                            (planeCenterPose.tz() - targetPose.tz()).pow(2)
-                                        )
-                                        distance
-                                    }
-                                    
-                                    if (bestPlane != null) {
-                                        Log.d(TAG, "🎯 Using detected plane for auto placement")
-                                        
-                                        // Create an anchor on the detected plane at a position close to desired location
-                                        val planeAnchor = bestPlane.createAnchor(
-                                            bestPlane.centerPose.compose(
-                                                Pose.makeTranslation(0.0f, 0.0f, 0.0f) // Use plane's center
-                                            )
-                                        )
-                                        
-                                        // Create an anchor node for this plane anchor
-                                        val anchorNode = AnchorNode(planeAnchor)
-                                        anchorNode.setParent(arSceneView?.scene)
-                                        
-                                        // Attach the transformable node to the plane anchor
-                                        transformableNode.setParent(anchorNode)
-                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                        
-                                        Log.d(TAG, "✅ Successfully placed node on detected plane with gesture support")
-                                        
-                                        // Store both nodes for cleanup
-                                        nodesMap[nodeName] = transformableNode
-                                        nodesMap["${nodeName}_anchor"] = anchorNode
-                                        
-                                    } else {
-                                        Log.w(TAG, "⚠️ No suitable plane found, creating virtual anchor for gesture support")
-                                        // Create a virtual anchor at the specified position to ensure proper parent hierarchy
-                                        try {
-                                            val session = arSceneView?.session
-                                            val virtualAnchor = session?.createAnchor(
-                                                Pose.makeTranslation(positionX, positionY, positionZ)
-                                            )
-                                            if (virtualAnchor != null) {
-                                                val anchorNode = AnchorNode(virtualAnchor)
-                                                anchorNode.setParent(arSceneView?.scene)
-                                                transformableNode.setParent(anchorNode)
-                                                transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                                
-                                                // Store both nodes
-                                                nodesMap[nodeName] = transformableNode
-                                                nodesMap["${nodeName}_anchor"] = anchorNode
-                                                Log.d(TAG, "✅ Created virtual anchor for gesture support")
-                                            } else {
-                                                Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
-                                                transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                                arSceneView?.scene?.addChild(transformableNode)
-                                                nodesMap[nodeName] = transformableNode
-                                            }
-                                        } catch (e: Exception) {
-                                            Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
-                                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                            arSceneView?.scene?.addChild(transformableNode)
-                                            nodesMap[nodeName] = transformableNode
-                                        }
-                                    }
-                                } else {
-                                    Log.w(TAG, "⚠️ No tracked planes available, creating virtual anchor for gesture support")
-                                    // Create a virtual anchor at the specified position to ensure proper parent hierarchy
-                                    try {
-                                        val session = arSceneView?.session
-                                        val virtualAnchor = session?.createAnchor(
-                                            Pose.makeTranslation(positionX, positionY, positionZ)
-                                        )
-                                        if (virtualAnchor != null) {
-                                            val anchorNode = AnchorNode(virtualAnchor)
-                                            anchorNode.setParent(arSceneView?.scene)
-                                            transformableNode.setParent(anchorNode)
-                                            transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                            
-                                            // Store both nodes
-                                            nodesMap[nodeName] = transformableNode
-                                            nodesMap["${nodeName}_anchor"] = anchorNode
-                                            Log.d(TAG, "✅ Created virtual anchor for gesture support")
-                                        } else {
-                                            Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
-                                            transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                            arSceneView?.scene?.addChild(transformableNode)
-                                            nodesMap[nodeName] = transformableNode
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
-                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                        arSceneView?.scene?.addChild(transformableNode)
-                                        nodesMap[nodeName] = transformableNode
-                                    }
-                                }
-                                
-                            } else {
-                                Log.w(TAG, "⚠️ AR Session not available, creating virtual anchor for gesture support")
-                                // Create a virtual anchor at the specified position to ensure proper parent hierarchy
-                                try {
-                                    val session = arSceneView?.session
-                                    val virtualAnchor = session?.createAnchor(
-                                        Pose.makeTranslation(positionX, positionY, positionZ)
-                                    )
-                                    if (virtualAnchor != null) {
-                                        val anchorNode = AnchorNode(virtualAnchor)
-                                        anchorNode.setParent(arSceneView?.scene)
-                                        transformableNode.setParent(anchorNode)
-                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                        
-                                        // Store both nodes
-                                        nodesMap[nodeName] = transformableNode
-                                        nodesMap["${nodeName}_anchor"] = anchorNode
-                                        Log.d(TAG, "✅ Created virtual anchor for gesture support")
-                                    } else {
-                                        Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
-                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                        arSceneView?.scene?.addChild(transformableNode)
-                                        nodesMap[nodeName] = transformableNode
-                                    }
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "⚠️ Exception creating virtual anchor: ${e.message}, using direct scene attachment")
-                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                    arSceneView?.scene?.addChild(transformableNode)
-                                    nodesMap[nodeName] = transformableNode
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "❌ Failed to find detected plane: ${e.message}")
-                            Log.d(TAG, "🔄 Creating virtual anchor for gesture support")
-                            // Create a virtual anchor at the specified position to ensure proper parent hierarchy
-                            try {
-                                val session = arSceneView?.session
-                                val virtualAnchor = session?.createAnchor(
-                                    Pose.makeTranslation(positionX, positionY, positionZ)
-                                )
-                                if (virtualAnchor != null) {
-                                    val anchorNode = AnchorNode(virtualAnchor)
-                                    anchorNode.setParent(arSceneView?.scene)
-                                    transformableNode.setParent(anchorNode)
-                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                    
-                                    // Store both nodes
-                                    nodesMap[nodeName] = transformableNode
-                                    nodesMap["${nodeName}_anchor"] = anchorNode
-                                    
-                                    // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
-                                    saveNodeToPersistentState(nodeName, transformableNode, uri)
-                                    
-                                    Log.d(TAG, "✅ Created virtual anchor for gesture support")
-                                } else {
-                                    Log.w(TAG, "⚠️ Failed to create virtual anchor, using direct scene attachment")
-                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                    arSceneView?.scene?.addChild(transformableNode)
-                                    nodesMap[nodeName] = transformableNode
-                                    
-                                    // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
-                                    saveNodeToPersistentState(nodeName, transformableNode, uri)
-                                }
-                            } catch (anchorException: Exception) {
-                                Log.w(TAG, "⚠️ Exception creating virtual anchor: ${anchorException.message}, using direct scene attachment")
-                                transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
-                                arSceneView?.scene?.addChild(transformableNode)
-                                nodesMap[nodeName] = transformableNode
-                                
-                                // NAVIGATION LIFECYCLE FIX: Save new node to persistent state
-                                saveNodeToPersistentState(nodeName, transformableNode, uri)
-                            }
-                        }
-                        
-                        Log.d(TAG, "✅ GLB model added with direct placement: $nodeName")
-                        result.success(nodeName)
-                    }
-                    .exceptionally { throwable: Throwable ->
-                        Log.e(TAG, "❌ Failed to load GLB model for direct placement: ${throwable.message}")
-                        result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
-                        null
-                    }
+                // 🎯 Use async caching system for better performance and texture handling
+                Log.d(TAG, "🎯 Loading model with async caching: $uri")
+                loadModelWithAsyncCaching(
+                    uri, nodeName, positionX, positionY, positionZ,
+                    scaleX, scaleY, scaleZ, isTransformable, enablePanGestures, enableRotationGestures, result
+                )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Exception loading GLB for direct placement: ${e.message}")
+                Log.e(TAG, "❌ Exception loading model for direct placement: ${e.message}")
                 result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
             }
                 
@@ -1251,6 +881,143 @@ class ArCoreCompatView(
         } catch (e: Exception) {
             Log.w(TAG, "⚠️ Cache check failed, using direct URL: ${e.message}")
             Uri.parse(originalUri)
+        }
+    }
+
+    /**
+     * Load model with async caching - downloads if needed, then loads from cache
+     */
+    private fun loadModelWithAsyncCaching(
+        uri: String,
+        nodeName: String,
+        positionX: Float,
+        positionY: Float,
+        positionZ: Float,
+        scaleX: Float,
+        scaleY: Float,
+        scaleZ: Float,
+        isTransformable: Boolean,
+        enablePanGestures: Boolean,
+        enableRotationGestures: Boolean,
+        result: MethodChannel.Result
+    ) {
+        Log.d(TAG, "🎯 Starting async model loading with cache: $uri")
+        
+        // Use coroutine scope to download and cache model
+        downloadScope.launch {
+            try {
+                // This will download if not cached, or return cached path
+                val localPath = modelDownloadService.ensureModelAvailable(uri)
+                if (localPath == null) {
+                    activity.runOnUiThread {
+                        Log.e(TAG, "❌ Failed to download/cache model: $uri")
+                        result.error("DOWNLOAD_ERROR", "Failed to download or cache model", null)
+                    }
+                    return@launch
+                }
+                
+                Log.d(TAG, "✅ Model ready at: $localPath")
+                
+                // Switch back to main thread for SceneForm operations
+                activity.runOnUiThread {
+                    try {
+                        val cachedFile = java.io.File(localPath)
+                        val cachedUri = Uri.fromFile(cachedFile)
+                        
+                        val modelRenderableBuilder = ModelRenderable.builder()
+                        val renderableSourceBuilder = RenderableSource.builder()
+                        
+                        // Check file extension and set appropriate source type
+                        if (uri.endsWith(".glb")) {
+                            Log.d(TAG, "📂 Loading cached GLB file: $localPath")
+                            renderableSourceBuilder
+                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLB)
+                                .setScale(1.0f)
+                                .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                        } else if (uri.endsWith(".gltf")) {
+                            Log.d(TAG, "📂 Loading cached GLTF file: $localPath")
+                            renderableSourceBuilder
+                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLTF2)
+                                .setScale(1.0f)
+                                .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                        } else {
+                            Log.e(TAG, "❌ Unsupported file format: $uri")
+                            result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
+                            return@runOnUiThread
+                        }
+                        
+                        modelRenderableBuilder
+                            .setSource(activity, renderableSourceBuilder.build())
+                            .setRegistryId(uri)
+                            .build()
+                            .thenAccept { renderable: ModelRenderable ->
+                                Log.d(TAG, "✅ Model loaded successfully from cache: $uri")
+                                
+                                val transformableNode = TransformableNode(transformationSystem)
+                                transformableNode.renderable = renderable
+                                transformableNode.name = nodeName
+                                
+                                // Apply custom scale
+                                transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
+                                Log.d(TAG, "🔧 Applied scale: ($scaleX, $scaleY, $scaleZ)")
+                                
+                                // Configure transformations and gestures...
+                                if (isTransformable) {
+                                    transformableNode.translationController.isEnabled = enablePanGestures
+                                    transformableNode.rotationController.isEnabled = enableRotationGestures
+                                    transformableNode.scaleController.isEnabled = true
+                                } else {
+                                    transformableNode.translationController.isEnabled = false
+                                    transformableNode.rotationController.isEnabled = false
+                                    transformableNode.scaleController.isEnabled = false
+                                }
+                                
+                                // Create anchor and add to scene
+                                try {
+                                    val session = arSceneView?.session
+                                    val virtualAnchor = session?.createAnchor(
+                                        Pose.makeTranslation(positionX, positionY, positionZ)
+                                    )
+                                    if (virtualAnchor != null) {
+                                        val anchorNode = AnchorNode(virtualAnchor)
+                                        anchorNode.setParent(arSceneView?.scene)
+                                        transformableNode.setParent(anchorNode)
+                                        transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
+                                        
+                                        nodesMap[nodeName] = transformableNode
+                                        nodesMap["${nodeName}_anchor"] = anchorNode
+                                        Log.d(TAG, "✅ Node created with cached model: $nodeName")
+                                    } else {
+                                        transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                        arSceneView?.scene?.addChild(transformableNode)
+                                        nodesMap[nodeName] = transformableNode
+                                        Log.d(TAG, "✅ Node created with cached model (direct): $nodeName")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Anchor creation failed, using direct placement: ${e.message}")
+                                    transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
+                                    arSceneView?.scene?.addChild(transformableNode)
+                                    nodesMap[nodeName] = transformableNode
+                                }
+                                
+                                result.success(nodeName)
+                            }
+                            .exceptionally { throwable: Throwable ->
+                                Log.e(TAG, "❌ Failed to load cached model: ${throwable.message}")
+                                result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
+                                null
+                            }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Exception in model loading: ${e.message}")
+                        result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } catch (e: Exception) {
+                activity.runOnUiThread {
+                    Log.e(TAG, "❌ Exception in async cache loading: ${e.message}")
+                    result.error("ASYNC_LOADING_ERROR", e.message ?: "Unknown error", null)
+                }
+            }
         }
     }
 
@@ -1321,6 +1088,25 @@ class ArCoreCompatView(
                 result.error("ANCHOR_NOT_FOUND", "Anchor node not found: $anchorName", null)
                 return
             }
+            
+            // Extract position from node data or use defaults
+            var positionX = 0.0f
+            var positionY = 0.0f  // For plane anchors, use 0 as default
+            var positionZ = 0.0f
+            
+            // Extract position from transformation matrix if available
+            val nodeTransformation = nodeData["transformation"] as? List<*>
+            if (nodeTransformation != null && nodeTransformation.size == 16) {
+                positionX = (nodeTransformation[12] as? Number)?.toFloat() ?: 0.0f
+                positionY = (nodeTransformation[13] as? Number)?.toFloat() ?: 0.0f
+                positionZ = (nodeTransformation[14] as? Number)?.toFloat() ?: 0.0f
+                Log.d(TAG, "📏 Position extracted from transformation matrix: ($positionX, $positionY, $positionZ)")
+            } else {
+                Log.d(TAG, "📏 Using default position for plane anchor: ($positionX, $positionY, $positionZ)")
+            }
+            
+            // Set anchorId for the async loading method
+            val anchorId = anchorName
             
             // DEBUG: Log anchor information for troubleshooting
             try {
@@ -1396,197 +1182,146 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
-                val modelRenderableBuilder = ModelRenderable.builder()
-                val renderableSourceBuilder = RenderableSource.builder()
-                
-                // Check file extension and set appropriate source type
-                if (uri.endsWith(".glb")) {
-                    Log.d(TAG, "📂 Loading GLB file: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLB)
-                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else if (uri.endsWith(".gltf")) {
-                    Log.d(TAG, "📂 Loading GLTF file: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLTF2)
-                        .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else {
-                    Log.e(TAG, "❌ Unsupported file format: $uri")
-                    result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
-                    return
-                }
-                
-                modelRenderableBuilder
-                    .setSource(activity, renderableSourceBuilder.build())
-                    .setRegistryId(uri)
-                    .build()
-                    .thenAccept { renderable: ModelRenderable ->
-                        Log.d(TAG, "✅ GLB model loaded successfully: $nodeName")
-                        
-                        val transformableNode = TransformableNode(transformationSystem)
-                        transformableNode.renderable = renderable
-                        transformableNode.name = nodeName
-                        
-                        // CRITICAL: Enable the node for hit testing and selection
-                        transformableNode.isEnabled = true
-                        
-                        // CRITICAL: Set collision shape for hit testing - this is what was missing!
-                        // Without collision shape, the node can't be hit-tested and selected
-                        // Use a larger collision shape to improve hit testing during gestures
-                        // Scale the collision box based on the actual scale of the object
-                        val collisionSize = Vector3(
-                            maxOf(scaleX * 2.0f, 0.5f), // At least 0.5 units wide
-                            maxOf(scaleY * 2.0f, 0.5f), // At least 0.5 units tall  
-                            maxOf(scaleZ * 2.0f, 0.5f)  // At least 0.5 units deep
-                        )
-                        transformableNode.collisionShape = Box(collisionSize)
-                        Log.d(TAG, "🎯 Set collision shape for hit testing: $nodeName, size: $collisionSize")
-                        
-                        // CRITICAL: Set up tap listener for proper object selection
-                        // This is needed for TransformationSystem to identify which node was tapped
-                        transformableNode.setOnTapListener { hitTestResult: HitTestResult, motionEvent: MotionEvent ->
-                            Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
-                            
-                            // CRITICAL: Force gesture controller reset on tap to fix "works once then fails" issue
-                            // This ensures the gesture controllers are in a clean state for the next gesture
-                            if (isTransformable) {
-                                Handler(Looper.getMainLooper()).post {
-                                    try {
-                                        // CRITICAL: Validate parent hierarchy before attempting gesture controller reset
-                                        val hasValidParent = transformableNode.parent != null && transformableNode.parent is AnchorNode
-                                        if (!hasValidParent) {
-                                            Log.w(TAG, "⚠️ Node $nodeName has invalid parent hierarchy, attempting to restore")
-                                            
-                                            // Try to restore parent hierarchy by creating/finding an anchor
-                                            val currentPosition = transformableNode.worldPosition
-                                            val session = arSceneView?.session
-                                            
-                                            if (session != null && currentPosition != null) {
-                                                try {
-                                                    // Create new virtual anchor at current position
-                                                    val restoreAnchor = session.createAnchor(
-                                                        Pose.makeTranslation(currentPosition.x, currentPosition.y, currentPosition.z)
-                                                    )
-                                                    val restoreAnchorNode = AnchorNode(restoreAnchor)
-                                                    restoreAnchorNode.setParent(arSceneView?.scene)
-                                                    
-                                                    // Re-parent the transformable node
-                                                    transformableNode.setParent(restoreAnchorNode)
-                                                    transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
-                                                    
-                                                    // Update node tracking
-                                                    nodesMap["${nodeName}_anchor"] = restoreAnchorNode
-                                                    
-                                                    Log.d(TAG, "✅ Restored parent hierarchy for $nodeName")
-                                                } catch (restoreException: Exception) {
-                                                    Log.e(TAG, "❌ Failed to restore parent hierarchy: ${restoreException.message}")
-                                                    return@post
-                                                }
-                                            } else {
-                                                Log.e(TAG, "❌ Cannot restore hierarchy - missing session or position")
-                                                return@post
-                                            }
-                                        }
-                                        
-                                        // Now safely reset gesture controllers with valid parent hierarchy
-                                        transformableNode.translationController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Translation controller reset for $nodeName")
-                                        }
-                                        
-                                        transformableNode.rotationController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Rotation controller reset for $nodeName")
-                                        }
-                                        
-                                        transformableNode.scaleController.apply {
-                                            val wasEnabled = isEnabled
-                                            isEnabled = false
-                                            isEnabled = wasEnabled
-                                            Log.d(TAG, "🔄 Scale controller reset for $nodeName")
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "❌ Failed to reset gesture controllers: ${e.message}")
-                                    }
-                                }
-                            }
-                            
-                            // Notify Flutter about the tap
-                            try {
-                                val tappedNodesList = listOf(nodeName)
-                                objectChannel.invokeMethod("onNodeTap", tappedNodesList)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
-                            }
-                            true
-                        }
-                        
-                        // Apply gesture properties from Flutter
-                        if (isTransformable) {
-                            transformableNode.translationController.isEnabled = enablePanGestures
-                            transformableNode.rotationController.isEnabled = enableRotationGestures
-                            transformableNode.scaleController.isEnabled = true // Always allow scale for now
-                            
-                            // Additional pan gesture configuration - CRITICAL for gesture functionality
-                            transformableNode.translationController.apply {
-                                isEnabled = enablePanGestures
-                                // Ensure the translation controller allows movement in all directions
-                                Log.d(TAG, "🎯 Translation controller configured - enabled: $isEnabled")
-                            }
-                            
-                            // CRITICAL: Don't interfere with TransformationSystem's gesture handling
-                            // The TransformationSystem will handle touch events through its own mechanisms
-                            // Additional touch listeners can cause conflicts and gesture failures
-                            
-                            Log.d(TAG, "🎯 Gesture controllers enabled - pan: $enablePanGestures, rotation: $enableRotationGestures")
-                            Log.d(TAG, "🎯 Translation controller enabled: ${transformableNode.translationController.isEnabled}")
-                            Log.d(TAG, "🎯 Rotation controller enabled: ${transformableNode.rotationController.isEnabled}")
-                            Log.d(TAG, "🎯 Scale controller enabled: ${transformableNode.scaleController.isEnabled}")
-                            
-                            // Don't auto-select the node - let user tap to select it
-                            // This allows proper gesture state management
-                            
-                        } else {
-                            transformableNode.translationController.isEnabled = false
-                            transformableNode.rotationController.isEnabled = false
-                            transformableNode.scaleController.isEnabled = false
-                            Log.d(TAG, "🎯 All gesture controllers disabled (isTransformable=false)")
-                        }
-                        
-                        // Apply the scale from Flutter to the node
-                        transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
-                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Applied scale to node: ($scaleX, $scaleY, $scaleZ)")
-                        android.util.Log.d("SCALE_DEBUG", "🎯🎯🎯 FINAL: Node localScale after setting: ${transformableNode.localScale}")
-                        
-                        // Add the node as a child of the anchor
-                        transformableNode.setParent(anchorNode)
-                        
-                        // Store the node for later reference
-                        nodesMap[nodeName] = transformableNode
-                        
-                        Log.d(TAG, "✅ GLB model added to plane anchor: $nodeName")
-                        result.success(nodeName)
-                    }
-                    .exceptionally { throwable: Throwable ->
-                        Log.e(TAG, "❌ Failed to load GLB model: ${throwable.message}")
-                        result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
-                        null
-                    }
+                // 🎯 Use async caching system for better performance and texture handling
+                Log.d(TAG, "🎯 Loading model with async caching for plane anchor: $uri")
+                loadModelWithAsyncCachingToPlane(
+                    uri, nodeName, anchorId, positionX, positionY, positionZ,
+                    scaleX, scaleY, scaleZ, isTransformable, enablePanGestures, enableRotationGestures, result
+                )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Exception loading GLB: ${e.message}")
+                Log.e(TAG, "❌ Exception loading model for plane anchor: ${e.message}")
                 result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
             }
-                
         } catch (e: Exception) {
             Log.e(TAG, "❌ Exception in handleAddNodeToPlaneAnchor: ${e.message}", e)
             result.error("GENERAL_ERROR", e.message ?: "Unknown error", null)
+        }
+    }
+
+    /**
+     * Load model with async caching for plane anchors - downloads if needed, then loads from cache
+     */
+    private fun loadModelWithAsyncCachingToPlane(
+        uri: String,
+        nodeName: String,
+        anchorId: String,
+        positionX: Float,
+        positionY: Float,
+        positionZ: Float,
+        scaleX: Float,
+        scaleY: Float,
+        scaleZ: Float,
+        isTransformable: Boolean,
+        enablePanGestures: Boolean,
+        enableRotationGestures: Boolean,
+        result: MethodChannel.Result
+    ) {
+        Log.d(TAG, "🎯 Starting async model loading with cache for plane: $uri")
+        
+        // Use coroutine scope to download and cache model
+        downloadScope.launch {
+            try {
+                // This will download if not cached, or return cached path
+                val localPath = modelDownloadService.ensureModelAvailable(uri)
+                if (localPath == null) {
+                    activity.runOnUiThread {
+                        Log.e(TAG, "❌ Failed to download/cache model for plane: $uri")
+                        result.error("DOWNLOAD_ERROR", "Failed to download or cache model", null)
+                    }
+                    return@launch
+                }
+                
+                Log.d(TAG, "✅ Model ready for plane at: $localPath")
+                
+                // Switch back to main thread for SceneForm operations
+                activity.runOnUiThread {
+                    try {
+                        // Find the anchor from our anchor map
+                        val anchorNode = nodesMap[anchorId]
+                        if (anchorNode == null) {
+                            Log.e(TAG, "❌ Anchor not found: $anchorId")
+                            result.error("ANCHOR_NOT_FOUND", "Anchor with id $anchorId not found", null)
+                            return@runOnUiThread
+                        }
+                        
+                        val cachedFile = java.io.File(localPath)
+                        val cachedUri = Uri.fromFile(cachedFile)
+                        
+                        val modelRenderableBuilder = ModelRenderable.builder()
+                        val renderableSourceBuilder = RenderableSource.builder()
+                        
+                        // Check file extension and set appropriate source type
+                        if (uri.endsWith(".glb")) {
+                            Log.d(TAG, "📂 Loading cached GLB file for plane: $localPath")
+                            renderableSourceBuilder
+                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLB)
+                                .setScale(1.0f)
+                                .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                        } else if (uri.endsWith(".gltf")) {
+                            Log.d(TAG, "📂 Loading cached GLTF file for plane: $localPath")
+                            renderableSourceBuilder
+                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLTF2)
+                                .setScale(1.0f)
+                                .setRecenterMode(RenderableSource.RecenterMode.ROOT)
+                        } else {
+                            Log.e(TAG, "❌ Unsupported file format for plane: $uri")
+                            result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
+                            return@runOnUiThread
+                        }
+                        
+                        modelRenderableBuilder
+                            .setSource(activity, renderableSourceBuilder.build())
+                            .setRegistryId(uri)
+                            .build()
+                            .thenAccept { renderable: ModelRenderable ->
+                                Log.d(TAG, "✅ Model loaded successfully from cache for plane: $uri")
+                                
+                                val transformableNode = TransformableNode(transformationSystem)
+                                transformableNode.renderable = renderable
+                                transformableNode.name = nodeName
+                                
+                                // Apply custom scale
+                                transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
+                                Log.d(TAG, "🔧 Applied scale for plane: ($scaleX, $scaleY, $scaleZ)")
+                                
+                                // Set position relative to anchor
+                                transformableNode.localPosition = Vector3(positionX, positionY, positionZ)
+                                
+                                // Configure gestures
+                                if (isTransformable) {
+                                    transformableNode.translationController.isEnabled = enablePanGestures
+                                    transformableNode.rotationController.isEnabled = enableRotationGestures
+                                    transformableNode.scaleController.isEnabled = true
+                                } else {
+                                    transformableNode.translationController.isEnabled = false
+                                    transformableNode.rotationController.isEnabled = false
+                                    transformableNode.scaleController.isEnabled = false
+                                }
+                                
+                                // Add node to anchor
+                                transformableNode.setParent(anchorNode)
+                                nodesMap[nodeName] = transformableNode
+                                
+                                Log.d(TAG, "✅ Node added to plane anchor with cached model: $nodeName")
+                                result.success(nodeName)
+                            }
+                            .exceptionally { throwable: Throwable ->
+                                Log.e(TAG, "❌ Failed to load cached model for plane: ${throwable.message}")
+                                result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
+                                null
+                            }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Exception in plane model loading: ${e.message}")
+                        result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } catch (e: Exception) {
+                activity.runOnUiThread {
+                    Log.e(TAG, "❌ Exception in async cache loading for plane: ${e.message}")
+                    result.error("ASYNC_LOADING_ERROR", e.message ?: "Unknown error", null)
+                }
+            }
         }
     }
 
