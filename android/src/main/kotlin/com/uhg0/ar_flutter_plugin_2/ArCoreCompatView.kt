@@ -271,6 +271,10 @@ class ArCoreCompatView(
             "disableTransformGestures" -> handleDisableTransformGestures(call, result)
             "selectNode" -> handleSelectNode(call, result)
             "deselectAllNodes" -> handleDeselectAllNodes(call, result)
+            // Add cache management methods
+            "clearCache" -> handleClearCache(call, result)
+            "getCacheStats" -> handleGetCacheStats(call, result)
+            "predownloadModels" -> handlePredownloadModels(call, result)
             // Add common platform view methods that Flutter might call
             "sendMotionEvent" -> handleSendMotionEvent(call, result)
             "onTouchEvent" -> handleOnTouchEvent(call, result)
@@ -525,6 +529,75 @@ class ArCoreCompatView(
         }
     }
 
+    // =================================================================
+    // Cache Management Methods
+    // =================================================================
+    
+    /**
+     * Clear all cached models
+     */
+    private fun handleClearCache(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            Log.d(TAG, "🗑️ Clearing model cache")
+            
+            val success = modelDownloadService.clearAllModels()
+            
+            if (success) {
+                Log.d(TAG, "✅ Cache cleared successfully")
+                result.success(true)
+            } else {
+                Log.w(TAG, "⚠️ Cache clear operation completed with warnings")
+                result.success(false)
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error clearing cache: ${e.message}")
+            result.error("CACHE_CLEAR_ERROR", "Failed to clear cache: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Get cache statistics
+     */
+    private fun handleGetCacheStats(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            Log.d(TAG, "📊 Getting cache statistics")
+            
+            val stats = modelDownloadService.getCacheStats()
+            
+            Log.d(TAG, "✅ Cache stats retrieved: ${stats.size} metrics")
+            result.success(stats)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error getting cache stats: ${e.message}")
+            result.error("CACHE_STATS_ERROR", "Failed to get cache stats: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Predownload models for better performance
+     */
+    private fun handlePredownloadModels(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val modelUrls = call.arguments as? List<String>
+            if (modelUrls == null) {
+                result.error("INVALID_ARGUMENTS", "Model URLs list is required", null)
+                return
+            }
+            
+            Log.d(TAG, "📥 Predownloading ${modelUrls.size} models")
+            
+            modelDownloadService.predownloadModels(modelUrls)
+            
+            Log.d(TAG, "✅ Predownload initiated for ${modelUrls.size} models")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error predownloading models: ${e.message}")
+            result.error("PREDOWNLOAD_ERROR", "Failed to predownload models: ${e.message}", null)
+        }
+    }
+
     private fun handleInit(call: MethodCall, result: MethodChannel.Result) {
         Log.d(TAG, "🎯 AR Session initialization requested")
         result.success("AR session ready")
@@ -776,13 +849,13 @@ class ArCoreCompatView(
                 if (uri.endsWith(".glb")) {
                     Log.d(TAG, "📂 Loading GLB file for direct placement: $uri")
                     renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
+                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLB)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
                         .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                 } else if (uri.endsWith(".gltf")) {
                     Log.d(TAG, "📂 Loading GLTF file for direct placement: $uri")
                     renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
+                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLTF2)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
                         .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                 } else {
@@ -1157,6 +1230,30 @@ class ArCoreCompatView(
         }
     }
 
+    /**
+     * Helper method to create URI with cache support
+     * Falls back to direct URL if cache fails
+     */
+    private fun getModelUri(originalUri: String): Uri {
+        return try {
+            // Try to get cached file first using AndroidModelCache directly
+            val modelCache = com.uhg0.ar_flutter_plugin_2.utils.AndroidModelCache.getInstance(activity.applicationContext)
+            val cachedPath = modelCache.checkModelCache(originalUri)
+            if (cachedPath != null) {
+                val cachedFile = java.io.File(cachedPath)
+                if (cachedFile.exists()) {
+                    Log.d(TAG, "📦 Using cached model: ${cachedFile.absolutePath}")
+                    return Uri.fromFile(cachedFile)
+                }
+            }
+            Log.d(TAG, "🌐 Cache miss, using direct URL: $originalUri")
+            Uri.parse(originalUri)
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Cache check failed, using direct URL: ${e.message}")
+            Uri.parse(originalUri)
+        }
+    }
+
     private fun handleAddNodeToPlaneAnchor(call: MethodCall, result: MethodChannel.Result) {
         Log.d(TAG, "🎯 handleAddNodeToPlaneAnchor called")
         Log.d(TAG, "📋 Method call arguments: ${call.arguments}")
@@ -1306,13 +1403,13 @@ class ArCoreCompatView(
                 if (uri.endsWith(".glb")) {
                     Log.d(TAG, "📂 Loading GLB file: $uri")
                     renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
+                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLB)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
                         .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                 } else if (uri.endsWith(".gltf")) {
                     Log.d(TAG, "📂 Loading GLTF file: $uri")
                     renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
+                        .setSource(activity, getModelUri(uri), RenderableSource.SourceType.GLTF2)
                         .setScale(1.0f) // Use 1.0f as base scale, we'll apply custom scale later
                         .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                 } else {
