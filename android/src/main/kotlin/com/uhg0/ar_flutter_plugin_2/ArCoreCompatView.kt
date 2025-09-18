@@ -32,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
@@ -853,89 +854,30 @@ class ArCoreCompatView(
             Log.d(TAG, "🎯 Gesture properties - isTransformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
             
             try {
-                // 🎯 TEMPORARY: Use direct loading to test if basic rendering works
-                Log.d(TAG, "🎯🎯🎯 [DEBUG] Loading model with DIRECT approach (no cache): $uri")
+                // 🎯 Use iOS-style temporary download to fix texture issues
+                Log.d(TAG, "🎯🎯🎯 [DEBUG] Loading model with iOS-style temporary download: $uri")
                 Log.d(TAG, "🎯🎯🎯 [DEBUG] Node name: $nodeName, Position: ($positionX, $positionY, $positionZ)")
                 Log.d(TAG, "🎯🎯🎯 [DEBUG] Scale: ($scaleX, $scaleY, $scaleZ)")
                 Log.d(TAG, "🎯🎯🎯 [DEBUG] Gestures - transformable: $isTransformable, pan: $enablePanGestures, rotation: $enableRotationGestures")
                 
-                // Direct ModelRenderable loading without caching
-                val modelRenderableBuilder = ModelRenderable.builder()
-                val renderableSourceBuilder = RenderableSource.builder()
-                
-                if (uri.endsWith(".glb")) {
-                    Log.d(TAG, "📂 Loading GLB file directly: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLB)
-                        .setScale(1.0f)
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else if (uri.endsWith(".gltf")) {
-                    Log.d(TAG, "📂 Loading GLTF file directly: $uri")
-                    renderableSourceBuilder
-                        .setSource(activity, Uri.parse(uri), RenderableSource.SourceType.GLTF2)
-                        .setScale(1.0f)
-                        .setRecenterMode(RenderableSource.RecenterMode.ROOT)
-                } else {
-                    Log.e(TAG, "❌ Unsupported file format: $uri")
-                    result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
-                    return
-                }
-                
-                modelRenderableBuilder
-                    .setSource(activity, renderableSourceBuilder.build())
-                    .setRegistryId(uri)
-                    .build()
-                    .thenAccept { renderable: ModelRenderable ->
-                        Log.d(TAG, "✅✅✅ [DEBUG] Model loaded successfully (direct): $uri")
-                        
-                        val transformableNode = TransformableNode(transformationSystem)
-                        transformableNode.renderable = renderable
-                        transformableNode.name = nodeName
-                        
-                        // Apply scale and position
-                        transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
-                        transformableNode.localPosition = Vector3(positionX, positionY, positionZ)
-                        
-                        // Configure gestures
-                        if (isTransformable) {
-                            transformableNode.translationController.isEnabled = enablePanGestures
-                            transformableNode.rotationController.isEnabled = enableRotationGestures
-                            transformableNode.scaleController.isEnabled = true
-                        } else {
-                            transformableNode.translationController.isEnabled = false
-                            transformableNode.rotationController.isEnabled = false
-                            transformableNode.scaleController.isEnabled = false
-                        }
-                        
-                        // Create virtual anchor in front of user
-                        val session = arSceneView?.session
-                        if (session != null) {
-                            val anchor = session.createAnchor(
-                                Pose.makeTranslation(positionX, positionY, positionZ)
-                            )
-                            val anchorNode = AnchorNode(anchor)
-                            anchorNode.setParent(arSceneView?.scene)
-                            
-                            transformableNode.setParent(anchorNode)
-                            nodesMap[nodeName] = transformableNode
-                            nodesMap["${nodeName}_anchor"] = anchorNode
-                            
-                            Log.d(TAG, "✅✅✅ [DEBUG] Node added successfully (direct): $nodeName")
-                            result.success(nodeName)
-                        } else {
-                            Log.e(TAG, "❌❌❌ [DEBUG] AR session not available")
-                            result.error("SESSION_ERROR", "AR session not available", null)
-                        }
-                    }
-                    .exceptionally { throwable: Throwable ->
-                        Log.e(TAG, "❌❌❌ [DEBUG] Failed to load model (direct): ${throwable.message}")
-                        Log.e(TAG, "❌❌❌ [DEBUG] Exception stack trace:", throwable)
-                        result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
-                        null
-                    }
+                // Use the new temporary download approach that fixes texture issues
+                loadModelWithTemporaryDownload(
+                    uri,
+                    nodeName,
+                    positionX,
+                    positionY,
+                    positionZ,
+                    scaleX,
+                    scaleY,
+                    scaleZ,
+                    isTransformable,
+                    enablePanGestures,
+                    enableRotationGestures,
+                    result
+                )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌❌❌ [DEBUG] Exception loading model for direct placement: ${e.message}")
+                Log.e(TAG, "❌❌❌ [DEBUG] Exception in temporary download loading: ${e.message}")
                 Log.e(TAG, "❌❌❌ [DEBUG] Exception stack trace:", e)
                 result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
             }
@@ -971,9 +913,10 @@ class ArCoreCompatView(
     }
 
     /**
-     * Load model with async caching - downloads if needed, then loads from cache
+     * Load model with iOS-style temporary download - downloads temporarily, loads immediately, then cleans up
+     * This avoids texture path issues that occur with persistent caching
      */
-    private fun loadModelWithAsyncCaching(
+    private fun loadModelWithTemporaryDownload(
         uri: String,
         nodeName: String,
         positionX: Float,
@@ -987,54 +930,55 @@ class ArCoreCompatView(
         enableRotationGestures: Boolean,
         result: MethodChannel.Result
     ) {
-        Log.d(TAG, "🎯🎯🎯 [DEBUG] Starting async model loading with cache: $uri")
+        Log.d(TAG, "🎯🎯🎯 [DEBUG] Starting iOS-style temporary model loading: $uri")
         Log.d(TAG, "🎯🎯🎯 [DEBUG] Parameters - nodeName: $nodeName")
         Log.d(TAG, "🎯🎯🎯 [DEBUG] Position: ($positionX, $positionY, $positionZ)")
         Log.d(TAG, "🎯🎯🎯 [DEBUG] Scale: ($scaleX, $scaleY, $scaleZ)")
         Log.d(TAG, "🎯🎯🎯 [DEBUG] Gestures: transformable=$isTransformable, pan=$enablePanGestures, rotation=$enableRotationGestures")
         
-        // Use coroutine scope to download and cache model
+        // Use coroutine scope to download model temporarily like iOS
         downloadScope.launch {
             try {
-                Log.d(TAG, "📥📥📥 [DEBUG] Coroutine launched, calling ensureModelAvailable...")
-                // This will download if not cached, or return cached path
-                val localPath = modelDownloadService.ensureModelAvailable(uri)
-                Log.d(TAG, "📁📁📁 [DEBUG] ensureModelAvailable returned: $localPath")
-                if (localPath == null) {
-                    Log.e(TAG, "❌❌❌ [DEBUG] localPath is null, download failed")
+                Log.d(TAG, "📥📥📥 [DEBUG] Coroutine launched, starting temporary download...")
+                // Download temporarily like iOS - don't use persistent cache to avoid texture issues
+                val tempFile = downloadModelTemporarily(uri)
+                Log.d(TAG, "📁📁📁 [DEBUG] Temporary download completed: $tempFile")
+                if (tempFile == null) {
+                    Log.e(TAG, "❌❌❌ [DEBUG] Temporary download failed")
                     activity.runOnUiThread {
-                        Log.e(TAG, "❌❌❌ [DEBUG] Failed to download/cache model: $uri")
-                        result.error("DOWNLOAD_ERROR", "Failed to download or cache model", null)
+                        Log.e(TAG, "❌❌❌ [DEBUG] Failed to download model temporarily: $uri")
+                        result.error("DOWNLOAD_ERROR", "Failed to download model", null)
                     }
                     return@launch
                 }
                 
-                Log.d(TAG, "✅ Model ready at: $localPath")
+                Log.d(TAG, "✅ Model ready temporarily at: ${tempFile.absolutePath}")
                 
                 // Switch back to main thread for SceneForm operations
                 activity.runOnUiThread {
                     try {
-                        val cachedFile = java.io.File(localPath)
-                        val cachedUri = Uri.fromFile(cachedFile)
+                        val tempUri = Uri.fromFile(tempFile)
                         
                         val modelRenderableBuilder = ModelRenderable.builder()
                         val renderableSourceBuilder = RenderableSource.builder()
                         
                         // Check file extension and set appropriate source type
                         if (uri.endsWith(".glb")) {
-                            Log.d(TAG, "📂 Loading cached GLB file: $localPath")
+                            Log.d(TAG, "📂 Loading temporary GLB file: ${tempFile.absolutePath}")
                             renderableSourceBuilder
-                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLB)
+                                .setSource(activity, tempUri, RenderableSource.SourceType.GLB)
                                 .setScale(1.0f)
                                 .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                         } else if (uri.endsWith(".gltf")) {
-                            Log.d(TAG, "📂 Loading cached GLTF file: $localPath")
+                            Log.d(TAG, "📂 Loading temporary GLTF file: ${tempFile.absolutePath}")
                             renderableSourceBuilder
-                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLTF2)
+                                .setSource(activity, tempUri, RenderableSource.SourceType.GLTF2)
                                 .setScale(1.0f)
                                 .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                         } else {
                             Log.e(TAG, "❌ Unsupported file format: $uri")
+                            // Clean up temp file
+                            tempFile.delete()
                             result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
                             return@runOnUiThread
                         }
@@ -1044,7 +988,15 @@ class ArCoreCompatView(
                             .setRegistryId(uri)
                             .build()
                             .thenAccept { renderable: ModelRenderable ->
-                                Log.d(TAG, "✅ Model loaded successfully from cache: $uri")
+                                Log.d(TAG, "✅ Model loaded successfully from temporary file: $uri")
+                                
+                                // Clean up temporary file immediately after loading (iOS-style)
+                                try {
+                                    tempFile.delete()
+                                    Log.d(TAG, "🗑️ Cleaned up temporary file: ${tempFile.absolutePath}")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Failed to clean up temporary file: ${e.message}")
+                                }
                                 
                                 val transformableNode = TransformableNode(transformationSystem)
                                 transformableNode.renderable = renderable
@@ -1096,20 +1048,131 @@ class ArCoreCompatView(
                                 result.success(nodeName)
                             }
                             .exceptionally { throwable: Throwable ->
-                                Log.e(TAG, "❌ Failed to load cached model: ${throwable.message}")
+                                Log.e(TAG, "❌ Failed to load temporary model: ${throwable.message}")
+                                // Clean up temporary file on error
+                                try {
+                                    tempFile.delete()
+                                    Log.d(TAG, "🗑️ Cleaned up temporary file after error")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Failed to clean up temporary file after error: ${e.message}")
+                                }
                                 result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
                                 null
                             }
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Exception in model loading: ${e.message}")
+                        // Clean up temporary file on exception
+                        try {
+                            tempFile.delete()
+                            Log.d(TAG, "🗑️ Cleaned up temporary file after exception")
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "⚠️ Failed to clean up temporary file after exception: ${ex.message}")
+                        }
                         result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
                     }
                 }
             } catch (e: Exception) {
                 activity.runOnUiThread {
-                    Log.e(TAG, "❌ Exception in async cache loading: ${e.message}")
+                    Log.e(TAG, "❌ Exception in temporary download loading: ${e.message}")
                     result.error("ASYNC_LOADING_ERROR", e.message ?: "Unknown error", null)
                 }
+            }
+        }
+    }
+
+    /**
+     * Download model temporarily like iOS - downloads to temp file, loads immediately, then deletes
+     * This avoids texture path resolution issues that occur with persistent caching
+     */
+    private suspend fun downloadModelTemporarily(modelUrl: String): java.io.File? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "📥 Starting temporary download: $modelUrl")
+        
+        var connection: java.net.HttpURLConnection? = null
+        var inputStream: java.io.InputStream? = null
+        var outputStream: java.io.FileOutputStream? = null
+        var tempFile: java.io.File? = null
+        
+        try {
+            // Create temporary file in app's cache directory
+            val tempDir = java.io.File(activity.cacheDir, "ar_temp_models")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
+            }
+            
+            val fileName = modelUrl.substringAfterLast("/").takeIf { it.isNotEmpty() } ?: "model.glb"
+            tempFile = java.io.File(tempDir, "${System.currentTimeMillis()}_$fileName")
+            
+            // Setup connection
+            val url = java.net.URL(modelUrl)
+            connection = url.openConnection() as java.net.HttpURLConnection
+            connection.apply {
+                connectTimeout = 30000 // 30 seconds
+                readTimeout = 60000 // 60 seconds
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/octet-stream, */*")
+                setRequestProperty("User-Agent", "AR-Flutter-Plugin-Android")
+            }
+            
+            val responseCode = connection.responseCode
+            if (responseCode != java.net.HttpURLConnection.HTTP_OK) {
+                Log.e(TAG, "❌ HTTP error $responseCode for $modelUrl")
+                return@withContext null
+            }
+            
+            val contentLength = connection.contentLengthLong
+            val maxSizeBytes = 50L * 1024 * 1024 // 50MB max
+            
+            if (contentLength > maxSizeBytes) {
+                Log.e(TAG, "❌ Model too large: ${contentLength / 1024 / 1024}MB > 50MB")
+                return@withContext null
+            }
+            
+            inputStream = connection.inputStream
+            outputStream = java.io.FileOutputStream(tempFile)
+            
+            val buffer = ByteArray(8192)
+            var totalBytesRead = 0L
+            var bytesRead: Int
+            
+            Log.d(TAG, "📥 Downloading ${contentLength / 1024 / 1024}MB to temporary file...")
+            
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                outputStream.write(buffer, 0, bytesRead)
+                totalBytesRead += bytesRead
+                
+                // Size safety check during download
+                if (totalBytesRead > maxSizeBytes) {
+                    Log.e(TAG, "❌ Download size exceeded limit during transfer")
+                    return@withContext null
+                }
+            }
+            
+            outputStream.flush()
+            outputStream.close()
+            outputStream = null
+            
+            // Verify downloaded file
+            if (!tempFile.exists() || tempFile.length() < 100) {
+                Log.e(TAG, "❌ Downloaded temporary file failed validation")
+                return@withContext null
+            }
+            
+            Log.d(TAG, "✅ Temporary download completed successfully: ${tempFile.absolutePath}")
+            Log.d(TAG, "📊 File size: ${tempFile.length() / 1024 / 1024}MB")
+            
+            return@withContext tempFile
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Temporary download exception: ${e.message}")
+            tempFile?.delete()
+            return@withContext null
+        } finally {
+            try {
+                outputStream?.close()
+                inputStream?.close()
+                connection?.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Error cleaning up download resources: ${e.message}")
             }
         }
     }
@@ -1277,7 +1340,7 @@ class ArCoreCompatView(
             try {
                 // 🎯 Use async caching system for better performance and texture handling
                 Log.d(TAG, "🎯 Loading model with async caching for plane anchor: $uri")
-                loadModelWithAsyncCachingToPlane(
+                loadModelWithTemporaryDownloadToPlane(
                     uri, nodeName, anchorId, positionX, positionY, positionZ,
                     scaleX, scaleY, scaleZ, isTransformable, enablePanGestures, enableRotationGestures, result
                 )
@@ -1293,9 +1356,10 @@ class ArCoreCompatView(
     }
 
     /**
-     * Load model with async caching for plane anchors - downloads if needed, then loads from cache
+     * Load model with iOS-style temporary download for plane anchors - downloads temporarily, loads immediately, then cleans up
+     * This avoids texture path issues that occur with persistent caching
      */
-    private fun loadModelWithAsyncCachingToPlane(
+    private fun loadModelWithTemporaryDownloadToPlane(
         uri: String,
         nodeName: String,
         anchorId: String,
@@ -1315,17 +1379,17 @@ class ArCoreCompatView(
         // Use coroutine scope to download and cache model
         downloadScope.launch {
             try {
-                // This will download if not cached, or return cached path
-                val localPath = modelDownloadService.ensureModelAvailable(uri)
-                if (localPath == null) {
+                // Download temporarily like iOS - don't use persistent cache to avoid texture issues
+                val tempFile = downloadModelTemporarily(uri)
+                if (tempFile == null) {
                     activity.runOnUiThread {
-                        Log.e(TAG, "❌ Failed to download/cache model for plane: $uri")
-                        result.error("DOWNLOAD_ERROR", "Failed to download or cache model", null)
+                        Log.e(TAG, "❌ Failed to download model temporarily for plane: $uri")
+                        result.error("DOWNLOAD_ERROR", "Failed to download model", null)
                     }
                     return@launch
                 }
                 
-                Log.d(TAG, "✅ Model ready for plane at: $localPath")
+                Log.d(TAG, "✅ Model ready temporarily for plane at: ${tempFile.absolutePath}")
                 
                 // Switch back to main thread for SceneForm operations
                 activity.runOnUiThread {
@@ -1334,31 +1398,34 @@ class ArCoreCompatView(
                         val anchorNode = nodesMap[anchorId]
                         if (anchorNode == null) {
                             Log.e(TAG, "❌ Anchor not found: $anchorId")
+                            // Clean up temp file
+                            tempFile.delete()
                             result.error("ANCHOR_NOT_FOUND", "Anchor with id $anchorId not found", null)
                             return@runOnUiThread
                         }
                         
-                        val cachedFile = java.io.File(localPath)
-                        val cachedUri = Uri.fromFile(cachedFile)
+                        val tempUri = Uri.fromFile(tempFile)
                         
                         val modelRenderableBuilder = ModelRenderable.builder()
                         val renderableSourceBuilder = RenderableSource.builder()
                         
                         // Check file extension and set appropriate source type
                         if (uri.endsWith(".glb")) {
-                            Log.d(TAG, "📂 Loading cached GLB file for plane: $localPath")
+                            Log.d(TAG, "📂 Loading temporary GLB file for plane: ${tempFile.absolutePath}")
                             renderableSourceBuilder
-                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLB)
+                                .setSource(activity, tempUri, RenderableSource.SourceType.GLB)
                                 .setScale(1.0f)
                                 .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                         } else if (uri.endsWith(".gltf")) {
-                            Log.d(TAG, "📂 Loading cached GLTF file for plane: $localPath")
+                            Log.d(TAG, "📂 Loading temporary GLTF file for plane: ${tempFile.absolutePath}")
                             renderableSourceBuilder
-                                .setSource(activity, cachedUri, RenderableSource.SourceType.GLTF2)
+                                .setSource(activity, tempUri, RenderableSource.SourceType.GLTF2)
                                 .setScale(1.0f)
                                 .setRecenterMode(RenderableSource.RecenterMode.ROOT)
                         } else {
                             Log.e(TAG, "❌ Unsupported file format for plane: $uri")
+                            // Clean up temp file
+                            tempFile.delete()
                             result.error("UNSUPPORTED_FORMAT", "Only GLB and GLTF files are supported", null)
                             return@runOnUiThread
                         }
@@ -1368,7 +1435,15 @@ class ArCoreCompatView(
                             .setRegistryId(uri)
                             .build()
                             .thenAccept { renderable: ModelRenderable ->
-                                Log.d(TAG, "✅ Model loaded successfully from cache for plane: $uri")
+                                Log.d(TAG, "✅ Model loaded successfully from temporary file for plane: $uri")
+                                
+                                // Clean up temporary file immediately after loading (iOS-style)
+                                try {
+                                    tempFile.delete()
+                                    Log.d(TAG, "🗑️ Cleaned up temporary file for plane: ${tempFile.absolutePath}")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Failed to clean up temporary file for plane: ${e.message}")
+                                }
                                 
                                 val transformableNode = TransformableNode(transformationSystem)
                                 transformableNode.renderable = renderable
@@ -1400,18 +1475,32 @@ class ArCoreCompatView(
                                 result.success(nodeName)
                             }
                             .exceptionally { throwable: Throwable ->
-                                Log.e(TAG, "❌ Failed to load cached model for plane: ${throwable.message}")
+                                Log.e(TAG, "❌ Failed to load temporary model for plane: ${throwable.message}")
+                                // Clean up temporary file on error
+                                try {
+                                    tempFile.delete()
+                                    Log.d(TAG, "🗑️ Cleaned up temporary file after error (plane)")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Failed to clean up temporary file after error (plane): ${e.message}")
+                                }
                                 result.error("MODEL_LOAD_ERROR", throwable.message ?: "Unknown error", null)
                                 null
                             }
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Exception in plane model loading: ${e.message}")
+                        // Clean up temporary file on exception
+                        try {
+                            tempFile.delete()
+                            Log.d(TAG, "🗑️ Cleaned up temporary file after exception (plane)")
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "⚠️ Failed to clean up temporary file after exception (plane): ${ex.message}")
+                        }
                         result.error("MODEL_CREATE_ERROR", e.message ?: "Unknown error", null)
                     }
                 }
             } catch (e: Exception) {
                 activity.runOnUiThread {
-                    Log.e(TAG, "❌ Exception in async cache loading for plane: ${e.message}")
+                    Log.e(TAG, "❌ Exception in temporary download loading for plane: ${e.message}")
                     result.error("ASYNC_LOADING_ERROR", e.message ?: "Unknown error", null)
                 }
             }
