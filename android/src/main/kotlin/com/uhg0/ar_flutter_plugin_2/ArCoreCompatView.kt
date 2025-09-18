@@ -554,10 +554,11 @@ class ArCoreCompatView(
             // Deselect any currently selected node
             transformationSystem?.selectNode(null)
             
-            // Optionally disable all gesture controllers
-            disableAllTransformableNodes()
+            // CRITICAL FIX: Do NOT disable all gesture controllers!
+            // Keep gesture controllers enabled so objects remain interactable after deselection
+            // Only deselect, don't disable gestures
             
-            Log.d(TAG, "✅ DESELECT ALL: Successfully deselected all nodes")
+            Log.d(TAG, "✅ DESELECT ALL: Successfully deselected all nodes (gestures remain enabled)")
             result.success(true)
             
         } catch (e: Exception) {
