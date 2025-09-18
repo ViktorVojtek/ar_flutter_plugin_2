@@ -688,9 +688,9 @@ class ArCoreCompatView(
                     
                     // Try multiple hit detection approaches
                     
-                    // APPROACH 1: Standard scene hit testing (most reliable)
+                    // APPROACH 1: Standard scene hit testing (most reliable and precise)
                     try {
-                        // Use MotionEvent for hit testing
+                        // Use MotionEvent for hit testing - this should be the primary method
                         val hitTestResult = sceneView.scene.hitTest(motionEvent)
                         val hitNode = hitTestResult?.node
                         Log.d(TAG, "🔍 Scene hitTest returned node: ${hitNode?.javaClass?.simpleName}")
@@ -698,8 +698,13 @@ class ArCoreCompatView(
                         if (hitNode != null) {
                             // Find the corresponding node name in our map
                             for ((nodeName, mappedNode) in nodesMap) {
-                                if (mappedNode == hitNode || (hitNode.parent == mappedNode) || (mappedNode.parent == hitNode)) {
-                                    Log.d(TAG, "🎯 FOUND HIT via scene testing: $nodeName")
+                                // Check direct match, parent-child relationships, and TransformableNode cases
+                                if (mappedNode == hitNode || 
+                                    (hitNode.parent == mappedNode) || 
+                                    (mappedNode.parent == hitNode) ||
+                                    (hitNode is TransformableNode && mappedNode == hitNode) ||
+                                    (mappedNode is TransformableNode && hitNode == mappedNode)) {
+                                    Log.d(TAG, "🎯 FOUND DIRECT HIT via scene testing: $nodeName")
                                     reusableNodeHitResults.add(nodeName)
                                     break
                                 }
@@ -738,12 +743,14 @@ class ArCoreCompatView(
                                     Log.d(TAG, "🔍 Distance from tap: $distance")
                                     
                                     // If tap is within reasonable distance, consider it a candidate
-                                    // Based on actual measured distances (580-800px), use 800px threshold for reliable detection
-                                    if (distance < 800.0) {
+                                    // CRITICAL FIX: Use much smaller threshold for precise object hit detection
+                                    // 800px was creating huge invisible hit areas around objects
+                                    // Use 120px for precise tapping directly on the object
+                                    if (distance < 120.0) {
                                         Log.d(TAG, "🎯 CANDIDATE HIT: $nodeName (distance: $distance)")
                                         candidateNodes.add(Pair(nodeName, distance))
                                     } else {
-                                        Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 800.0)")
+                                        Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 120.0)")
                                     }
                                 } catch (e: Exception) {
                                     Log.w(TAG, "⚠️ Hit test error for node $nodeName: ${e.message}")
