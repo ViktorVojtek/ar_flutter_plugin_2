@@ -673,42 +673,87 @@ class ArCoreCompatView(
         // FIRST: Check for node/object hits (like iOS implementation)
         // This is the critical missing piece that makes object selection work globally
         reusableNodeHitResults.clear() // Reuse collection to reduce GC pressure
+        
+        Log.d(TAG, "🔍 Starting object hit detection...")
+        Log.d(TAG, "🔍 Available nodes in nodesMap: ${nodesMap.keys}")
+        
         arSceneView?.let { sceneView ->
             try {
                 val camera = sceneView.scene.camera
+                Log.d(TAG, "🔍 Camera available: ${camera != null}")
+                
                 if (camera != null) {
-                    // Manual hit testing by checking all transformable nodes
-                    // Check their screen-space distance from the tap point
-                    for ((nodeName, node) in nodesMap) {
-                        if (node is TransformableNode) {
-                            try {
-                                // Get the node's world position
-                                val worldPosition = node.worldPosition
-                                
-                                // Convert world position to screen coordinates
-                                val screenPosition = camera.worldToScreenPoint(worldPosition)
-                                
-                                // Calculate distance between tap point and node's screen position
-                                val distance = kotlin.math.sqrt(
-                                    (screenPosition.x - motionEvent.x).pow(2) + 
-                                    (screenPosition.y - motionEvent.y).pow(2)
-                                )
-                                
-                                // If tap is within reasonable distance of the node's screen projection, consider it hit
-                                // Use a larger threshold to account for object size and collision shapes
-                                if (distance < 150.0) {
+                    Log.d(TAG, "🔍 Checking ${nodesMap.size} nodes for hits...")
+                    
+                    // Try multiple hit detection approaches
+                    
+                    // APPROACH 1: Standard scene hit testing (most reliable)
+                    try {
+                        // Use MotionEvent for hit testing
+                        val hitTestResult = sceneView.scene.hitTest(motionEvent)
+                        val hitNode = hitTestResult?.node
+                        Log.d(TAG, "🔍 Scene hitTest returned node: ${hitNode?.javaClass?.simpleName}")
+                        
+                        if (hitNode != null) {
+                            // Find the corresponding node name in our map
+                            for ((nodeName, mappedNode) in nodesMap) {
+                                if (mappedNode == hitNode || (hitNode.parent == mappedNode) || (mappedNode.parent == hitNode)) {
+                                    Log.d(TAG, "🎯 FOUND HIT via scene testing: $nodeName")
                                     reusableNodeHitResults.add(nodeName)
+                                    break
                                 }
-                            } catch (e: Exception) {
-                                // Silently continue on hit test errors for performance
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "⚠️ Scene hit testing failed: ${e.message}")
+                    }
+                    
+                    // APPROACH 2: Manual screen-space distance (fallback)
+                    if (reusableNodeHitResults.isEmpty()) {
+                        Log.d(TAG, "🔍 No hits from scene testing, trying manual distance calculation...")
+                        
+                        for ((nodeName, node) in nodesMap) {
+                            if (node is TransformableNode) {
+                                try {
+                                    Log.d(TAG, "🔍 Testing node: $nodeName")
+                                    
+                                    // Get the node's world position
+                                    val worldPosition = node.worldPosition
+                                    Log.d(TAG, "🔍 World position: $worldPosition")
+                                    
+                                    // Convert world position to screen coordinates
+                                    val screenPosition = camera.worldToScreenPoint(worldPosition)
+                                    Log.d(TAG, "🔍 Screen position: $screenPosition")
+                                    
+                                    // Calculate distance between tap point and node's screen position
+                                    val distance = kotlin.math.sqrt(
+                                        (screenPosition.x - motionEvent.x).pow(2) + 
+                                        (screenPosition.y - motionEvent.y).pow(2)
+                                    )
+                                    
+                                    Log.d(TAG, "🔍 Distance from tap: $distance")
+                                    
+                                    // If tap is within reasonable distance of the node's screen projection, consider it hit
+                                    // Based on actual measured distances (580-800px), use 800px threshold for reliable detection
+                                    if (distance < 800.0) {
+                                        Log.d(TAG, "🎯 FOUND HIT via distance calculation: $nodeName (distance: $distance)")
+                                        reusableNodeHitResults.add(nodeName)
+                                    } else {
+                                        Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 800.0)")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Hit test error for node $nodeName: ${e.message}")
+                                }
                             }
                         }
                     }
+                } else {
+                    Log.w(TAG, "⚠️ Camera is null, cannot perform hit testing")
                 }
             } catch (e: Exception) {
-                // Silently continue on hit testing errors for performance
+                Log.e(TAG, "❌ Error during hit testing: ${e.message}")
             }
-        }
+        } ?: Log.w(TAG, "⚠️ arSceneView is null, cannot perform hit testing")
         
         // If we found object hits, notify Flutter but DON'T auto-select
         // Let Flutter handle the selection logic to maintain consistency
