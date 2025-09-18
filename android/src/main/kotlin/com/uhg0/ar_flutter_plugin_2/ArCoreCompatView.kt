@@ -77,6 +77,12 @@ class ArCoreCompatView(
     private val reusableNodeHitResults = mutableListOf<String>()
     private val reusableMatrixArray = FloatArray(16)
     
+    // Touch event tracking for delayed tap detection (workaround for ACTION_UP consumption)
+    private var lastTouchDownTime = 0L
+    private var lastTouchDownX = 0f
+    private var lastTouchDownY = 0f
+    private var hasTouchMoved = false
+    
     // Cache system for model downloading and storage
     private val modelDownloadService: ModelDownloadService by lazy {
         ModelDownloadService(activity.applicationContext)
@@ -231,7 +237,50 @@ class ArCoreCompatView(
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
                 Log.d(TAG, "🔥 Scene touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
-                // Forward to gesture detector for tap-to-place functionality
+                // CRITICAL FIX: Always call handleTap for ACTION_UP events to ensure deselection works
+                // The GestureDetector might not always trigger onSingleTapUp due to touch event consumption
+                when (motionEvent.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        Log.d(TAG, "🎯 ACTION_DOWN detected")
+                        // Store the down position and time for tap detection
+                        lastTouchDownTime = System.currentTimeMillis()
+                        lastTouchDownX = motionEvent.x
+                        lastTouchDownY = motionEvent.y
+                        hasTouchMoved = false // Reset movement tracking
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        Log.d(TAG, "🎯 ACTION_UP detected - calling handleTap directly")
+                        handleTap(motionEvent)
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        Log.d(TAG, "🎯 ACTION_CANCEL detected")
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // Track movement to detect if this is still a tap
+                        val moveDistance = kotlin.math.sqrt(
+                            (motionEvent.x - lastTouchDownX).pow(2) + 
+                            (motionEvent.y - lastTouchDownY).pow(2)
+                        )
+                        if (moveDistance > 30) { // 30px threshold
+                            hasTouchMoved = true
+                        }
+                        // Don't log MOVE events to avoid spam
+                    }
+                    else -> {
+                        Log.d(TAG, "🎯 Other motion event: ${motionEvent.action}")
+                    }
+                }
+                
+                // WORKAROUND: If ACTION_UP isn't firing, use a fallback approach
+                // Check if this appears to be a quick tap (short duration, small movement)
+                if (motionEvent.action == MotionEvent.ACTION_DOWN) {
+                    // Schedule a delayed check to see if this was a tap
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        checkForDelayedTap(motionEvent.x, motionEvent.y)
+                    }, 150) // Short delay to detect taps
+                }
+                
+                // Also forward to gesture detector for any additional gesture handling
                 gestureDetector?.onTouchEvent(motionEvent)
                 
                 // Log current selection state for debugging
@@ -616,7 +665,7 @@ class ArCoreCompatView(
     }
 
     private fun handleTap(motionEvent: MotionEvent) {        
-        Log.d(TAG, "🎯🎯🎯 ANDROID: handleTap called! MotionEvent: x=${motionEvent.x}, y=${motionEvent.y}")
+        Log.d(TAG, "🎯🎯🎯 ANDROID: handleTap called! MotionEvent: x=${motionEvent.x}, y=${motionEvent.y}, action=${motionEvent.action}")
         
         // CRITICAL: Check for and restore any disappeared nodes before processing tap
         restoreDisappearedNodes()
@@ -672,17 +721,25 @@ class ArCoreCompatView(
             return
         }
         
+        Log.d(TAG, "🎯 No objects hit, checking for plane hits...")
+        
         // SECOND: If no objects were hit, check for plane hits (existing logic)
         val frame = arSceneView?.arFrame ?: return
         
         if (frame.camera.trackingState != TrackingState.TRACKING) {
+            Log.d(TAG, "🎯 Camera not tracking, skipping plane hit test")
             return
         }
 
         val hits = frame.hitTest(motionEvent.x, motionEvent.y)
+        var foundPlaneHit = false
+        
+        Log.d(TAG, "🎯 Found ${hits.size} hit test results")
+        
         for (hit in hits) {
             val trackable = hit.trackable
             if (trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)) {
+                Log.d(TAG, "🎯 Valid plane hit found!")
                 // Convert pose to matrix for Flutter - reuse array to reduce allocations
                 hit.hitPose.toMatrix(reusableMatrixArray, 0)
                 val matrixList = reusableMatrixArray.toList()
@@ -700,8 +757,16 @@ class ArCoreCompatView(
                 )
                 
                 sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(hitResult))
+                foundPlaneHit = true
                 break
             }
+        }
+        
+        // CRITICAL FIX: If no plane hits found, still notify Flutter about the empty space tap
+        // This ensures deselection logic works even when no planes are detected
+        if (!foundPlaneHit) {
+            Log.d(TAG, "🎯 Empty space tapped (no plane hits) - notifying Flutter for deselection")
+            sessionChannel.invokeMethod("onPlaneOrPointTap", emptyList<Map<String, Any>>())
         }
     }
 
@@ -2714,6 +2779,44 @@ class ArCoreCompatView(
         }
     }
 
+    /**
+     * Workaround method to detect taps when ACTION_UP events are consumed by other handlers
+     */
+    private fun checkForDelayedTap(downX: Float, downY: Float) {
+        try {
+            val currentTime = System.currentTimeMillis()
+            val timeDiff = currentTime - lastTouchDownTime
+            
+            // Only consider this a tap if:
+            // 1. The time since touch down is reasonable for a tap (< 500ms)
+            // 2. The touch coordinates haven't moved much
+            if (timeDiff < 500 && !hasTouchMoved) {
+                Log.d(TAG, "⏰ DELAYED TAP DETECTED: Simulating handleTap for coordinates ($downX, $downY)")
+                
+                // Create a synthetic motion event for the tap
+                val fakeMotionEvent = MotionEvent.obtain(
+                    lastTouchDownTime,
+                    currentTime,
+                    MotionEvent.ACTION_UP,
+                    downX,
+                    downY,
+                    0
+                )
+                
+                // Call our tap handler
+                handleTap(fakeMotionEvent)
+                
+                // Clean up the synthetic event
+                fakeMotionEvent.recycle()
+            } else {
+                Log.d(TAG, "⏰ Not a tap: timeDiff=$timeDiff, hasMoved=$hasTouchMoved")
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in delayed tap detection: ${e.message}")
+        }
+    }
+    
     // Extension function to convert pose matrix to list for Flutter
     private fun FloatArray.toList(): List<Float> = this.asList()
 }

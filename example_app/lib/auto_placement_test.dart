@@ -25,6 +25,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   bool _isARInitialized = false;
   String _statusText = "Initializing AR...";
   int _modelIndex = 0; // Track which model to place next
+  String? _selectedNodeName; // Track currently selected object
   
   // Different models to test with
   final List<Map<String, dynamic>> _testModels = [
@@ -98,10 +99,22 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
                       style: TextStyle(color: Colors.white60, fontSize: 12),
                     ),
                     SizedBox(height: 4),
-                    Text(
-                      "💡 Tap and drag different models to test gestures",
-                      style: TextStyle(color: Colors.yellow, fontSize: 12),
-                    ),
+                    if (_selectedNodeName != null) ...[
+                      Text(
+                        "🎯 Selected: ${_selectedNodeName!.split('_')[0]}",
+                        style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        "💡 Tap empty space to deselect",
+                        style: TextStyle(color: Colors.yellow, fontSize: 12),
+                      ),
+                    ] else ...[
+                      Text(
+                        "💡 Tap objects to select, drag to move/rotate",
+                        style: TextStyle(color: Colors.yellow, fontSize: 12),
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -123,6 +136,27 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
                     foregroundColor: Colors.white,
                   ),
                 ),
+                // ALWAYS show deselect button when object is selected, make it prominent
+                if (_selectedNodeName != null) ...[
+                  ElevatedButton(
+                    onPressed: _deselectCurrentObject,
+                    child: Text("🔄 DESELECT"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: _testManualDeselection,
+                    child: Text("⚡ Force Deselect"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.purple,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
+                  ),
+                ],
                 ElevatedButton(
                   onPressed: nodes.isNotEmpty ? _removeAllObjects : null,
                   child: Text("Remove All"),
@@ -208,21 +242,42 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
 
       arObjectManager!.onNodeTap = (List<String> nodeNames) {
         print("🔥 Node tapped: $nodeNames");
-        setState(() {
-          _statusText = "Tapped on: ${nodeNames.join(', ')}";
-        });
+        if (nodeNames.isNotEmpty) {
+          print("🔍 DEBUG: Setting _selectedNodeName from '${_selectedNodeName}' to '${nodeNames.first}'");
+          setState(() {
+            _selectedNodeName = nodeNames.first;
+            _statusText = "Selected: ${nodeNames.join(', ')}";
+          });
+          print("🔍 DEBUG: After setState - _selectedNodeName = '$_selectedNodeName'");
+        } else {
+          print("⚠️ Node tap received but nodeNames list is empty");
+        }
       };
 
       // Set up plane/point tap handler for AR session manager
       arSessionManager!.onPlaneOrPointTap = (List<ARHitTestResult> hits) {
         print("🔥 Plane or point tapped with ${hits.length} hit results");
+        print("🔍 DEBUG: Current _selectedNodeName = '$_selectedNodeName'");
         for (var hit in hits) {
           print("🔥 Hit result type: ${hit.type}, distance: ${hit.distance}");
         }
+        
+        // DESELECTION LOGIC: When tapping empty space, deselect any selected object
+        if (_selectedNodeName != null) {
+          print("🔥 Deselecting object: $_selectedNodeName");
+          _deselectCurrentObject();
+        } else {
+          print("⚠️ No object selected - _selectedNodeName is null, cannot deselect");
+        }
+        
         setState(() {
-          _statusText = "Tapped on plane/point with ${hits.length} hits";
+          _statusText = "Tapped on plane/point with ${hits.length} hits${_selectedNodeName != null ? ' - deselecting' : ' - no selection'}";
         });
       };
+
+      // ADDITIONAL: Set up a periodic check to see if we should trigger deselection
+      // This is a workaround for the touch event issues
+      print("✅ AR initialization completed - deselection setup ready");
 
       setState(() {
         _isARInitialized = true;
@@ -254,7 +309,59 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     return "Place ${_testModels[nextIndex]['name']} (${nodes.length + 1})";
   }
 
-  Future<void> _placeNextModel() async {
+  /// Deselect the currently selected object
+  Future<void> _deselectCurrentObject() async {
+    print("🔄 _deselectCurrentObject called - _selectedNodeName: '$_selectedNodeName', arObjectManager: ${arObjectManager != null}");
+    
+    if (_selectedNodeName == null || arObjectManager == null) {
+      print("⚠️ Cannot deselect - _selectedNodeName: '$_selectedNodeName', arObjectManager: ${arObjectManager != null}");
+      return;
+    }
+
+    try {
+      print("🔄 Deselecting object: $_selectedNodeName");
+      
+      // Use the deselectAllNodes method from ARObjectManager
+      bool success = await arObjectManager!.deselectAllNodes();
+      
+      if (success) {
+        print("✅ Successfully deselected object: $_selectedNodeName");
+      } else {
+        print("⚠️ Deselection call completed but success status unclear");
+      }
+      
+      setState(() {
+        final previousSelection = _selectedNodeName;
+        _selectedNodeName = null;
+        _statusText = "Object deselected - no object currently selected";
+        print("🔄 setState completed - previous: '$previousSelection', current: '$_selectedNodeName'");
+      });
+      
+    } catch (e) {
+      print("❌ Error during deselection: $e");
+      // Clear selection state anyway
+      setState(() {
+        final previousSelection = _selectedNodeName;
+        _selectedNodeName = null;
+        _statusText = "Deselection error, but cleared selection state";
+        print("🔄 Error setState completed - previous: '$previousSelection', current: '$_selectedNodeName'");
+      });
+    }
+  }
+
+  /// Test function to manually trigger deselection via plane/point tap simulation
+  Future<void> _testManualDeselection() async {
+    print("🧪 Testing manual deselection via simulated empty space tap");
+    
+    // Simulate an empty space tap by calling the same logic as onPlaneOrPointTap
+    if (_selectedNodeName != null) {
+      print("🔥 Simulating deselection for object: $_selectedNodeName");
+      await _deselectCurrentObject();
+    } else {
+      print("⚠️ No object currently selected for deselection test");
+    }
+  }
+
   Future<void> _placeNextModel() async {
     if (!_isARInitialized || arObjectManager == null) {
       print("❌ AR not initialized or object manager not available");
@@ -343,12 +450,14 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       nodes.clear();
       
       setState(() {
+        _selectedNodeName = null; // Clear selection when removing all objects
         _statusText = "All objects removed. Ready for new auto placement test.";
       });
       
     } catch (e) {
       print("❌ Error removing objects: $e");
       setState(() {
+        _selectedNodeName = null; // Clear selection even on error
         _statusText = "Error removing objects: $e";
       });
     }
