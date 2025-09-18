@@ -712,6 +712,9 @@ class ArCoreCompatView(
                     if (reusableNodeHitResults.isEmpty()) {
                         Log.d(TAG, "🔍 No hits from scene testing, trying manual distance calculation...")
                         
+                        // Track all candidates with their distances for closest selection
+                        val candidateNodes = mutableListOf<Pair<String, Float>>()
+                        
                         for ((nodeName, node) in nodesMap) {
                             if (node is TransformableNode) {
                                 try {
@@ -733,17 +736,28 @@ class ArCoreCompatView(
                                     
                                     Log.d(TAG, "🔍 Distance from tap: $distance")
                                     
-                                    // If tap is within reasonable distance of the node's screen projection, consider it hit
+                                    // If tap is within reasonable distance, consider it a candidate
                                     // Based on actual measured distances (580-800px), use 800px threshold for reliable detection
                                     if (distance < 800.0) {
-                                        Log.d(TAG, "🎯 FOUND HIT via distance calculation: $nodeName (distance: $distance)")
-                                        reusableNodeHitResults.add(nodeName)
+                                        Log.d(TAG, "🎯 CANDIDATE HIT: $nodeName (distance: $distance)")
+                                        candidateNodes.add(Pair(nodeName, distance))
                                     } else {
                                         Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 800.0)")
                                     }
                                 } catch (e: Exception) {
                                     Log.w(TAG, "⚠️ Hit test error for node $nodeName: ${e.message}")
                                 }
+                            }
+                        }
+                        
+                        // CRITICAL FIX: Select only the CLOSEST object when multiple candidates exist
+                        if (candidateNodes.isNotEmpty()) {
+                            // Sort by distance (closest first) and select only the closest
+                            val closestNode = candidateNodes.minByOrNull { it.second }
+                            if (closestNode != null) {
+                                Log.d(TAG, "🎯 FOUND CLOSEST HIT via distance calculation: ${closestNode.first} (distance: ${closestNode.second})")
+                                Log.d(TAG, "🔍 Rejected ${candidateNodes.size - 1} other candidates to avoid multi-selection conflicts")
+                                reusableNodeHitResults.add(closestNode.first)
                             }
                         }
                     }
