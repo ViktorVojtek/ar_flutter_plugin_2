@@ -14,6 +14,7 @@ typedef NodePanEndHandler = void Function(String node, Matrix4 transform);
 typedef NodeRotationStartHandler = void Function(String node);
 typedef NodeRotationChangeHandler = void Function(String node);
 typedef NodeRotationEndHandler = void Function(String node, Matrix4 transform);
+typedef NodeSelectionChangedHandler = void Function(String? selectedNodeId);
 
 /// ARCore-style gesture callback for transformed nodes
 typedef NodeTransformedHandler = void Function(String nodeName, Vector3 position, Vector4 rotation);
@@ -37,6 +38,9 @@ class ARObjectManager {
 
   /// ARCore-style gesture callback for when a transformable node is moved via gestures
   NodeTransformedHandler? onNodeTransformed;
+  
+  /// Callback function that is invoked when the platform changes the selection state of a node
+  NodeSelectionChangedHandler? onSelectionChanged;
 
   ARObjectManager(int id, {this.debug = false}) {
     print("🏗️ ARObjectManager constructor called with id: $id");
@@ -197,6 +201,17 @@ class ARObjectManager {
             }
           } else if (debug) {
             print('[ARObjectManager] WARNING: onNodeTransformed callback received but no handler set!');
+          }
+          break;
+        case 'onSelectionChanged':
+          print('[ARObjectManager] 🔄 RECEIVED onSelectionChanged with arguments: ${call.arguments}');
+          if (onSelectionChanged != null) {
+            final selectedNodeId = call.arguments as String?;
+            print('[ARObjectManager] 🔄 Calling onSelectionChanged handler with: $selectedNodeId');
+            onSelectionChanged!(selectedNodeId);
+            print('[ARObjectManager] 🔄 onSelectionChanged handler completed');
+          } else {
+            print('[ARObjectManager] ❌ WARNING: onSelectionChanged callback received but no handler set!');
           }
           break;
         default:

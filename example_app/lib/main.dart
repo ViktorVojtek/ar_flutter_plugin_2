@@ -98,6 +98,14 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   
   // Store mapping of node to its ID for removal
   Map<ARNode, String> nodeToIdMap = {};
+  
+  // Selection state tracking
+  String? _selectedNodeName;
+  List<String> _selectionEvents = [];
+  String? _lastSelectionNodeId;
+  DateTime? _lastSelectionTime;
+  String? _lastDeselectedNode;
+  DateTime? _deselectionTime;
 
   @override
   void dispose() {
@@ -117,6 +125,88 @@ class _ObjectGesturesState extends State<ObjectGestures> {
             onARViewCreated: onARViewCreated,
             planeDetectionConfig: PlaneDetectionConfig.horizontal,
           ),
+          // PROMINENT Selection indicator at top center
+          if (_selectedNodeName != null)
+            Positioned(
+              top: 60,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.5),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.radio_button_checked, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'SELECTED: $_selectedNodeName',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Icon(Icons.touch_app, color: Colors.white, size: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          // Deselection indicator
+          if (_lastDeselectedNode != null && _deselectionTime != null)
+            Positioned(
+              top: 60,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.5),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.radio_button_unchecked, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'DESELECTED: $_lastDeselectedNode',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Icon(Icons.clear, color: Colors.white, size: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           Align(
             alignment: FractionalOffset.bottomCenter,
             child: Column(
@@ -189,6 +279,11 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     this.arObjectManager!.onNodeTap = (List<String> nodeNames) {
       print("🔥 Node tapped: $nodeNames");
     };
+
+    // CRITICAL FIX: Add selection state change handler
+    this.arObjectManager!.onSelectionChanged = _onSelectionChanged;
+    print("🔄 Selection state change handler set up - handler is: ${this.arObjectManager!.onSelectionChanged != null ? 'SET' : 'NULL'}");
+    print("🔄 ARObjectManager onSelectionChanged callback configured");
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
     print("🎯🎯🎯 FLUTTER: Callback set! Function: $onPlaneOrPointTapped");
@@ -326,5 +421,63 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         SnackBar(content: Text("No surface detected"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
       );
     }
+  }
+
+  void _onSelectionChanged(String? selectedNodeId) {
+    print("🔄 _onSelectionChanged called with: $selectedNodeId");
+    print("🔄 Selection state changed by Android: $selectedNodeId");
+    
+    final now = DateTime.now();
+    final timeSinceLastChange = _lastSelectionTime != null ? now.difference(_lastSelectionTime!).inMilliseconds : 1000;
+    
+    // Filter out rapid changes on the same node (within 100ms) to avoid UI flicker during gestures
+    if (_lastSelectionNodeId == selectedNodeId && timeSinceLastChange < 100) {
+      print("🔄 Filtered out rapid duplicate selection change (${timeSinceLastChange}ms ago)");
+      return;
+    }
+    
+    // Update tracking variables
+    _lastSelectionNodeId = selectedNodeId;
+    _lastSelectionTime = now;
+    
+    // Track deselection for UI feedback
+    if (selectedNodeId == null && _selectedNodeName != null) {
+      _lastDeselectedNode = _selectedNodeName;
+      _deselectionTime = now;
+      // Clear deselection indicator after 2 seconds
+      Future.delayed(Duration(seconds: 2), () {
+        if (mounted) {
+          setState(() {
+            _lastDeselectedNode = null;
+            _deselectionTime = null;
+          });
+        }
+      });
+    }
+    
+    // Add event to history (keep last 10 events)
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7); // Last 6 digits
+    String eventText;
+    if (selectedNodeId != null) {
+      eventText = "[$timestamp] 📱 Android selected: $selectedNodeId";
+    } else {
+      eventText = "[$timestamp] 📱 Android deselected: ${_selectedNodeName ?? 'none'}";
+    }
+    
+    setState(() {
+      _selectionEvents.insert(0, eventText);
+      if (_selectionEvents.length > 10) {
+        _selectionEvents.removeLast();
+      }
+      
+      String previousSelection = _selectedNodeName ?? "none";
+      _selectedNodeName = selectedNodeId;
+      if (selectedNodeId != null) {
+        print("📱 Android selected node: $selectedNodeId (previous: $previousSelection)");
+      } else {
+        print("📱 Android deselected node: $previousSelection");
+      }
+    });
+    print("🔄 _onSelectionChanged completed - _selectedNodeName is now: $_selectedNodeName");
   }
 }
