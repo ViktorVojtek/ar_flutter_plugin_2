@@ -226,62 +226,26 @@ class ArCoreCompatView(
                 }
             })
 
-            // CRITICAL: Enhanced gesture management to prevent tap-pan conflicts
-            // Variables for delayed gesture forwarding
-            var isPotentialTap = false
-            var downEventForTransformation: MotionEvent? = null
-            var hitResultForTransformation: HitTestResult? = null
-            
-            // Setup touch listener with smart gesture priority management
+            // CRITICAL: Setup peek touch listener for TransformationSystem
+            // This ensures TransformationSystem always gets touch events first
+            arSceneView?.scene?.addOnPeekTouchListener { hitTestResult, motionEvent ->
+                // Always forward to TransformationSystem - this is critical for gestures
+                transformationSystem?.onTouch(hitTestResult, motionEvent)
+            }
+
+            // Setup touch listener with improved tap vs pan detection
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
                 Log.d(TAG, "🔥 Scene touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
-                // CRITICAL FIX: Smart gesture handling to prevent simultaneous tap/pan conflicts
+                // CRITICAL FIX: Improved tap detection for quick tap-and-release gestures
                 when (motionEvent.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        Log.d(TAG, "🎯 ACTION_DOWN detected - starting intelligent touch tracking")
+                        Log.d(TAG, "🎯 ACTION_DOWN detected - starting tap tracking")
                         // Store the down position and time for tap detection
                         lastTouchDownTime = System.currentTimeMillis()
                         lastTouchDownX = motionEvent.x
                         lastTouchDownY = motionEvent.y
-                        hasTouchMoved = false
-                        isPotentialTap = true
-                        
-                        // Store the event for potential delayed forwarding to TransformationSystem
-                        downEventForTransformation = MotionEvent.obtain(motionEvent)
-                        hitResultForTransformation = hitTestResult
-                        
-                        // DON'T immediately forward to TransformationSystem - wait to see if it's a tap
-                        Log.d(TAG, "🎯 Delaying gesture system activation to detect taps")
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        // Track movement to detect if this is still a tap
-                        val moveDistance = kotlin.math.sqrt(
-                            (motionEvent.x - lastTouchDownX).pow(2) + 
-                            (motionEvent.y - lastTouchDownY).pow(2)
-                        )
-                        
-                        // If movement exceeds threshold, this is definitely a gesture, not a tap
-                        if (moveDistance > 30 && isPotentialTap) { // 30px threshold for movement
-                            hasTouchMoved = true
-                            isPotentialTap = false
-                            Log.d(TAG, "🎯 Touch moved ${moveDistance}px - activating gesture system for pan/rotate")
-                            
-                            // Now forward the stored DOWN event and current MOVE to TransformationSystem
-                            downEventForTransformation?.let { downEvent ->
-                                hitResultForTransformation?.let { hitResult ->
-                                    Log.d(TAG, "🎯 Forwarding delayed DOWN event to TransformationSystem")
-                                    transformationSystem?.onTouch(hitResult, downEvent)
-                                }
-                            }
-                            
-                            // Forward the current MOVE event
-                            transformationSystem?.onTouch(hitTestResult, motionEvent)
-                        } else if (!isPotentialTap) {
-                            // Already determined this is a gesture, continue forwarding
-                            transformationSystem?.onTouch(hitTestResult, motionEvent)
-                        }
-                        // If still potential tap (small movement), don't forward to TransformationSystem yet
+                        hasTouchMoved = false // Reset movement tracking
                     }
                     MotionEvent.ACTION_UP -> {
                         Log.d(TAG, "🎯 ACTION_UP detected")
@@ -293,43 +257,34 @@ class ArCoreCompatView(
                             (motionEvent.y - lastTouchDownY).pow(2)
                         )
                         
-                        Log.d(TAG, "🎯 Touch stats: duration=${touchDuration}ms, movement=${moveDistance}px, isPotentialTap=$isPotentialTap")
+                        Log.d(TAG, "🎯 Touch stats: duration=${touchDuration}ms, movement=${moveDistance}px")
                         
-                        if (isPotentialTap && touchDuration < 300 && moveDistance < 50 && !hasTouchMoved) {
-                            // This was definitely a quick tap - handle selection, DON'T forward to TransformationSystem
-                            Log.d(TAG, "🎯 CONFIRMED QUICK TAP - handling selection, blocking gesture system")
+                        // QUICK TAP DETECTION: Short duration + minimal movement = selection tap
+                        if (touchDuration < 300 && moveDistance < 50 && !hasTouchMoved) {
+                            Log.d(TAG, "🎯 QUICK TAP DETECTED - prioritizing selection over pan")
                             handleTap(motionEvent)
                         } else {
-                            // This was a gesture - make sure TransformationSystem gets the UP event
-                            Log.d(TAG, "🎯 Gesture sequence - forwarding UP to TransformationSystem")
-                            transformationSystem?.onTouch(hitTestResult, motionEvent)
+                            Log.d(TAG, "🎯 Long/moved touch - this was likely a pan gesture, skipping tap")
                         }
-                        
-                        // Clean up
-                        isPotentialTap = false
-                        downEventForTransformation?.recycle()
-                        downEventForTransformation = null
-                        hitResultForTransformation = null
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         Log.d(TAG, "🎯 ACTION_CANCEL detected")
-                        hasTouchMoved = true
-                        isPotentialTap = false
-                        
-                        // Forward cancel to TransformationSystem if we started a gesture
-                        if (downEventForTransformation == null) {
-                            transformationSystem?.onTouch(hitTestResult, motionEvent)
+                        hasTouchMoved = true // Cancel any tap detection
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // Track movement to detect if this is still a tap
+                        val moveDistance = kotlin.math.sqrt(
+                            (motionEvent.x - lastTouchDownX).pow(2) + 
+                            (motionEvent.y - lastTouchDownY).pow(2)
+                        )
+                        if (moveDistance > 30) { // 30px threshold for movement
+                            hasTouchMoved = true
+                            Log.d(TAG, "🎯 Touch moved ${moveDistance}px - no longer a tap")
                         }
-                        
-                        // Clean up
-                        downEventForTransformation?.recycle()
-                        downEventForTransformation = null
-                        hitResultForTransformation = null
+                        // Don't log MOVE events to avoid spam
                     }
                     else -> {
                         Log.d(TAG, "🎯 Other motion event: ${motionEvent.action}")
-                        // Forward other events to TransformationSystem
-                        transformationSystem?.onTouch(hitTestResult, motionEvent)
                     }
                 }
                 
@@ -342,7 +297,7 @@ class ArCoreCompatView(
                     Log.d(TAG, "🎯 Current selection after touch: ${currentSelection?.name ?: "none"}")
                 }
                 
-                // Return false to allow other systems to handle if needed
+                // Return false to allow TransformationSystem to handle gestures naturally
                 false
             }
 
