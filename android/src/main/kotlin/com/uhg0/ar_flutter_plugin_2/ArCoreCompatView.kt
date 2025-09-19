@@ -71,6 +71,10 @@ class ArCoreCompatView(
     private var arSceneView: ArSceneView? = null
     private var transformationSystem: TransformationSystem? = null
     private val nodesMap = ConcurrentHashMap<String, Node>()
+    
+    // ANDROID FIX: Add reverse mapping for iOS-style unique ID tracking
+    private val nodeToUniqueIdMap = ConcurrentHashMap<Node, String>()
+    
     private var gestureDetector: GestureDetector? = null
     
     // Performance optimization: Reuse collections to reduce garbage collection
@@ -761,8 +765,17 @@ class ArCoreCompatView(
                                     (mappedNode.parent == hitNode) ||
                                     (hitNode is TransformableNode && mappedNode == hitNode) ||
                                     (mappedNode is TransformableNode && hitNode == mappedNode)) {
-                                    Log.d(TAG, "🎯 FOUND DIRECT HIT via scene testing: $nodeName")
-                                    reusableNodeHitResults.add(nodeName)
+                                    
+                                    // ANDROID FIX: Get the unique ID for this node instead of the nodeName
+                                    val uniqueId = nodeToUniqueIdMap[mappedNode]
+                                    if (uniqueId != null) {
+                                        Log.d(TAG, "🎯 FOUND DIRECT HIT via scene testing: $uniqueId (original name: $nodeName)")
+                                        reusableNodeHitResults.add(uniqueId)
+                                    } else {
+                                        // Fallback to nodeName if no unique ID found (backwards compatibility)
+                                        Log.d(TAG, "🎯 FOUND DIRECT HIT via scene testing (fallback): $nodeName")
+                                        reusableNodeHitResults.add(nodeName)
+                                    }
                                     break
                                 }
                             }
@@ -804,8 +817,16 @@ class ArCoreCompatView(
                                     // 120px was too small, 800px was too large
                                     // Use 200px for good balance between precision and usability
                                     if (distance < 200.0) {
-                                        Log.d(TAG, "🎯 CANDIDATE HIT: $nodeName (distance: $distance)")
-                                        candidateNodes.add(Pair(nodeName, distance))
+                                        // ANDROID FIX: Get the unique ID for this node instead of the nodeName
+                                        val uniqueId = nodeToUniqueIdMap[node]
+                                        if (uniqueId != null) {
+                                            Log.d(TAG, "🎯 CANDIDATE HIT: $uniqueId (original name: $nodeName, distance: $distance)")
+                                            candidateNodes.add(Pair(uniqueId, distance))
+                                        } else {
+                                            // Fallback to nodeName if no unique ID found (backwards compatibility)
+                                            Log.d(TAG, "🎯 CANDIDATE HIT (fallback): $nodeName (distance: $distance)")
+                                            candidateNodes.add(Pair(nodeName, distance))
+                                        }
                                     } else {
                                         Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 200.0)")
                                     }
@@ -1218,23 +1239,63 @@ class ArCoreCompatView(
                                         transformableNode.setParent(anchorNode)
                                         transformableNode.localPosition = Vector3(0.0f, 0.0f, 0.0f)
                                         
-                                        nodesMap[nodeName] = transformableNode
+                                        // ANDROID FIX: Generate unique ID like iOS for consistent tracking
+                                        val uniqueNodeId = "android_node_${System.currentTimeMillis()}_${(0..9999).random()}"
+                                        
+                                        // Store both the original name and the unique ID for backwards compatibility
+                                        nodesMap[nodeName] = transformableNode  // Original name mapping
+                                        nodesMap[uniqueNodeId] = transformableNode  // Unique ID mapping for iOS consistency  
                                         nodesMap["${nodeName}_anchor"] = anchorNode
+                                        
+                                        // ANDROID FIX: Add reverse mapping for tap detection
+                                        nodeToUniqueIdMap[transformableNode] = uniqueNodeId
+                                        
                                         Log.d(TAG, "✅ Node created with cached model: $nodeName")
+                                        Log.d(TAG, "🆔 Generated unique node ID for iOS compatibility: $uniqueNodeId")
+                                        
+                                        // Return the unique ID like iOS does
+                                        result.success(uniqueNodeId)
                                     } else {
                                         transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                         arSceneView?.scene?.addChild(transformableNode)
-                                        nodesMap[nodeName] = transformableNode
+                                        
+                                        // ANDROID FIX: Generate unique ID like iOS for consistent tracking
+                                        val uniqueNodeId = "android_node_${System.currentTimeMillis()}_${(0..9999).random()}"
+                                        
+                                        // Store both the original name and the unique ID for backwards compatibility
+                                        nodesMap[nodeName] = transformableNode  // Original name mapping
+                                        nodesMap[uniqueNodeId] = transformableNode  // Unique ID mapping for iOS consistency
+                                        
+                                        // ANDROID FIX: Add reverse mapping for tap detection
+                                        nodeToUniqueIdMap[transformableNode] = uniqueNodeId
+                                        
                                         Log.d(TAG, "✅ Node created with cached model (direct): $nodeName")
+                                        Log.d(TAG, "🆔 Generated unique node ID for iOS compatibility: $uniqueNodeId")
+                                        
+                                        // Return the unique ID like iOS does
+                                        result.success(uniqueNodeId)
                                     }
                                 } catch (e: Exception) {
                                     Log.w(TAG, "⚠️ Anchor creation failed, using direct placement: ${e.message}")
                                     transformableNode.worldPosition = Vector3(positionX, positionY, positionZ)
                                     arSceneView?.scene?.addChild(transformableNode)
-                                    nodesMap[nodeName] = transformableNode
+                                    
+                                    // ANDROID FIX: Generate unique ID like iOS for consistent tracking
+                                    val uniqueNodeId = "android_node_${System.currentTimeMillis()}_${(0..9999).random()}"
+                                    
+                                    // Store both the original name and the unique ID for backwards compatibility
+                                    nodesMap[nodeName] = transformableNode  // Original name mapping
+                                    nodesMap[uniqueNodeId] = transformableNode  // Unique ID mapping for iOS consistency
+                                    
+                                    // ANDROID FIX: Add reverse mapping for tap detection
+                                    nodeToUniqueIdMap[transformableNode] = uniqueNodeId
+                                    
+                                    Log.d(TAG, "✅ Node created with fallback placement: $nodeName")
+                                    Log.d(TAG, "🆔 Generated unique node ID for iOS compatibility: $uniqueNodeId")
+                                    
+                                    // Return the unique ID like iOS does
+                                    result.success(uniqueNodeId)
                                 }
-                                
-                                result.success(nodeName)
                             }
                             .exceptionally { throwable: Throwable ->
                                 Log.e(TAG, "❌ Failed to load temporary model: ${throwable.message}")

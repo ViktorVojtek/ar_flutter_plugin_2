@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // For MissingPluginException
 import 'package:provider/provider.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
-import 'dart:typed_data';
 import 'dart:io';
-import 'dart:math' as math;
 
 // AR Plugin Imports
 import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
@@ -49,8 +47,10 @@ class _ARScreenState extends State<ARScreen> {
   
   // Simple state management
   List<ARNode> nodes = <ARNode>[];
+  Map<String, ARNode> nodeIdToNodeMap = {}; // Track node ID to ARNode mapping
   Map<String, Product> nodeToProductMap = {}; // Track which product belongs to each node
   bool _isARInitialized = false;
+  bool _isARSupported = true; // Add AR capability checking
   String _statusText = "Initializing AR...";
   
   // Individual object selection state
@@ -65,6 +65,7 @@ class _ARScreenState extends State<ARScreen> {
   void initState() {
     super.initState();
     _currentProduct = widget.product;
+    _checkARSupport(); // Check AR capability first
     _handleNewProductModel();
   }
 
@@ -90,22 +91,85 @@ class _ARScreenState extends State<ARScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // AR View (simplified, based on working example)
-          ARView(
-            onARViewCreated: _onARViewCreated,
-            planeDetectionConfig: PlaneDetectionConfig.horizontal,
-          ),
-          
-          // UI Overlays (keep from original but simplified)
-          _buildStatusOverlay(),
-          _buildBackButton(),
-          _buildAddButton(), // Now handles both add and delete functionality
-          _buildShoppingCartButton(), // New shopping cart button
-          _buildCameraButton(),
-          
-          // Loading overlay for model downloads
-          if (isDownloadingModel) _buildLoadingOverlay(),
+          // Check if AR is supported before showing ARView
+          if (_isARSupported) ...[
+            // AR View (simplified, based on working example)
+            ARView(
+              onARViewCreated: _onARViewCreated,
+              planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            ),
+            
+            // UI Overlays (keep from original but simplified)
+            // _buildStatusOverlay(),
+            _buildBackButton(),
+            _buildAddButton(), // Now handles both add and delete functionality
+            _buildShoppingCartButton(), // New shopping cart button
+            _buildCameraButton(),
+            
+            // Loading overlay for model downloads
+            if (isDownloadingModel) _buildLoadingOverlay(),
+          ] else ...[
+            // Show fallback UI for unsupported devices
+            _buildARUnsupportedView(),
+          ]
         ],
+      ),
+    );
+  }
+
+  /// Check if AR is supported on this device
+  Future<void> _checkARSupport() async {
+    try {
+      // For now, assume AR is supported and handle errors gracefully
+      // The ar_flutter_plugin will handle device compatibility
+      setState(() {
+        _isARSupported = true;
+        _statusText = "Kontrola podpory AR...";
+      });
+    } catch (e) {
+      debugPrint('Kontrola podpory AR zlyhala: $e');
+      setState(() {
+        _isARSupported = false;
+        _statusText = "AR nie je podporované na tomto zariadení";
+      });
+    }
+  }
+
+  /// Build fallback view for devices that don't support AR
+  Widget _buildARUnsupportedView() {
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 64,
+              color: Colors.white,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'AR Not Supported',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Toto zariadenie nepodporuje AR funkcie.\nProsim použite zariadenie s podporou ARKit.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 16,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            _buildBackButton(),
+          ],
+        ),
       ),
     );
   }
@@ -130,11 +194,15 @@ class _ARScreenState extends State<ARScreen> {
 
   Future<void> _initializeAR() async {
     try {
-      // Configure session (FIXED: Enable planes for hit detection but keep them invisible)
+      setState(() {
+        _statusText = "Initializing AR session...";
+      });
+
+      // Configure session (HYBRID SOLUTION: Enable planes for hit detection like auto_placement_test.dart)
       await arSessionManager!.onInitialize(
         showFeaturePoints: false,
-        showPlanes: false, // Enable detection but keep planes invisible to avoid touch conflicts
-        customPlaneTexturePath: null,
+        showPlanes: true, // ANDROID FIX: Enable planes to allow hit detection on both platforms
+        customPlaneTexturePath: null, // Invisible planes
         showWorldOrigin: false,
         handlePans: true,
         handleRotation: true,
@@ -143,41 +211,33 @@ class _ARScreenState extends State<ARScreen> {
       // Configure object manager with proper gesture handling
       await arObjectManager!.onInitialize();
 
-      // Set up gesture handlers for pan and rotation (FIXED: Use print like working example)
+      // Set up gesture handlers for pan and rotation (SIMPLIFIED: No setState during gestures)
       arObjectManager!.onPanStart = (String nodeName) {
-        print('AR Screen: 🔥 Pan started on node: $nodeName'); // FIXED: Use print instead of debugPrint
-        setState(() {
-          _statusText = "Panning object: $nodeName";
-        });
+        print('AR Screen: 🔥 Pan started on node: $nodeName');
+        // REMOVED: setState call that could interfere with gestures
       };
 
       arObjectManager!.onPanChange = (String nodeName) {
-        print('AR Screen: 🔥 Pan changing on node: $nodeName'); // FIXED: Use print instead of debugPrint
+        print('AR Screen: 🔥 Pan changing on node: $nodeName');
       };
 
       arObjectManager!.onPanEnd = (String nodeName, Matrix4 transform) {
-        print('AR Screen: 🔥 Pan ended on node: $nodeName'); // FIXED: Use print instead of debugPrint
-        setState(() {
-          _statusText = "Pan gesture completed on: $nodeName";
-        });
+        print('AR Screen: 🔥 Pan ended on node: $nodeName');
+        // REMOVED: setState call that could interfere with gestures
       };
 
       arObjectManager!.onRotationStart = (String nodeName) {
-        print('AR Screen: 🔥 Rotation started on node: $nodeName'); // FIXED: Use print instead of debugPrint
-        setState(() {
-          _statusText = "Rotating object: $nodeName";
-        });
+        print('AR Screen: 🔥 Rotation started on node: $nodeName');
+        // REMOVED: setState call that could interfere with gestures
       };
 
       arObjectManager!.onRotationChange = (String nodeName) {
-        print('AR Screen: 🔥 Rotation changing on node: $nodeName'); // FIXED: Use print instead of debugPrint
+        print('AR Screen: 🔥 Rotation changing on node: $nodeName');
       };
 
       arObjectManager!.onRotationEnd = (String nodeName, Matrix4 transform) {
-        print('AR Screen: 🔥 Rotation ended on node: $nodeName'); // FIXED: Use print instead of debugPrint
-        setState(() {
-          _statusText = "Rotation gesture completed on: $nodeName";
-        });
+        print('AR Screen: 🔥 Rotation ended on node: $nodeName');
+        // REMOVED: setState call that could interfere with gestures
       };
       
       // Set up node tap callback (FIXED: Simplified like working example)
@@ -185,6 +245,7 @@ class _ARScreenState extends State<ARScreen> {
         print('AR Screen: 🔥 Node tapped: $nodeNames'); // FIXED: Use print instead of debugPrint
         if (nodeNames.isNotEmpty) {
           print('AR Screen: 🔍 DEBUG: Setting selectedNodeId from \"$selectedNodeId\" to \"${nodeNames.first}\"');
+          print('AR Screen: 🔍 DEBUG: Available product mappings: ${nodeToProductMap.keys.toList()}');
           setState(() {
             selectedNodeId = nodeNames.first;
             _statusText = "Selected: ${nodeNames.join(', ')}";
@@ -195,26 +256,16 @@ class _ARScreenState extends State<ARScreen> {
         }
       };
 
-      // Set up plane/point tap handler (FIXED: Simplified like working example)
+      // Set up plane/point tap handler (SIMPLIFIED: No complex state updates)
       arSessionManager!.onPlaneOrPointTap = (List<ARHitTestResult> hitResults) {
-        print('AR Screen: 🎯 Plane/point tapped with ${hitResults.length} hit results'); // FIXED: Use print
+        print('AR Screen: 🎯 Plane/point tapped with ${hitResults.length} hit results');
         print('AR Screen: 🔍 DEBUG: Current selectedNodeId = "$selectedNodeId"');
         
-        for (var hit in hitResults) {
-          print('AR Screen: 🎯 Hit result type: ${hit.type}, distance: ${hit.distance}');
-        }
-        
-        // DESELECTION LOGIC: When tapping empty space, deselect any selected object
+        // SIMPLIFIED DESELECTION: Only clear local state when tapping empty space
         if (selectedNodeId != null) {
           print('AR Screen: 🔥 Deselecting object: $selectedNodeId');
-          _deselectCurrentObject();
-        } else {
-          print('AR Screen: ⚠️ No object selected - selectedNodeId is null, cannot deselect');
+          _deselectCurrentObject(); // Now synchronous
         }
-        
-        setState(() {
-          _statusText = "Tapped on plane/point with ${hitResults.length} hits${selectedNodeId != null ? ' - deselecting' : ' - no selection'}";
-        });
       };
 
       setState(() {
@@ -231,9 +282,20 @@ class _ARScreenState extends State<ARScreen> {
 
     } catch (e) {
       debugPrint('AR Screen: ❌ Error initializing AR: $e');
-      setState(() {
-        _statusText = "Error initializing AR: $e";
-      });
+      
+      // Check if this is an AR capability issue
+      if (e.toString().contains('ARKit') || 
+          e.toString().contains('not supported') ||
+          e.toString().contains('unsupported')) {
+        setState(() {
+          _isARSupported = false;
+          _statusText = "AR not supported on this device";
+        });
+      } else {
+        setState(() {
+          _statusText = "Error initializing AR: $e";
+        });
+      }
     }
   }
 
@@ -346,7 +408,7 @@ class _ARScreenState extends State<ARScreen> {
       String nodeName = "Product_${DateTime.now().millisecondsSinceEpoch}";
 
       // FIXED: Use smaller, consistent scale like auto_placement_test.dart
-      vm.Vector3 scale = vm.Vector3(0.5, 0.5, 0.5); // Consistent scale instead of platform-dependent
+      vm.Vector3 scale = vm.Vector3(1.0, 1.0, 1.0); // Consistent scale instead of platform-dependent
       
       ARNode node = ARNode(
         type: NodeType.webGLB,
@@ -369,16 +431,21 @@ class _ARScreenState extends State<ARScreen> {
       if (result != null) {
         debugPrint('AR Screen: ✅ PLACEMENT SUCCESS! Node ID: $result');
         
-        // Store the ARNode with its original name, but track the AR plugin's returned ID
+        // Store the ARNode with comprehensive tracking
         nodes.add(node);
         
-        // CRITICAL FIX: Map both the original node name AND the returned ID to the same ARNode
-        // This way gesture callbacks work regardless of which ID they use
+        // Map both the returned ID and original node name to the ARNode object
+        nodeIdToNodeMap[result] = node; // Map returned ID to ARNode object
+        nodeIdToNodeMap[node.name] = node; // Also map original name to ARNode object
+        
+        // Map both the returned ID and original node name to the product
         if (_currentProduct != null) {
           nodeToProductMap[result] = _currentProduct!; // Use the returned ID as primary key
-          nodeToProductMap[nodeName] = _currentProduct!; // Also map original name for compatibility
+          nodeToProductMap[node.name] = _currentProduct!; // Also map original name for compatibility
           debugPrint('AR Screen: 📝 Stored product mapping: $result -> ${_currentProduct!.name}');
-          debugPrint('AR Screen: 📝 Stored product mapping: $nodeName -> ${_currentProduct!.name}');
+          debugPrint('AR Screen: 📝 Stored product mapping: ${node.name} -> ${_currentProduct!.name}');
+          debugPrint('AR Screen: 📝 Stored ARNode mapping: $result -> ${node.name}');
+          debugPrint('AR Screen: 📝 Stored ARNode mapping: ${node.name} -> ${node.name}');
         }
         
         setState(() {
@@ -402,47 +469,28 @@ class _ARScreenState extends State<ARScreen> {
     }
   }
 
-  /// Deselect the currently selected object using the new deselectAllNodes API
-  Future<void> _deselectCurrentObject() async {
-    debugPrint('AR Screen: 🔄 _deselectCurrentObject called - selectedNodeId: "$selectedNodeId", arObjectManager: ${arObjectManager != null}');
+  /// Deselect the currently selected object (SIMPLIFIED: Only clear local state)
+  void _deselectCurrentObject() {
+    debugPrint('AR Screen: 🔄 _deselectCurrentObject called - selectedNodeId: "$selectedNodeId"');
     
-    if (selectedNodeId == null || arObjectManager == null) {
-      debugPrint('AR Screen: ⚠️ Cannot deselect - selectedNodeId: "$selectedNodeId", arObjectManager: ${arObjectManager != null}');
+    if (selectedNodeId == null) {
+      debugPrint('AR Screen: ⚠️ No object selected to deselect');
       return;
     }
 
-    try {
-      debugPrint('AR Screen: 🔄 Deselecting object: $selectedNodeId');
-      
-      // Use the deselectAllNodes method from ARObjectManager (new API)
-      bool success = await arObjectManager!.deselectAllNodes();
-      
-      if (success) {
-        debugPrint('AR Screen: ✅ Successfully deselected object: $selectedNodeId');
-      } else {
-        debugPrint('AR Screen: ⚠️ Deselection call completed but success status unclear');
-      }
-      
-      setState(() {
-        final previousSelection = selectedNodeId;
-        selectedNodeId = null;
-        _statusText = "Object deselected. Tap + to add products.";
-        debugPrint('AR Screen: 🔄 setState completed - previous: "$previousSelection", current: "$selectedNodeId"');
-      });
-      
-    } catch (e) {
-      debugPrint('AR Screen: ❌ Error during deselection: $e');
-      // Clear selection state anyway
-      setState(() {
-        final previousSelection = selectedNodeId;
-        selectedNodeId = null;
-        _statusText = "Deselection error, but cleared selection state";
-        debugPrint('AR Screen: 🔄 Error setState completed - previous: "$previousSelection", current: "$selectedNodeId"');
-      });
-    }
+    // SIMPLIFIED: Only clear local UI state, don't interfere with AR plugin internals
+    final previousSelection = selectedNodeId;
+    debugPrint('AR Screen: 🔄 Clearing selection state for: $previousSelection');
+    
+    setState(() {
+      selectedNodeId = null;
+      _statusText = "Object deselected. Tap + to add products.";
+    });
+    
+    debugPrint('AR Screen: ✅ Local selection state cleared - gestures should work normally');
   }
 
-  /// Remove selected object (individual removal using removeNode with ARNode object)
+  /// Remove selected object (improved node tracking for cross-platform compatibility)
   Future<void> _removeSelectedObject() async {
     if (arObjectManager == null || selectedNodeId == null) {
       debugPrint('AR Screen: ❌ Cannot remove - no object selected or AR not ready');
@@ -456,16 +504,13 @@ class _ARScreenState extends State<ARScreen> {
     try {
       debugPrint('AR Screen: 🗑️ Removing individual object: $selectedNodeId');
       
-      // Find the ARNode object that corresponds to the selected ID
-      ARNode? nodeToRemove;
-      for (ARNode node in nodes) {
-        // Check if this node matches the selected ID
-        // The selectedNodeId could be either the original name or the returned ID
-        if (node.name == selectedNodeId || nodeToProductMap.containsKey(node.name)) {
-          // Additional check: make sure this node's product matches the selected node's product
-          final nodeProduct = nodeToProductMap[node.name];
-          final selectedProduct = nodeToProductMap[selectedNodeId];
-          if (nodeProduct == selectedProduct) {
+      // First, try to get the ARNode object from our tracking map
+      ARNode? nodeToRemove = nodeIdToNodeMap[selectedNodeId];
+      
+      // If not found by ID, try to find by matching the original node name
+      if (nodeToRemove == null) {
+        for (ARNode node in nodes) {
+          if (node.name == selectedNodeId) {
             nodeToRemove = node;
             break;
           }
@@ -474,22 +519,51 @@ class _ARScreenState extends State<ARScreen> {
       
       if (nodeToRemove == null) {
         debugPrint('AR Screen: ❌ Could not find ARNode object for selected ID: $selectedNodeId');
-        setState(() {
-          _statusText = "❌ Could not find object to remove";
-        });
+        debugPrint('AR Screen: 🔍 Available node IDs: ${nodeIdToNodeMap.keys}');
+        debugPrint('AR Screen: 🔍 Available node names: ${nodes.map((n) => n.name)}');
+        
+        // Try using removeNodeDeep with the selected ID as a fallback
+        debugPrint('AR Screen: 🔄 Trying removeNodeDeep as fallback...');
+        bool deepRemovalSuccess = await arObjectManager!.removeNodeDeep(selectedNodeId!);
+        
+        if (deepRemovalSuccess) {
+          debugPrint('AR Screen: ✅ Successfully removed object using removeNodeDeep');
+          
+          // Clean up local tracking
+          nodeIdToNodeMap.remove(selectedNodeId);
+          final productToRemove = nodeToProductMap[selectedNodeId];
+          nodeToProductMap.removeWhere((key, value) => value == productToRemove);
+          
+          // Remove from nodes list by finding any node that might match
+          nodes.removeWhere((node) => 
+            node.name == selectedNodeId || 
+            nodeToProductMap[node.name] == productToRemove
+          );
+          
+          setState(() {
+            selectedNodeId = null;
+            _statusText = nodes.isEmpty 
+                ? "Object removed! ${modelUri != null ? 'Select a product to place.' : 'Add objects using the + button.'}" 
+                : "Object removed! Tap objects to select them.";
+          });
+        } else {
+          setState(() {
+            _statusText = "❌ Could not find object to remove";
+          });
+        }
         return;
       }
       
       debugPrint('AR Screen: 🗑️ Found ARNode to remove: ${nodeToRemove.name}');
       
-      // Use removeNode with ARNode object like the working example
-      bool success = await arObjectManager!.removeNode(nodeToRemove);
-      
-      if (success) {
-        debugPrint('AR Screen: ✅ Successfully removed object: ${nodeToRemove.name}');
+      // Try to use the standard removeNode method first
+      try {
+        await arObjectManager!.removeNode(nodeToRemove);
+        debugPrint('AR Screen: ✅ Successfully removed object using removeNode: ${nodeToRemove.name}');
         
         // Remove from local tracking
         nodes.remove(nodeToRemove);
+        nodeIdToNodeMap.remove(selectedNodeId);
         
         // Remove from product mapping - remove all entries for this product/node
         final productToRemove = nodeToProductMap[selectedNodeId];
@@ -502,13 +576,39 @@ class _ARScreenState extends State<ARScreen> {
               : "Object removed! Tap objects to select them.";
         });
         
-        debugPrint('AR Screen: Updated nodes list - remaining objects: ${nodes.length}');
-      } else {
-        debugPrint('AR Screen: ❌ Failed to remove object: ${nodeToRemove.name}');
-        setState(() {
-          _statusText = "❌ Failed to remove object - please try again";
-        });
+      } catch (standardRemovalError) {
+        debugPrint('AR Screen: ⚠️ Standard removeNode failed: $standardRemovalError');
+        debugPrint('AR Screen: 🔄 Trying removeNodeDeep as fallback...');
+        
+        // Try removeNodeDeep as fallback
+        bool deepRemovalSuccess = await arObjectManager!.removeNodeDeep(selectedNodeId!);
+        
+        if (deepRemovalSuccess) {
+          debugPrint('AR Screen: ✅ Successfully removed object using removeNodeDeep fallback');
+          
+          // Remove from local tracking
+          nodes.remove(nodeToRemove);
+          nodeIdToNodeMap.remove(selectedNodeId);
+          
+          // Remove from product mapping
+          final productToRemove = nodeToProductMap[selectedNodeId];
+          nodeToProductMap.removeWhere((key, value) => value == productToRemove);
+          
+          setState(() {
+            selectedNodeId = null;
+            _statusText = nodes.isEmpty 
+                ? "Object removed! ${modelUri != null ? 'Select a product to place.' : 'Add objects using the + button.'}" 
+                : "Object removed! Tap objects to select them.";
+          });
+        } else {
+          debugPrint('AR Screen: ❌ Both removal methods failed');
+          setState(() {
+            _statusText = "❌ Failed to remove object - please try again";
+          });
+        }
       }
+      
+      debugPrint('AR Screen: Updated nodes list - remaining objects: ${nodes.length}');
 
     } catch (e) {
       debugPrint('AR Screen: ❌ Exception during object removal: $e');
@@ -581,6 +681,7 @@ class _ARScreenState extends State<ARScreen> {
 
   /// Build status overlay (debug information like working example)
   Widget _buildStatusOverlay() {
+    return const SizedBox.shrink();
     // Only show debug overlay when there are objects or during development
     if (nodes.isEmpty && selectedNodeId == null) return const SizedBox.shrink();
     
@@ -654,6 +755,14 @@ class _ARScreenState extends State<ARScreen> {
                   "💡 Tap objects to select • Drag to move • Rotate with two fingers",
                   style: TextStyle(color: Colors.white60, fontSize: 10),
                 ),
+                // Debug info for node tracking
+                if (selectedNodeId != null) ...[
+                  SizedBox(height: 4),
+                  Text(
+                    "🔍 Node tracking: ${nodeIdToNodeMap.containsKey(selectedNodeId) ? 'Found' : 'Missing'}",
+                    style: TextStyle(color: Colors.cyan, fontSize: 10),
+                  ),
+                ],
               ],
             ],
           ),
@@ -739,8 +848,30 @@ class _ARScreenState extends State<ARScreen> {
       return const SizedBox.shrink();
     }
     
-    // Get the product for the selected node (simplified approach)
-    final selectedProduct = nodeToProductMap[selectedNodeId];
+    // Get the product for the selected node (try multiple lookup strategies)
+    Product? selectedProduct = nodeToProductMap[selectedNodeId];
+    
+    // If not found by direct lookup, try finding by matching any stored key
+    if (selectedProduct == null) {
+      debugPrint('AR Screen: 🛒 Direct lookup failed, trying alternative lookups...');
+      debugPrint('AR Screen: 🛒 Available keys in nodeToProductMap: ${nodeToProductMap.keys.toList()}');
+      
+      // Try to find a key that contains or matches our selectedNodeId
+      for (String key in nodeToProductMap.keys) {
+        if (key.contains(selectedNodeId!) || selectedNodeId!.contains(key)) {
+          selectedProduct = nodeToProductMap[key];
+          debugPrint('AR Screen: 🛒 Found product via alternative lookup with key: $key');
+          break;
+        }
+      }
+      
+      // If still not found, try using _currentProduct as fallback since we track it
+      if (selectedProduct == null && _currentProduct != null) {
+        selectedProduct = _currentProduct;
+        debugPrint('AR Screen: 🛒 Using _currentProduct as fallback: ${selectedProduct?.name}');
+      }
+    }
+    
     debugPrint('AR Screen: 🛒 Product for selected node: ${selectedProduct?.name ?? "NOT FOUND"}');
     
     if (selectedProduct == null) {
@@ -780,7 +911,7 @@ class _ARScreenState extends State<ARScreen> {
           ],
         ),
         child: IconButton(
-          onPressed: () => _onShoppingCartPress(selectedProduct),
+          onPressed: () => _onShoppingCartPress(selectedProduct!), // selectedProduct is guaranteed non-null here
           icon: Icon(
             Icons.shopping_cart,
             color: Color(0xFF22514C),
