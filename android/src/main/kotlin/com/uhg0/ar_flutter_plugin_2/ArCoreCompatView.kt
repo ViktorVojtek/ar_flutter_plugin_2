@@ -233,15 +233,14 @@ class ArCoreCompatView(
                 transformationSystem?.onTouch(hitTestResult, motionEvent)
             }
 
-            // Setup touch listener - forward to gesture detector for tap-to-place
+            // Setup touch listener with improved tap vs pan detection
             arSceneView?.scene?.setOnTouchListener { hitTestResult, motionEvent ->
                 Log.d(TAG, "🔥 Scene touch event: action=${motionEvent.action}, x=${motionEvent.x}, y=${motionEvent.y}")
                 
-                // CRITICAL FIX: Always call handleTap for ACTION_UP events to ensure deselection works
-                // The GestureDetector might not always trigger onSingleTapUp due to touch event consumption
+                // CRITICAL FIX: Improved tap detection for quick tap-and-release gestures
                 when (motionEvent.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        Log.d(TAG, "🎯 ACTION_DOWN detected")
+                        Log.d(TAG, "🎯 ACTION_DOWN detected - starting tap tracking")
                         // Store the down position and time for tap detection
                         lastTouchDownTime = System.currentTimeMillis()
                         lastTouchDownX = motionEvent.x
@@ -249,11 +248,28 @@ class ArCoreCompatView(
                         hasTouchMoved = false // Reset movement tracking
                     }
                     MotionEvent.ACTION_UP -> {
-                        Log.d(TAG, "🎯 ACTION_UP detected - calling handleTap directly")
-                        handleTap(motionEvent)
+                        Log.d(TAG, "🎯 ACTION_UP detected")
+                        
+                        // Calculate touch duration and movement
+                        val touchDuration = System.currentTimeMillis() - lastTouchDownTime
+                        val moveDistance = kotlin.math.sqrt(
+                            (motionEvent.x - lastTouchDownX).pow(2) + 
+                            (motionEvent.y - lastTouchDownY).pow(2)
+                        )
+                        
+                        Log.d(TAG, "🎯 Touch stats: duration=${touchDuration}ms, movement=${moveDistance}px")
+                        
+                        // QUICK TAP DETECTION: Short duration + minimal movement = selection tap
+                        if (touchDuration < 300 && moveDistance < 50 && !hasTouchMoved) {
+                            Log.d(TAG, "🎯 QUICK TAP DETECTED - prioritizing selection over pan")
+                            handleTap(motionEvent)
+                        } else {
+                            Log.d(TAG, "🎯 Long/moved touch - this was likely a pan gesture, skipping tap")
+                        }
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         Log.d(TAG, "🎯 ACTION_CANCEL detected")
+                        hasTouchMoved = true // Cancel any tap detection
                     }
                     MotionEvent.ACTION_MOVE -> {
                         // Track movement to detect if this is still a tap
@@ -261,8 +277,9 @@ class ArCoreCompatView(
                             (motionEvent.x - lastTouchDownX).pow(2) + 
                             (motionEvent.y - lastTouchDownY).pow(2)
                         )
-                        if (moveDistance > 30) { // 30px threshold
+                        if (moveDistance > 30) { // 30px threshold for movement
                             hasTouchMoved = true
+                            Log.d(TAG, "🎯 Touch moved ${moveDistance}px - no longer a tap")
                         }
                         // Don't log MOVE events to avoid spam
                     }
@@ -271,21 +288,12 @@ class ArCoreCompatView(
                     }
                 }
                 
-                // WORKAROUND: If ACTION_UP isn't firing, use a fallback approach
-                // Check if this appears to be a quick tap (short duration, small movement)
-                if (motionEvent.action == MotionEvent.ACTION_DOWN) {
-                    // Schedule a delayed check to see if this was a tap
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        checkForDelayedTap(motionEvent.x, motionEvent.y)
-                    }, 150) // Short delay to detect taps
-                }
-                
                 // Also forward to gesture detector for any additional gesture handling
                 gestureDetector?.onTouchEvent(motionEvent)
                 
                 // Log current selection state for debugging
                 val currentSelection = transformationSystem?.selectedNode
-                if (motionEvent.action == MotionEvent.ACTION_DOWN) {
+                if (motionEvent.action == MotionEvent.ACTION_UP) {
                     Log.d(TAG, "🎯 Current selection after touch: ${currentSelection?.name ?: "none"}")
                 }
                 
@@ -743,14 +751,14 @@ class ArCoreCompatView(
                                     Log.d(TAG, "🔍 Distance from tap: $distance")
                                     
                                     // If tap is within reasonable distance, consider it a candidate
-                                    // CRITICAL FIX: Use much smaller threshold for precise object hit detection
-                                    // 800px was creating huge invisible hit areas around objects
-                                    // Use 120px for precise tapping directly on the object
-                                    if (distance < 120.0) {
+                                    // BALANCED FIX: Use moderate threshold for reliable object selection
+                                    // 120px was too small, 800px was too large
+                                    // Use 200px for good balance between precision and usability
+                                    if (distance < 200.0) {
                                         Log.d(TAG, "🎯 CANDIDATE HIT: $nodeName (distance: $distance)")
                                         candidateNodes.add(Pair(nodeName, distance))
                                     } else {
-                                        Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 120.0)")
+                                        Log.d(TAG, "⚠️ Distance too far for hit: $nodeName (distance: $distance, threshold: 200.0)")
                                     }
                                 } catch (e: Exception) {
                                     Log.w(TAG, "⚠️ Hit test error for node $nodeName: ${e.message}")
