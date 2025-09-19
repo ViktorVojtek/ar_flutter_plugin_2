@@ -134,8 +134,7 @@ class ArCoreCompatView(
                 
                 // Set the session
                 setupSession(session)
-                planeRenderer.isEnabled = true
-                planeRenderer.isVisible = true
+                // Plane renderer will be configured in handleInit based on Flutter parameters
                 
                 // CRITICAL: Resume the ArSceneView to start the camera feed
                 Handler(Looper.getMainLooper()).post {
@@ -226,11 +225,43 @@ class ArCoreCompatView(
                 }
             })
 
-            // CRITICAL: Setup peek touch listener for TransformationSystem
-            // This ensures TransformationSystem always gets touch events first
+            // CRITICAL: Setup conditional peek touch listener for TransformationSystem
+            // This ensures TransformationSystem gets touch events, but with smart tap detection
             arSceneView?.scene?.addOnPeekTouchListener { hitTestResult, motionEvent ->
-                // Always forward to TransformationSystem - this is critical for gestures
-                transformationSystem?.onTouch(hitTestResult, motionEvent)
+                when (motionEvent.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        // Store touch info but delay forwarding briefly to check for quick taps
+                        Log.d(TAG, "🎯 Peek touch DOWN - analyzing for quick tap detection")
+                        
+                        // For very quick interactions, add a small delay before starting gestures
+                        // This prevents instant pan/rotation activation on tap-to-select
+                        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                        handler.postDelayed({
+                            // Only forward if the touch is still active (not a quick tap)
+                            val currentTime = System.currentTimeMillis()
+                            val elapsed = currentTime - lastTouchDownTime
+                            
+                            if (elapsed >= 150) { // 150ms threshold for gesture activation
+                                Log.d(TAG, "🎯 Delayed gesture activation - forwarding to TransformationSystem")
+                                transformationSystem?.onTouch(hitTestResult, motionEvent)
+                            } else {
+                                Log.d(TAG, "🎯 Quick tap detected - skipping gesture activation")
+                            }
+                        }, 150) // 150ms delay
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // Forward move events immediately for responsive gestures
+                        transformationSystem?.onTouch(hitTestResult, motionEvent)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        // Forward end events immediately
+                        transformationSystem?.onTouch(hitTestResult, motionEvent)
+                    }
+                    else -> {
+                        // Forward other events normally
+                        transformationSystem?.onTouch(hitTestResult, motionEvent)
+                    }
+                }
             }
 
             // Setup touch listener with improved tap vs pan detection
@@ -670,6 +701,24 @@ class ArCoreCompatView(
 
     private fun handleInit(call: MethodCall, result: MethodChannel.Result) {
         Log.d(TAG, "🎯 AR Session initialization requested")
+        
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            if (arguments != null) {
+                val showPlanes = arguments["showPlanes"] as? Boolean ?: true
+                Log.d(TAG, "🎯 Configuring plane visibility: $showPlanes")
+                
+                // Configure plane renderer based on Flutter parameter
+                arSceneView?.let { sceneView ->
+                    sceneView.planeRenderer.isEnabled = true // Always keep detection enabled for hit testing
+                    sceneView.planeRenderer.isVisible = showPlanes // Only show visually if requested
+                    Log.d(TAG, "🎯 Plane renderer configured - enabled: true, visible: $showPlanes")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error configuring plane renderer: ${e.message}")
+        }
+        
         result.success("AR session ready")
     }
 

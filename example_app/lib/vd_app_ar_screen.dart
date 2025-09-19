@@ -130,10 +130,10 @@ class _ARScreenState extends State<ARScreen> {
 
   Future<void> _initializeAR() async {
     try {
-      // Configure session (FIXED: Disable planes like working example to avoid touch conflicts)
+      // Configure session (FIXED: Enable planes for hit detection but keep them invisible)
       await arSessionManager!.onInitialize(
         showFeaturePoints: false,
-        showPlanes: false, // CRITICAL FIX: Disable planes to prevent touch detection conflicts
+        showPlanes: false, // Enable detection but keep planes invisible to avoid touch conflicts
         customPlaneTexturePath: null,
         showWorldOrigin: false,
         handlePans: true,

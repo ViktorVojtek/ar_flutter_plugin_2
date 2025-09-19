@@ -4,7 +4,6 @@ import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
-import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
@@ -48,317 +47,177 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       'position': [-0.5, -1.0, -1.0], // Left side
     },
     {
-      'name': 'FlightHelmet',
-      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/FlightHelmet/glTF-Binary/FlightHelmet.glb',
-      'scale': 0.2,
-      'position': [0.0, -0.8, -1.2], // Front higher
+      'name': 'Lantern',
+      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Lantern/glTF-Binary/Lantern.glb',
+      'scale': 0.6,
+      'position': [0.0, -0.8, -1.5], // Back center
     },
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    print("🔧 AutoPlacement test screen initializing...");
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Auto Placement Test"),
-        backgroundColor: Colors.blue,
+        title: Text('Auto Placement Test'),
+        backgroundColor: Colors.orange,
       ),
-      body: Stack(
-        children: [
-          // AR View
-          ARView(
-            onARViewCreated: _onARViewCreated,
-            planeDetectionConfig: PlaneDetectionConfig.horizontal,
-          ),
-          // Status and Controls Overlay
-          Positioned(
-            top: 20,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _statusText,
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    "Objects placed: ${nodes.length}",
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  if (nodes.isNotEmpty) ...[
-                    SizedBox(height: 4),
+      body: Container(
+        child: Stack(
+          children: [
+            ARView(
+              onARViewCreated: onARViewCreated,
+              planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            ),
+            // Status overlay
+            Positioned(
+              top: 20,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      "Models: ${nodes.map((n) => n.name.split('_')[0]).join(', ')}",
-                      style: TextStyle(color: Colors.white60, fontSize: 12),
-                    ),
-                    SizedBox(height: 4),
-                    if (_selectedNodeName != null) ...[
-                      Text(
-                        "🎯 Selected: ${_selectedNodeName!.split('_')[0]}",
-                        style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
+                      'AR Auto Placement Test',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
                       ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      _statusText,
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    if (_selectedNodeName != null) ...[
                       SizedBox(height: 4),
                       Text(
-                        "💡 Tap empty space to deselect",
-                        style: TextStyle(color: Colors.yellow, fontSize: 12),
-                      ),
-                    ] else ...[
-                      Text(
-                        "💡 Tap objects to select, drag to move/rotate",
-                        style: TextStyle(color: Colors.yellow, fontSize: 12),
+                        'Selected: $_selectedNodeName',
+                        style: TextStyle(color: Colors.green, fontSize: 12),
                       ),
                     ],
                   ],
-                ],
+                ),
               ),
             ),
-          ),
-          // Controls at bottom
-          Positioned(
-            bottom: 50,
-            left: 20,
-            right: 20,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton(
-                  onPressed: _isARInitialized ? _placeNextModel : null,
-                  child: Text(_getNextButtonText()),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                // ALWAYS show deselect button when object is selected, make it prominent
-                if (_selectedNodeName != null) ...[
+            // Control buttons
+            Positioned(
+              bottom: 100,
+              left: 20,
+              right: 20,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
                   ElevatedButton(
-                    onPressed: _deselectCurrentObject,
-                    child: Text("🔄 DESELECT"),
+                    onPressed: _isARInitialized ? _placeNextModel : null,
+                    child: Text('Place Model'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.orange,
                       foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     ),
                   ),
                   ElevatedButton(
-                    onPressed: _testManualDeselection,
-                    child: Text("⚡ Force Deselect"),
+                    onPressed: _isARInitialized && nodes.isNotEmpty ? _removeAllObjects : null,
+                    child: Text('Clear All'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.purple,
+                      backgroundColor: Colors.red,
                       foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     ),
                   ),
                 ],
-                ElevatedButton(
-                  onPressed: nodes.isNotEmpty ? _removeAllObjects : null,
-                  child: Text("Remove All"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        ],
+            // Model info
+            Positioned(
+              bottom: 20,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Objects: ${nodes.length} | Next: ${_testModels[_modelIndex % _testModels.length]['name']}',
+                  style: TextStyle(color: Colors.white, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  void _onARViewCreated(
-      ARSessionManager sessionManager,
-      ARObjectManager objectManager,
-      ARAnchorManager anchorManager,
-      ARLocationManager locationManager) {
+  void onARViewCreated(
+    ARSessionManager arSessionManager,
+    ARObjectManager arObjectManager,
+    ARAnchorManager arAnchorManager,
+    ARLocationManager arLocationManager
+  ) {
+    print("🚀 ARView created, initializing managers...");
     
-    setState(() {
-      arSessionManager = sessionManager;
-      arObjectManager = objectManager;
-      arLocationManager = locationManager;
-      arAnchorManager = anchorManager;
-      _statusText = "AR managers created, initializing session...";
-    });
+    this.arSessionManager = arSessionManager;
+    this.arObjectManager = arObjectManager;
+    this.arAnchorManager = arAnchorManager;
+    this.arLocationManager = arLocationManager;
 
-    _initializeAR();
+    _initializeARSession();
   }
 
-  void _initializeAR() async {
-    try {
-      await arSessionManager!.onInitialize(
-        showPlanes: false,
-        customPlaneTexturePath: null,
-        showWorldOrigin: false,
-        showFeaturePoints: false,
-        handlePans: true,
-        handleRotation: true,
-      );
-
-      await arObjectManager!.onInitialize();
-
-      // Set up gesture handlers for pan and rotation
-      arObjectManager!.onPanStart = (String nodeName) {
-        print("🔥 Pan started on node: $nodeName");
-        setState(() {
-          _statusText = "Panning object: $nodeName";
-        });
-      };
-
-      arObjectManager!.onPanChange = (String nodeName) {
-        print("🔥 Pan changing on node: $nodeName");
-      };
-
-      arObjectManager!.onPanEnd = (String nodeName, Matrix4 transform) {
-        print("🔥 Pan ended on node: $nodeName");
-        setState(() {
-          _statusText = "Pan gesture completed on: $nodeName";
-        });
-      };
-
-      arObjectManager!.onRotationStart = (String nodeName) {
-        print("🔥 Rotation started on node: $nodeName");
-        setState(() {
-          _statusText = "Rotating object: $nodeName";
-        });
-      };
-
-      arObjectManager!.onRotationChange = (String nodeName) {
-        print("🔥 Rotation changing on node: $nodeName");
-      };
-
-      arObjectManager!.onRotationEnd = (String nodeName, Matrix4 transform) {
-        print("🔥 Rotation ended on node: $nodeName");
-        setState(() {
-          _statusText = "Rotation gesture completed on: $nodeName";
-        });
-      };
-
-      arObjectManager!.onNodeTap = (List<String> nodeNames) {
-        print("🔥 Node tapped: $nodeNames");
-        if (nodeNames.isNotEmpty) {
-          print("🔍 DEBUG: Setting _selectedNodeName from '${_selectedNodeName}' to '${nodeNames.first}'");
-          setState(() {
-            _selectedNodeName = nodeNames.first;
-            _statusText = "Selected: ${nodeNames.join(', ')}";
-          });
-          print("🔍 DEBUG: After setState - _selectedNodeName = '$_selectedNodeName'");
-        } else {
-          print("⚠️ Node tap received but nodeNames list is empty");
-        }
-      };
-
-      // Set up plane/point tap handler for AR session manager
-      arSessionManager!.onPlaneOrPointTap = (List<ARHitTestResult> hits) {
-        print("🔥 Plane or point tapped with ${hits.length} hit results");
-        print("🔍 DEBUG: Current _selectedNodeName = '$_selectedNodeName'");
-        for (var hit in hits) {
-          print("🔥 Hit result type: ${hit.type}, distance: ${hit.distance}");
-        }
-        
-        // DESELECTION LOGIC: When tapping empty space, deselect any selected object
-        if (_selectedNodeName != null) {
-          print("🔥 Deselecting object: $_selectedNodeName");
-          _deselectCurrentObject();
-        } else {
-          print("⚠️ No object selected - _selectedNodeName is null, cannot deselect");
-        }
-        
-        setState(() {
-          _statusText = "Tapped on plane/point with ${hits.length} hits${_selectedNodeName != null ? ' - deselecting' : ' - no selection'}";
-        });
-      };
-
-      // ADDITIONAL: Set up a periodic check to see if we should trigger deselection
-      // This is a workaround for the touch event issues
-      print("✅ AR initialization completed - deselection setup ready");
-
-      setState(() {
-        _isARInitialized = true;
-        _statusText = "AR initialized. Tap 'Auto Place' to test automatic placement.";
-      });
-
-      print("✅ AR initialization completed");
-      
-      // Wait a moment for AR to stabilize, then test auto placement
-      await Future.delayed(Duration(seconds: 2));
-      
-      setState(() {
-        _statusText = "AR ready for automatic placement testing!";
-      });
-      
-    } catch (e) {
-      print("❌ Error initializing AR: $e");
-      setState(() {
-        _statusText = "Error initializing AR: $e";
-      });
-    }
-  }
-
-  String _getNextButtonText() {
-    if (nodes.isEmpty) {
-      return "Place ${_testModels[0]['name']}";
-    }
-    int nextIndex = _modelIndex % _testModels.length;
-    return "Place ${_testModels[nextIndex]['name']} (${nodes.length + 1})";
-  }
-
-  /// Deselect the currently selected object
-  Future<void> _deselectCurrentObject() async {
-    print("🔄 _deselectCurrentObject called - _selectedNodeName: '$_selectedNodeName', arObjectManager: ${arObjectManager != null}");
-    
-    if (_selectedNodeName == null || arObjectManager == null) {
-      print("⚠️ Cannot deselect - _selectedNodeName: '$_selectedNodeName', arObjectManager: ${arObjectManager != null}");
+  Future<void> _initializeARSession() async {
+    if (arSessionManager == null) {
+      print("❌ Session manager is null, cannot initialize");
       return;
     }
-
+    
     try {
-      print("🔄 Deselecting object: $_selectedNodeName");
+      print("⚙️ Initializing AR session with auto placement configuration...");
       
-      // Use the deselectAllNodes method from ARObjectManager
-      bool success = await arObjectManager!.deselectAllNodes();
+      await arSessionManager!.onInitialize(
+        showPlanes: true, // HYBRID SOLUTION: Enable for hit detection, Android will handle gesture conflicts
+        customPlaneTexturePath: null, // Invisible planes
+        handlePans: true,
+        handleRotation: true,
+        showWorldOrigin: false, // Reduce visual noise
+        showAnimatedGuide: false,
+      );
       
-      if (success) {
-        print("✅ Successfully deselected object: $_selectedNodeName");
-      } else {
-        print("⚠️ Deselection call completed but success status unclear");
-      }
+      print("✅ AR session initialized successfully");
+      
+      await arObjectManager!.onInitialize();
+      print("✅ Object manager initialized");
+      
+      // Set up node selection handler
+      arObjectManager!.onNodeTap = _onNodeTapped;
+      print("🎯 Node tap handler set up");
       
       setState(() {
-        final previousSelection = _selectedNodeName;
-        _selectedNodeName = null;
-        _statusText = "Object deselected - no object currently selected";
-        print("🔄 setState completed - previous: '$previousSelection', current: '$_selectedNodeName'");
+        _isARInitialized = true;
+        _statusText = "AR Ready! Tap 'Place Model' to auto-place objects";
       });
+      
+      print("🎉 Auto placement test ready!");
       
     } catch (e) {
-      print("❌ Error during deselection: $e");
-      // Clear selection state anyway
+      print("❌ Error during AR initialization: $e");
       setState(() {
-        final previousSelection = _selectedNodeName;
-        _selectedNodeName = null;
-        _statusText = "Deselection error, but cleared selection state";
-        print("🔄 Error setState completed - previous: '$previousSelection', current: '$_selectedNodeName'");
+        _statusText = "AR initialization failed: $e";
       });
-    }
-  }
-
-  /// Test function to manually trigger deselection via plane/point tap simulation
-  Future<void> _testManualDeselection() async {
-    print("🧪 Testing manual deselection via simulated empty space tap");
-    
-    // Simulate an empty space tap by calling the same logic as onPlaneOrPointTap
-    if (_selectedNodeName != null) {
-      print("🔥 Simulating deselection for object: $_selectedNodeName");
-      await _deselectCurrentObject();
-    } else {
-      print("⚠️ No object currently selected for deselection test");
     }
   }
 
@@ -418,79 +277,73 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         _modelIndex++;
         
         setState(() {
-          _statusText = "✅ $modelName placed! Total models: ${nodes.length}. Try gestures on different models.";
+          _statusText = "Placed $modelName! Total: ${nodes.length} objects";
         });
       } else {
-        print("❌ PLACEMENT FAILED! addNode returned null for $modelName");
+        print("❌ PLACEMENT FAILED for $modelName");
         setState(() {
-          _statusText = "❌ $modelName placement failed - addNode returned null";
+          _statusText = "Failed to place $modelName";
         });
       }
       
     } catch (e) {
-      print("❌ Exception during $modelName placement: $e");
+      print("❌ Error placing $modelName: $e");
       setState(() {
-        _statusText = "❌ $modelName placement error: $e";
+        _statusText = "Error placing $modelName: $e";
+      });
+    }
+  }
+
+  void _onNodeTapped(List<String> nodeNames) {
+    if (nodeNames.isNotEmpty) {
+      String tappedNodeName = nodeNames.first;
+      print("👆 Node tapped: $tappedNodeName");
+      
+      setState(() {
+        if (_selectedNodeName == tappedNodeName) {
+          _selectedNodeName = null; // Deselect if same node tapped
+          print("🔄 Deselected node: $tappedNodeName");
+        } else {
+          _selectedNodeName = tappedNodeName; // Select new node
+          print("🎯 Selected node: $tappedNodeName");
+        }
       });
     }
   }
 
   Future<void> _removeAllObjects() async {
-    if (arObjectManager == null || nodes.isEmpty) return;
-
-    setState(() {
-      _statusText = "Removing all objects...";
-    });
-
+    if (arObjectManager == null) return;
+    
+    print("🧹 Removing all \${nodes.length} objects...");
+    
     try {
+      // Remove all nodes
       for (ARNode node in nodes) {
         await arObjectManager!.removeNode(node);
+        print("🗑️ Removed node: \${node.name}");
       }
       
-      nodes.clear();
-      
       setState(() {
-        _selectedNodeName = null; // Clear selection when removing all objects
-        _statusText = "All objects removed. Ready for new auto placement test.";
+        nodes.clear();
+        _selectedNodeName = null;
+        _statusText = "All objects removed";
+        _modelIndex = 0; // Reset to first model
       });
       
+      print("✅ All objects removed successfully");
+      
     } catch (e) {
-      print("❌ Error removing objects: $e");
+      print("❌ Error removing objects: \$e");
       setState(() {
-        _selectedNodeName = null; // Clear selection even on error
-        _statusText = "Error removing objects: $e";
+        _statusText = "Error removing objects: \$e";
       });
     }
-  }
-
-  Future<void> _performNonBlockingCleanup() async {
-    try {
-      print('🔄 Starting non-blocking cleanup to prevent camera freeze...');
-      
-      final success = await arSessionManager?.nukeAllNonBlocking(
-        purgeCaches: true,
-        removeExistingAnchors: true,
-        resetTracking: false, // Keep camera active
-      );
-      
-      if (success == true) {
-        print('✅ Non-blocking cleanup completed - camera should stay active');
-      } else {
-        print('⚠️ Non-blocking cleanup failed - using fallback');
-        // Fallback to basic cleanup without session pause
-        await _removeAllObjects();
-      }
-    } catch (e) {
-      print('❌ Cleanup error: $e');
-    }
-    
-    // Standard disposal
-    await arSessionManager?.dispose();
   }
 
   @override
   void dispose() {
-    _performNonBlockingCleanup();
+    print("🧹 AutoPlacement test screen disposing...");
+    arSessionManager?.dispose();
     super.dispose();
   }
 }
