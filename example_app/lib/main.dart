@@ -395,6 +395,16 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           debugPrint("AR_DEBUG: ✅ Duck added successfully with ID: $nodeId, total nodes: ${nodes.length}");
           debugPrint("AR_DEBUG: 📝 Stored node ID mapping for removal: $nodeId");
           
+          // CRITICAL FIX: Set up selection handler after successful object placement
+          // This ensures ARObjectManager is fully initialized and working
+          if (this.arObjectManager!.onSelectionChanged == null) {
+            this.arObjectManager!.onSelectionChanged = _onSelectionChanged;
+            print("🔄 LATE SETUP: Selection handler configured after successful object placement");
+            print("🔄 LATE SETUP: Handler status: ${this.arObjectManager!.onSelectionChanged != null ? 'SET' : 'NULL'}");
+          } else {
+            print("🔄 Selection handler already configured");
+          }
+          
           // Show success message to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

@@ -410,11 +410,12 @@ class ArCoreCompatView(
                         Log.d(TAG, "🎯 Touch stats: duration=${touchDuration}ms, movement=${moveDistance}px")
                         
                         // QUICK TAP DETECTION: Short duration + minimal movement = selection tap
+                        Log.d(TAG, "🎯 TAP ANALYSIS: duration=${touchDuration}ms, movement=${moveDistance}px, hasMoved=$hasTouchMoved")
                         if (touchDuration < 300 && moveDistance < 50 && !hasTouchMoved) {
                             Log.d(TAG, "🎯 QUICK TAP DETECTED - handling tap for selection/deselection")
                             handleTap(motionEvent)
                         } else {
-                            Log.d(TAG, "🎯 Long/moved touch - this was likely a pan gesture, skipping tap")
+                            Log.d(TAG, "🎯 Long/moved touch - this was likely a pan gesture, skipping tap (criteria: duration<300ms, movement<50px, !hasMoved)")
                         }
                     }
                     MotionEvent.ACTION_CANCEL -> {
@@ -447,8 +448,9 @@ class ArCoreCompatView(
                     Log.d(TAG, "🎯 Current selection after touch: ${currentSelection?.name ?: "none"}")
                 }
                 
-                // Return false to allow TransformationSystem to handle gestures naturally
-                false
+                // CRITICAL: Return true to consume touch events and ensure we get all events including ACTION_UP
+                // This gives our listener priority over other touch handlers and prevents event consumption conflicts
+                true
             }
 
         } catch (e: Exception) {
@@ -1063,8 +1065,10 @@ class ArCoreCompatView(
         // CRITICAL ENHANCEMENT: Always notify Flutter about empty space taps for deselection
         // This ensures deselection works regardless of plane detection settings or AR tracking state
         if (!foundValidHit) {
-            Log.d(TAG, "🎯 Empty space tapped - notifying Flutter for deselection (independent of plane settings)")
+            Log.d(TAG, "🎯🔥 EMPTY SPACE TAPPED - CALLING Flutter deselection callback!")
+            Log.d(TAG, "🎯🔥 About to call: sessionChannel.invokeMethod(\"onPlaneOrPointTap\", emptyList())")
             sessionChannel.invokeMethod("onPlaneOrPointTap", emptyList<Map<String, Any>>())
+            Log.d(TAG, "🎯🔥 Flutter deselection callback sent!")
         }
     }
 
@@ -1365,6 +1369,17 @@ class ArCoreCompatView(
                                 transformableNode.renderable = renderable
                                 transformableNode.name = nodeName
                                 
+                                // CRITICAL: Set up collision shape for tap detection
+                                // Without this, tap detection might fail
+                                if (renderable.collisionShape == null) {
+                                    val boundingBox = renderable.collisionShape ?: Box(
+                                        Vector3(0.5f, 0.5f, 0.5f), // Default size
+                                        Vector3.zero() // Center
+                                    )
+                                    transformableNode.collisionShape = boundingBox
+                                    Log.d(TAG, "🔧 Set up collision shape for tap detection")
+                                }
+                                
                                 // Apply custom scale
                                 transformableNode.localScale = Vector3(scaleX, scaleY, scaleZ)
                                 Log.d(TAG, "🔧 Applied scale: ($scaleX, $scaleY, $scaleZ)")
@@ -1383,6 +1398,23 @@ class ArCoreCompatView(
                                 // CRITICAL FIX: Set up proper gesture listeners for actual gesture events
                                 // This replaces the incorrect gesture callbacks in SelectionVisualizer
                                 setupGestureListeners(transformableNode, nodeName)
+                                
+                                // CRITICAL: Set up tap listener for proper object selection
+                                // This is needed for TransformationSystem to identify which node was tapped
+                                transformableNode.setOnTapListener { hitTestResult, motionEvent ->
+                                    Log.d(TAG, "🎯 Node $nodeName tapped - TransformationSystem will handle selection")
+                                    // Don't manually select - let TransformationSystem handle it naturally
+                                    // Just notify Flutter about the tap
+                                    try {
+                                        val tappedNodesList = listOf(nodeName)
+                                        objectChannel.invokeMethod("onNodeTap", tappedNodesList)
+                                        Log.d(TAG, "✅ Notified Flutter about tap on: $nodeName")
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "❌ Failed to notify Flutter about node tap: ${e.message}")
+                                    }
+                                    // CRITICAL FIX: Return false to allow TransformationSystem to handle selection
+                                    false
+                                }
                                 
                                 // Create anchor and add to scene
                                 try {
@@ -1856,6 +1888,17 @@ class ArCoreCompatView(
                                 transformableNode.renderable = renderable
                                 transformableNode.name = nodeName
                                 
+                                // CRITICAL: Set up collision shape for tap detection (plane anchors)
+                                // Without this, tap detection might fail
+                                if (renderable.collisionShape == null) {
+                                    val boundingBox = renderable.collisionShape ?: Box(
+                                        Vector3(0.5f, 0.5f, 0.5f), // Default size
+                                        Vector3.zero() // Center
+                                    )
+                                    transformableNode.collisionShape = boundingBox
+                                    Log.d(TAG, "🔧 Set up collision shape for tap detection (plane)")
+                                }
+                                
                                 // Add node to anchor FIRST - this is critical for proper transformation setup
                                 transformableNode.setParent(anchorNode)
                                 
@@ -1886,6 +1929,23 @@ class ArCoreCompatView(
                                 
                                 // CRITICAL FIX: Set up proper gesture listeners for plane anchors too
                                 setupGestureListeners(transformableNode, nodeName)
+                                
+                                // CRITICAL: Set up tap listener for proper object selection (plane anchors)
+                                // This is needed for TransformationSystem to identify which node was tapped
+                                transformableNode.setOnTapListener { hitTestResult, motionEvent ->
+                                    Log.d(TAG, "🎯 Plane node $nodeName tapped - TransformationSystem will handle selection")
+                                    // Don't manually select - let TransformationSystem handle it naturally
+                                    // Just notify Flutter about the tap
+                                    try {
+                                        val tappedNodesList = listOf(nodeName)
+                                        objectChannel.invokeMethod("onNodeTap", tappedNodesList)
+                                        Log.d(TAG, "✅ Notified Flutter about tap on plane node: $nodeName")
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "❌ Failed to notify Flutter about plane node tap: ${e.message}")
+                                    }
+                                    // CRITICAL FIX: Return false to allow TransformationSystem to handle selection
+                                    false
+                                }
                                 
                                 nodesMap[nodeName] = transformableNode
                                 

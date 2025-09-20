@@ -493,6 +493,21 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         print("✅ PLACEMENT SUCCESS! Node ID: $result for $modelName");
         nodes.add(node);
         
+        // CRITICAL FIX: Set up selection handler after successful object placement
+        // This ensures ARObjectManager is fully initialized and working
+        print("🔍 DEBUG: Checking selection handler status...");
+        print("🔍 DEBUG: arObjectManager is: ${arObjectManager != null ? 'NOT NULL' : 'NULL'}");
+        print("🔍 DEBUG: onSelectionChanged is: ${arObjectManager!.onSelectionChanged != null ? 'NOT NULL' : 'NULL'}");
+        
+        if (arObjectManager!.onSelectionChanged == null) {
+          arObjectManager!.onSelectionChanged = _onSelectionChanged;
+          print("🔄 LATE SETUP: Selection handler configured after successful object placement");
+          print("🔄 LATE SETUP: Handler status: ${arObjectManager!.onSelectionChanged != null ? 'SET' : 'NULL'}");
+        } else {
+          print("🔄 HANDLER ALREADY SET: Selection handler was already configured");
+          print("🔄 HANDLER ALREADY SET: Current handler: ${arObjectManager!.onSelectionChanged}");
+        }
+        
         // Move to next model for next placement
         _modelIndex++;
         
@@ -517,28 +532,20 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   void _onEmptySpaceTapped(List<ARHitTestResult> hitTestResults) {
     print("⭕ Empty space tap event received with ${hitTestResults.length} hit results");
     
-    // Only deselect if we have a selected object and this was truly an empty space tap
-    if (_selectedNodeName != null) {
-      String previousSelection = _selectedNodeName!;
-      
-      // Add event to history
-      final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
-      setState(() {
-        _selectionEvents.insert(0, "[$timestamp] ⭕ Flutter empty space tap");
-        if (_selectionEvents.length > 10) {
-          _selectionEvents.removeLast();
-        }
-        
-        _selectedNodeName = null;
-        _statusText = "⭕ Deselected: $previousSelection (empty space tap)";
-      });
-      print("⭕ Empty space tapped - deselected: $previousSelection");
-    } else {
-      print("⭕ Empty space tapped - no object was selected");
-      setState(() {
-        _statusText = "Empty space tapped - no object selected";
-      });
-    }
+    // CRITICAL FIX: Don't manually manage deselection here!
+    // Let Android handle deselection and notify via onSelectionChanged
+    // This prevents Flutter-Android state conflicts
+    
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
+    setState(() {
+      _selectionEvents.insert(0, "[$timestamp] ⭕ Flutter empty space tap");
+      if (_selectionEvents.length > 10) {
+        _selectionEvents.removeLast();
+      }
+      _statusText = "⭕ Empty space tapped - awaiting Android deselection";
+    });
+    
+    print("⭕ Empty space tapped - Android will handle deselection");
   }
 
   void _onNodeTapped(List<String> nodeNames) {
@@ -548,47 +555,25 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       String tappedNodeName = nodeNames.first;
       print("🎯 Processing tap on node: $tappedNodeName");
       
+      // CRITICAL FIX: Don't manually manage selection state here!
+      // Let Android's TransformationSystem handle selection and notify via onSelectionChanged
+      // This prevents Flutter-Android state conflicts
+      
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
       setState(() {
-        final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
-        
-        if (_selectedNodeName == tappedNodeName) {
-          // Same node tapped - deselect it
-          _selectionEvents.insert(0, "[$timestamp] 🔄 Flutter tap deselect: $tappedNodeName");
-          if (_selectionEvents.length > 10) {
-            _selectionEvents.removeLast();
-          }
-          
-          _selectedNodeName = null;
-          _statusText = "🔄 Deselected: $tappedNodeName";
-          print("🔄 Deselected node: $tappedNodeName");
-        } else {
-          // Different node tapped - select it
-          String previousSelection = _selectedNodeName ?? "none";
-          _selectionEvents.insert(0, "[$timestamp] 🎯 Flutter tap select: $tappedNodeName");
-          if (_selectionEvents.length > 10) {
-            _selectionEvents.removeLast();
-          }
-          
-          _selectedNodeName = tappedNodeName;
-          _statusText = "🎯 Selected: $tappedNodeName";
-          print("🎯 Selected node: $tappedNodeName (previous: $previousSelection)");
+        _selectionEvents.insert(0, "[$timestamp] 👆 Flutter received tap: $tappedNodeName");
+        if (_selectionEvents.length > 10) {
+          _selectionEvents.removeLast();
         }
+        _statusText = "👆 Tapped: $tappedNodeName (awaiting Android selection)";
       });
+      
+      print("👆 Logged tap on node: $tappedNodeName - Android will handle selection");
     } else {
-      // Empty space tapped - deselect any selected object
-      if (_selectedNodeName != null) {
-        String previousSelection = _selectedNodeName!;
-        setState(() {
-          _selectedNodeName = null;
-          _statusText = "⭕ Deselected: $previousSelection (empty space tap)";
-        });
-        print("⭕ Empty space tapped - deselected: $previousSelection");
-      } else {
-        print("⭕ Empty space tapped - no object was selected");
-        setState(() {
-          _statusText = "Empty space tapped - no selection change";
-        });
-      }
+      print("👆 No specific node tapped - Android will handle deselection");
+      setState(() {
+        _statusText = "👆 Empty area tapped - awaiting Android deselection";
+      });
     }
   }
 
@@ -599,11 +584,15 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     final now = DateTime.now();
     final timeSinceLastChange = _lastSelectionTime != null ? now.difference(_lastSelectionTime!).inMilliseconds : 1000;
     
-    // Filter out rapid changes on the same node (within 100ms) to avoid UI flicker during gestures
+    // Filter out rapid changes ONLY on the same node (within 100ms) to avoid UI flicker during gestures
+    // BUT allow different nodes to be selected quickly
     if (_lastSelectionNodeId == selectedNodeId && timeSinceLastChange < 100) {
       print("🔄 Filtered out rapid duplicate selection change (${timeSinceLastChange}ms ago)");
       return;
     }
+    
+    // CRITICAL: Always allow different node selections, even if rapid
+    // This prevents Flutter getting out of sync with Android during quick taps
     
     // Update tracking variables
     _lastSelectionNodeId = selectedNodeId;
@@ -647,6 +636,12 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       } else {
         _statusText = "📱 Android deselected: $previousSelection";
         print("📱 Android deselected node: $previousSelection");
+      }
+      
+      // SYNC VERIFICATION: Log state alignment
+      print("🔄 State sync check - Flutter: $_selectedNodeName, Android via callback: $selectedNodeId");
+      if (_selectedNodeName != selectedNodeId) {
+        print("⚠️ POTENTIAL SYNC ISSUE: Flutter state != Android callback");
       }
     });
     print("🔄 _onSelectionChanged completed - _selectedNodeName is now: $_selectedNodeName");
