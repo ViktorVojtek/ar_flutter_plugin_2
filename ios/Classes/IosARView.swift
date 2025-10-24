@@ -66,6 +66,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     let sessionManagerChannel: FlutterMethodChannel
     let objectManagerChannel: FlutterMethodChannel
     let anchorManagerChannel: FlutterMethodChannel
+    
+    // Light estimation monitoring support
+    private var isMonitoringLighting = false
+    private var lightingCheckTimer: Timer?
+    private var lightingCheckInterval: TimeInterval = 1.0 // Check every second
+    
     var showPlanes = false
     var planeCount = 0
     var customPlaneTexturePath: String? = nil
@@ -251,6 +257,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 let state = self.getPluginState()
                 result(state)
                 break
+            case "getLightEstimate":
+                getLightEstimate(result: result)
+                break
+            case "enableLightingMonitoring":
+                enableLightingMonitoring(arguments: arguments, result: result)
+                break
             default:
                 result(FlutterMethodNotImplemented)
                 break
@@ -412,6 +424,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         // Set plane detection configuration
         self.configuration = ARWorldTrackingConfiguration()
         self.configuration.environmentTexturing = .automatic
+        
+        // Enable light estimation for ARKit
+        self.configuration.isLightEstimationEnabled = true
+        
         if let planeDetectionConfig = arguments["planeDetectionConfig"] as? Int {
             switch planeDetectionConfig {
                 case 1: 
@@ -1734,6 +1750,115 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 assetCache.removeValue(forKey: key)
             }
         }
+    }
+    
+    // =================================================================
+    // MARK: - Light Estimation Methods
+    // =================================================================
+    
+    /**
+     * Enable or disable automatic lighting condition monitoring
+     * Sends periodic updates via onLightingConditionChanged callback
+     */
+    private func enableLightingMonitoring(arguments: Dictionary<String, Any>?, result: FlutterResult) {
+        let enable = arguments?["enable"] as? Bool ?? true
+        
+        if let intervalMs = arguments?["intervalMs"] as? Int {
+            lightingCheckInterval = TimeInterval(intervalMs) / 1000.0
+        }
+        
+        isMonitoringLighting = enable
+        
+        if enable {
+            print("💡 Starting lighting monitoring (interval: \(lightingCheckInterval)s)")
+            startLightingMonitoring()
+        } else {
+            print("💡 Stopping lighting monitoring")
+            stopLightingMonitoring()
+        }
+        
+        result(true)
+    }
+    
+    /**
+     * Start the lighting monitoring timer
+     */
+    private func startLightingMonitoring() {
+        stopLightingMonitoring() // Clear any existing timer
+        
+        lightingCheckTimer = Timer.scheduledTimer(withTimeInterval: lightingCheckInterval, repeats: true) { [weak self] _ in
+            self?.checkLightingConditions()
+        }
+    }
+    
+    /**
+     * Stop the lighting monitoring timer
+     */
+    private func stopLightingMonitoring() {
+        lightingCheckTimer?.invalidate()
+        lightingCheckTimer = nil
+    }
+    
+    /**
+     * Get current light estimate from ARKit
+     * Returns ambient intensity and color temperature data
+     */
+    private func getLightEstimate(result: FlutterResult) {
+        guard let frame = sceneView.session.currentFrame else {
+            result(FlutterError(code: "NO_FRAME", message: "AR frame not available", details: nil))
+            return
+        }
+        
+        guard let lightEstimate = frame.lightEstimate else {
+            result(FlutterError(code: "NO_ESTIMATE", message: "Light estimate not available", details: nil))
+            return
+        }
+        
+        let ambientIntensity = lightEstimate.ambientIntensity
+        let ambientColorTemperature = lightEstimate.ambientColorTemperature
+        
+        // Normalize ambient intensity (typical range: 0-2000 lumens, normalize to 0-1)
+        let normalizedIntensity = Float(ambientIntensity / 2000.0)
+        let isLowLight = normalizedIntensity < 0.3
+        let isVeryLowLight = normalizedIntensity < 0.15
+        
+        let lightData: [String: Any] = [
+            "ambientIntensity": ambientIntensity,
+            "normalizedIntensity": normalizedIntensity,
+            "ambientColorTemperature": ambientColorTemperature,
+            "isLowLight": isLowLight,
+            "isVeryLowLight": isVeryLowLight,
+            "timestamp": Date().timeIntervalSince1970 * 1000
+        ]
+        
+        print("💡 Light estimate - Intensity: \(normalizedIntensity), Low light: \(isLowLight), Very low: \(isVeryLowLight)")
+        result(lightData)
+    }
+    
+    /**
+     * Check lighting conditions and notify Flutter if monitoring is enabled
+     * Called periodically by lightingCheckTimer
+     */
+    private func checkLightingConditions() {
+        guard let frame = sceneView.session.currentFrame,
+              let lightEstimate = frame.lightEstimate else {
+            return
+        }
+        
+        let ambientIntensity = lightEstimate.ambientIntensity
+        let normalizedIntensity = Float(ambientIntensity / 2000.0)
+        let isLowLight = normalizedIntensity < 0.3
+        let isVeryLowLight = normalizedIntensity < 0.15
+        
+        let lightData: [String: Any] = [
+            "ambientIntensity": ambientIntensity,
+            "normalizedIntensity": normalizedIntensity,
+            "isLowLight": isLowLight,
+            "isVeryLowLight": isVeryLowLight,
+            "timestamp": Date().timeIntervalSince1970 * 1000
+        ]
+        
+        sessionManagerChannel.invokeMethod("onLightingConditionChanged", arguments: lightData)
     }
 }
 

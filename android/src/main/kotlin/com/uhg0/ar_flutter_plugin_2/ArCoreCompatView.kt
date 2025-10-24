@@ -87,6 +87,24 @@ class ArCoreCompatView(
     private var lastTouchDownY = 0f
     private var hasTouchMoved = false
     
+    // Height-locked panning support - stores detected floor heights per node
+    private val nodeFloorHeights = ConcurrentHashMap<String, Float>()
+    private var enableHeightLockedPanning = true
+    private var heightLockTolerance = 0.05f // 5cm tolerance for height variations
+    
+    // Light estimation monitoring support
+    private var isMonitoringLighting = false
+    private var lightingCheckInterval = 1000L // Check every second by default
+    private val lightingHandler = Handler(Looper.getMainLooper())
+    private val lightingCheckRunnable = object : Runnable {
+        override fun run() {
+            checkLightingConditions()
+            if (isMonitoringLighting) {
+                lightingHandler.postDelayed(this, lightingCheckInterval)
+            }
+        }
+    }
+    
     // Cache system for model downloading and storage
     private val modelDownloadService: ModelDownloadService by lazy {
         ModelDownloadService(activity.applicationContext)
@@ -197,7 +215,7 @@ class ArCoreCompatView(
                 }
             }
             
-            // Create TransformationSystem with enhanced error handling and gesture tracking
+            // Create TransformationSystem with enhanced error handling and gesture tracking + height-locked panning
             transformationSystem = object : TransformationSystem(activity.resources.displayMetrics, selectionVisualizer) {
                 private var isGestureActive = false
                 private var lastGestureType: String? = null
@@ -205,6 +223,11 @@ class ArCoreCompatView(
                 private var gestureStartX = 0f
                 private var gestureStartY = 0f
                 private var gestureMovementThreshold = 30f // pixels
+                
+                // Height-locked panning variables
+                private var heightLockedPanning = false
+                private var originalHeight: Float? = null
+                private var panStartPosition: Vector3? = null
                 
                 override fun onTouch(hitTestResult: HitTestResult?, motionEvent: MotionEvent?) {
                     try {
@@ -302,17 +325,60 @@ class ArCoreCompatView(
                                 }
                             }
                             
-                            // CRITICAL PAN DEBUG: Track position changes for debugging
+                            // CRITICAL PAN DEBUG: Track position changes for debugging (use worldPosition for accurate tracking)
                             val currentSelectedNode = this.selectedNode
                             val preTransformPosition = if (currentSelectedNode is TransformableNode) {
-                                Vector3(currentSelectedNode.localPosition.x, currentSelectedNode.localPosition.y, currentSelectedNode.localPosition.z)
+                                Vector3(currentSelectedNode.worldPosition.x, currentSelectedNode.worldPosition.y, currentSelectedNode.worldPosition.z)
                             } else null
                             
-                            super.onTouch(hitTestResult, motionEvent)
-                            
-                            // CRITICAL PAN DEBUG: Check if position actually changed
+            // ENHANCED PANNING: Handle height-locked panning with custom projection when ARCore fails
+            Log.d(TAG, "🔒 PANNING CHECK: enableHeightLockedPanning=$enableHeightLockedPanning, isTransformable=${currentSelectedNode is TransformableNode}, gestureType=$lastGestureType, active=$isGestureActive, action=${motionEvent?.action}")
+            if (enableHeightLockedPanning && currentSelectedNode is TransformableNode && 
+                lastGestureType == "pan" && isGestureActive && motionEvent?.action == MotionEvent.ACTION_MOVE) {
+                
+                val nodeId = nodeToUniqueIdMap[currentSelectedNode] ?: nodesMap.entries.find { it.value == currentSelectedNode }?.key ?: currentSelectedNode.name
+                val storedHeight = nodeFloorHeights[nodeId]
+                
+                if (storedHeight != null) {
+                    Log.d(TAG, "🔒 HEIGHT-LOCKED PANNING: Attempting custom projection for node $nodeId at height $storedHeight")
+                    // Try custom height-locked projection first
+                    val customProjection = tryCustomHeightProjection(motionEvent, storedHeight)
+                    if (customProjection != null) {
+                        // Use custom projection - this bypasses ARCore's failed hit testing
+                        val oldPosition = currentSelectedNode.worldPosition
+                        currentSelectedNode.worldPosition = customProjection
+                        Log.d(TAG, "🔒 CUSTOM PROJECTION SUCCESS: Moved object from $oldPosition to $customProjection (height-locked at $storedHeight)")
+                        return // Skip ARCore's transformation since we handled it
+                    } else {
+                        Log.w(TAG, "🔒 CUSTOM PROJECTION FAILED: Could not project touch to height $storedHeight")
+                    }
+                } else {
+                    Log.w(TAG, "🔒 HEIGHT-LOCKED PANNING: No stored height for node $nodeId")
+                }
+            }
+            
+            // Fallback to ARCore's transformation (this will work in well-scanned areas)
+            super.onTouch(hitTestResult, motionEvent)
+            
+            // SECONDARY HEIGHT CORRECTION: Fix any Y drift from ARCore transformation
+            if (enableHeightLockedPanning && currentSelectedNode is TransformableNode && 
+                lastGestureType == "pan" && isGestureActive && motionEvent?.action == MotionEvent.ACTION_MOVE) {
+                
+                val nodeId = nodeToUniqueIdMap[currentSelectedNode] ?: nodesMap.entries.find { it.value == currentSelectedNode }?.key ?: currentSelectedNode.name
+                val storedHeight = nodeFloorHeights[nodeId]
+                
+                if (storedHeight != null) {
+                    // Only correct the Y position if ARCore changed it
+                    val currentPos = currentSelectedNode.worldPosition
+                    if (Math.abs(currentPos.y - storedHeight) > heightLockTolerance) {
+                        val correctedPosition = Vector3(currentPos.x, storedHeight, currentPos.z)
+                        currentSelectedNode.worldPosition = correctedPosition
+                        Log.d(TAG, "🔒 HEIGHT CORRECTION: Fixed Y drift from ${currentPos.y} to $storedHeight for node $nodeId")
+                    }
+                }
+            }                            // CRITICAL PAN DEBUG: Check if position actually changed (use worldPosition for accurate tracking)
                             if (currentSelectedNode is TransformableNode && preTransformPosition != null && motionEvent?.action == MotionEvent.ACTION_MOVE) {
-                                val postTransformPosition = currentSelectedNode.localPosition
+                                val postTransformPosition = currentSelectedNode.worldPosition
                                 val deltaX = postTransformPosition.x - preTransformPosition.x
                                 val deltaY = postTransformPosition.y - preTransformPosition.y
                                 val deltaZ = postTransformPosition.z - preTransformPosition.z
@@ -497,6 +563,14 @@ class ArCoreCompatView(
             "clearCache" -> handleClearCache(call, result)
             "getCacheStats" -> handleGetCacheStats(call, result)
             "predownloadModels" -> handlePredownloadModels(call, result)
+            // Add height-locked panning methods
+            "enableHeightLockedPanning" -> handleEnableHeightLockedPanning(call, result)
+            "disableHeightLockedPanning" -> handleDisableHeightLockedPanning(call, result)
+            "setNodeFloorHeight" -> handleSetNodeFloorHeight(call, result)
+            "getNodeFloorHeight" -> handleGetNodeFloorHeight(call, result)
+            // Add light estimation methods
+            "getLightEstimate" -> handleGetLightEstimate(call, result)
+            "enableLightingMonitoring" -> handleEnableLightingMonitoring(call, result)
             // Add common platform view methods that Flutter might call
             "sendMotionEvent" -> handleSendMotionEvent(call, result)
             "onTouchEvent" -> handleOnTouchEvent(call, result)
@@ -792,6 +866,244 @@ class ArCoreCompatView(
     }
 
     // =================================================================
+    // Height-Locked Panning Methods
+    // =================================================================
+    
+    /**
+     * Enable height-locked panning mode - objects will pan freely but stay at detected floor height
+     */
+    private fun handleEnableHeightLockedPanning(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val tolerance = (call.arguments as? Number)?.toFloat() ?: 0.05f
+            
+            enableHeightLockedPanning = true
+            heightLockTolerance = tolerance
+            
+            Log.d(TAG, "🔒 HEIGHT-LOCKED PANNING: Enabled with tolerance: ${tolerance}m")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error enabling height-locked panning: ${e.message}")
+            result.error("ENABLE_HEIGHT_LOCK_ERROR", "Failed to enable height-locked panning: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Disable height-locked panning mode - return to normal ARCore plane-based panning
+     */
+    private fun handleDisableHeightLockedPanning(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            enableHeightLockedPanning = false
+            
+            Log.d(TAG, "🔓 HEIGHT-LOCKED PANNING: Disabled")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error disabling height-locked panning: ${e.message}")
+            result.error("DISABLE_HEIGHT_LOCK_ERROR", "Failed to disable height-locked panning: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Set the floor height for a specific node (called when object is placed on detected surface)
+     */
+    private fun handleSetNodeFloorHeight(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val arguments = call.arguments as? Map<String, Any>
+            val nodeId = arguments?.get("nodeId") as? String
+            val height = (arguments?.get("height") as? Number)?.toFloat()
+            
+            if (nodeId == null || height == null) {
+                result.error("INVALID_ARGUMENTS", "nodeId and height are required", null)
+                return
+            }
+            
+            nodeFloorHeights[nodeId] = height
+            
+            Log.d(TAG, "🔒 HEIGHT SET: Node $nodeId floor height set to $height")
+            result.success(true)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error setting node floor height: ${e.message}")
+            result.error("SET_HEIGHT_ERROR", "Failed to set node floor height: ${e.message}", null)
+        }
+    }
+    
+    /**
+     * Get the stored floor height for a specific node
+     */
+    private fun handleGetNodeFloorHeight(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeId = call.arguments as? String
+            
+            if (nodeId == null) {
+                result.error("INVALID_ARGUMENTS", "nodeId is required", null)
+                return
+            }
+            
+            val height = nodeFloorHeights[nodeId]
+            
+            Log.d(TAG, "🔒 HEIGHT GET: Node $nodeId floor height: $height")
+            result.success(height)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error getting node floor height: ${e.message}")
+            result.error("GET_HEIGHT_ERROR", "Failed to get node floor height: ${e.message}", null)
+        }
+    }
+
+    // =================================================================
+    // Light Estimation Methods
+    // =================================================================
+    
+    /**
+     * Enable or disable automatic lighting condition monitoring
+     * Sends periodic updates via onLightingConditionChanged callback
+     */
+    private fun handleEnableLightingMonitoring(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val arguments = call.arguments as? Map<*, *>
+            val enable = arguments?.get("enable") as? Boolean ?: true
+            val intervalMs = arguments?.get("intervalMs") as? Int
+            
+            if (intervalMs != null && intervalMs > 0) {
+                lightingCheckInterval = intervalMs.toLong()
+            }
+            
+            isMonitoringLighting = enable
+            
+            if (enable) {
+                Log.d(TAG, "💡 Starting lighting monitoring (interval: ${lightingCheckInterval}ms)")
+                lightingHandler.post(lightingCheckRunnable)
+            } else {
+                Log.d(TAG, "💡 Stopping lighting monitoring")
+                lightingHandler.removeCallbacks(lightingCheckRunnable)
+            }
+            
+            result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error toggling lighting monitoring: ${e.message}")
+            result.error("LIGHTING_MONITORING_ERROR", e.message, null)
+        }
+    }
+    
+    /**
+     * Get current light estimate from ARCore
+     * Returns pixel intensity and color correction data
+     */
+    private fun handleGetLightEstimate(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val frame = arSceneView?.arFrame
+            if (frame == null) {
+                result.error("NO_FRAME", "AR frame not available", null)
+                return
+            }
+            
+            val lightEstimate = frame.lightEstimate
+            if (lightEstimate == null || lightEstimate.state != LightEstimate.State.VALID) {
+                result.error("NO_ESTIMATE", "Light estimate not available or invalid", null)
+                return
+            }
+            
+            val pixelIntensity = lightEstimate.pixelIntensity
+            
+            // Threshold for low light detection (typical range: 0.0 to 1.0+)
+            val isLowLight = pixelIntensity < 0.3f
+            val isVeryLowLight = pixelIntensity < 0.15f
+            
+            // Try to get color correction if available (may not be supported in all ARCore versions)
+            val colorCorrection = try {
+                val colorCorrectionMethod = lightEstimate.javaClass.getMethod("getColorCorrection")
+                val colorArray = colorCorrectionMethod.invoke(lightEstimate) as FloatArray
+                listOf(
+                    colorArray[0].toDouble(),
+                    colorArray[1].toDouble(),
+                    colorArray[2].toDouble(),
+                    colorArray[3].toDouble()
+                )
+            } catch (e: Exception) {
+                // Color correction not available, use default
+                listOf(1.0, 1.0, 1.0, 1.0)
+            }
+            
+            val lightData = mapOf(
+                "pixelIntensity" to pixelIntensity.toDouble(),
+                "colorCorrection" to colorCorrection,
+                "isLowLight" to isLowLight,
+                "isVeryLowLight" to isVeryLowLight,
+                "timestamp" to System.currentTimeMillis()
+            )
+            
+            Log.d(TAG, "💡 Light estimate - Intensity: $pixelIntensity, Low light: $isLowLight, Very low: $isVeryLowLight")
+            result.success(lightData)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error getting light estimate: ${e.message}")
+            result.error("LIGHT_ESTIMATE_ERROR", e.message, null)
+        }
+    }
+    
+    /**
+     * Check lighting conditions and notify Flutter if monitoring is enabled
+     * Called periodically by lightingCheckRunnable
+     */
+    private fun checkLightingConditions() {
+        try {
+            Log.d(TAG, "💡 checkLightingConditions called, monitoring: $isMonitoringLighting")
+            
+            if (!isMonitoringLighting) {
+                Log.d(TAG, "💡 Monitoring disabled, skipping check")
+                return
+            }
+            
+            val sceneView = arSceneView
+            if (sceneView == null) {
+                Log.d(TAG, "💡 arSceneView is null, skipping check")
+                return
+            }
+            
+            val frame = sceneView.arFrame
+            if (frame == null) {
+                Log.d(TAG, "💡 arFrame is null, skipping check")
+                return
+            }
+            
+            val lightEstimate = frame.lightEstimate
+            if (lightEstimate == null) {
+                Log.d(TAG, "💡 lightEstimate is null, skipping check")
+                return
+            }
+            
+            if (lightEstimate.state != LightEstimate.State.VALID) {
+                Log.d(TAG, "💡 lightEstimate state is not VALID: ${lightEstimate.state}")
+                return
+            }
+            
+            val pixelIntensity = lightEstimate.pixelIntensity
+            val isLowLight = pixelIntensity < 0.3f
+            val isVeryLowLight = pixelIntensity < 0.15f
+            
+            Log.d(TAG, "💡 Light check OK - Intensity: $pixelIntensity, Low: $isLowLight, VeryLow: $isVeryLowLight")
+            
+            // Notify Flutter about lighting conditions
+            val lightData = mapOf(
+                "pixelIntensity" to pixelIntensity.toDouble(),
+                "isLowLight" to isLowLight,
+                "isVeryLowLight" to isVeryLowLight,
+                "timestamp" to System.currentTimeMillis()
+            )
+            
+            activity.runOnUiThread {
+                Log.d(TAG, "💡 Invoking onLightingConditionChanged callback to Flutter")
+                sessionChannel.invokeMethod("onLightingConditionChanged", lightData)
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error checking lighting: ${e.message}", e)
+        }
+    }
+
+    // =================================================================
     // Cache Management Methods
     // =================================================================
     
@@ -1027,16 +1339,17 @@ class ArCoreCompatView(
         // CRITICAL FIX: Always check for empty space taps for deselection, even if plane detection is disabled
         var foundValidHit = false
         
-        // SECOND: Try plane hit detection if AR session is available
+        // SECOND: Enhanced hit detection - try ARCore first, fallback to virtual plane
         val frame = arSceneView?.arFrame
         if (frame != null && frame.camera.trackingState == TrackingState.TRACKING) {
             val hits = frame.hitTest(motionEvent.x, motionEvent.y)
-            Log.d(TAG, "🎯 Found ${hits.size} hit test results")
+            Log.d(TAG, "🎯 Found ${hits.size} ARCore hit test results")
             
+            // First try: Use ARCore's detected planes (most accurate)
             for (hit in hits) {
                 val trackable = hit.trackable
                 if (trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)) {
-                    Log.d(TAG, "🎯 Valid plane hit found!")
+                    Log.d(TAG, "🎯 Valid ARCore plane hit found!")
                     // Convert pose to matrix for Flutter - reuse array to reduce allocations
                     hit.hitPose.toMatrix(reusableMatrixArray, 0)
                     val matrixList = reusableMatrixArray.toList()
@@ -1056,6 +1369,16 @@ class ArCoreCompatView(
                     sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(hitResult))
                     foundValidHit = true
                     break
+                }
+            }
+            
+            // Second try: If ARCore hit testing failed, try virtual plane projection
+            if (!foundValidHit && enableHeightLockedPanning && nodeFloorHeights.isNotEmpty()) {
+                val virtualHit = tryVirtualPlaneHit(frame, motionEvent.x, motionEvent.y)
+                if (virtualHit != null) {
+                    Log.d(TAG, "🎯 Virtual plane hit created for poorly scanned area!")
+                    sessionChannel.invokeMethod("onPlaneOrPointTap", listOf(virtualHit))
+                    foundValidHit = true
                 }
             }
         } else {
@@ -1109,6 +1432,12 @@ class ArCoreCompatView(
                 }
                 
                 nodesMap[name] = anchorNode
+                
+                // Store floor height for height-locked panning
+                val floorHeight = pose.translation[1] // Y component of pose
+                nodeFloorHeights[name] = floorHeight
+                Log.d(TAG, "🔒 FLOOR HEIGHT: Stored height $floorHeight for anchor $name")
+                
                 Log.d(TAG, "✅ Anchor created successfully: $name")
                 result.success(true)
             } else {
@@ -1458,6 +1787,10 @@ class ArCoreCompatView(
                                         // ANDROID FIX: Add reverse mapping for tap detection
                                         nodeToUniqueIdMap[transformableNode] = uniqueNodeId
                                         
+                                        // Store floor height for height-locked panning based on initial Y position
+                                        nodeFloorHeights[uniqueNodeId] = positionY
+                                        Log.d(TAG, "🔒 FLOOR HEIGHT: Stored height $positionY for node $uniqueNodeId")
+                                        
                                         Log.d(TAG, "✅ Node created with cached model (direct): $nodeName")
                                         Log.d(TAG, "🆔 Generated unique node ID for iOS compatibility: $uniqueNodeId")
                                         
@@ -1478,6 +1811,10 @@ class ArCoreCompatView(
                                     
                                     // ANDROID FIX: Add reverse mapping for tap detection
                                     nodeToUniqueIdMap[transformableNode] = uniqueNodeId
+                                    
+                                    // Store floor height for height-locked panning based on initial Y position
+                                    nodeFloorHeights[uniqueNodeId] = positionY
+                                    Log.d(TAG, "🔒 FLOOR HEIGHT: Stored height $positionY for node $uniqueNodeId")
                                     
                                     Log.d(TAG, "✅ Node created with fallback placement: $nodeName")
                                     Log.d(TAG, "🆔 Generated unique node ID for iOS compatibility: $uniqueNodeId")
@@ -1949,6 +2286,18 @@ class ArCoreCompatView(
                                 
                                 nodesMap[nodeName] = transformableNode
                                 
+                                // Store floor height for height-locked panning based on anchor + offset position
+                                val finalHeight = anchorNode.worldPosition.y + positionY
+                                nodeFloorHeights[nodeName] = finalHeight
+                                Log.d(TAG, "🔒 FLOOR HEIGHT: Stored height $finalHeight for node $nodeName (anchor height: ${anchorNode.worldPosition.y}, offset: $positionY)")
+                                
+                                // CRITICAL FIX: Generate and store a unique ID for this node for height-locked panning lookups
+                                val uniqueNodeId = "android_node_${System.currentTimeMillis()}_${(0..999).random()}"
+                                nodeToUniqueIdMap[transformableNode] = uniqueNodeId
+                                // Also store height using the unique ID so height-locked panning can find it
+                                nodeFloorHeights[uniqueNodeId] = finalHeight
+                                Log.d(TAG, "🔒 FLOOR HEIGHT: Also stored height $finalHeight for unique ID $uniqueNodeId")
+                                
                                 Log.d(TAG, "✅ Node added to plane anchor with cached model: $nodeName")
                                 result.success(nodeName)
                             }
@@ -2085,6 +2434,13 @@ class ArCoreCompatView(
                     val removedNode = nodesMap.remove(nodeId)
                     if (removedNode != null) {
                         Log.d(TAG, "🗑️ SPECIFIC TRACKING: Successfully removed ONLY target node from nodesMap")
+                        
+                        // Clean up floor height data
+                        nodeFloorHeights.remove(nodeId)
+                        Log.d(TAG, "🔒 FLOOR HEIGHT: Cleaned up height data for node $nodeId")
+                        
+                        // Clear any references from the reverse mapping
+                        nodeToUniqueIdMap.remove(removedNode)
                     } else {
                         Log.w(TAG, "⚠️ SPECIFIC TRACKING: Node was not in nodesMap during removal")
                     }
@@ -2532,6 +2888,14 @@ class ArCoreCompatView(
             reusableNodeHitResults.clear()
             transformationSystem = null
             gestureDetector = null
+            
+            // Clean up height-locked panning data
+            nodeFloorHeights.clear()
+            
+            // Stop lighting monitoring and clean up handler
+            isMonitoringLighting = false
+            lightingHandler.removeCallbacks(lightingCheckRunnable)
+            Log.d(TAG, "🔒 FLOOR HEIGHT: Cleaned up all height data on dispose")
             
             Log.d(TAG, "✅ AR scene disposal completed, state preserved for restoration")
             result.success(null)
@@ -3262,6 +3626,198 @@ class ArCoreCompatView(
             
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in delayed tap detection: ${e.message}")
+        }
+    }
+    
+    /**
+     * Custom height projection for dragging objects when ARCore's hit testing fails
+     * This projects the touch point onto a virtual plane at the stored height
+     */
+    private fun tryCustomHeightProjection(motionEvent: MotionEvent, targetHeight: Float): Vector3? {
+        try {
+            val frame = arSceneView?.arFrame ?: return null
+            val camera = frame.camera
+            
+            if (camera.trackingState != TrackingState.TRACKING) {
+                Log.w(TAG, "🔒 Custom projection: Camera not tracking")
+                return null
+            }
+            
+            // Get view dimensions
+            val view = arSceneView ?: return null
+            val viewWidth = view.width.toFloat()
+            val viewHeight = view.height.toFloat()
+            
+            if (viewWidth <= 0 || viewHeight <= 0) return null
+            
+            // Convert screen coordinates to normalized device coordinates (-1 to 1)
+            val ndcX = (motionEvent.x / viewWidth) * 2.0f - 1.0f
+            val ndcY = -((motionEvent.y / viewHeight) * 2.0f - 1.0f) // Flip Y
+            
+            Log.d(TAG, "🔒 Custom projection: Screen (${motionEvent.x}, ${motionEvent.y}) -> NDC ($ndcX, $ndcY)")
+            
+            // Get camera pose
+            val cameraPose = camera.pose
+            val cameraTranslation = cameraPose.translation
+            
+            // Create ray direction in camera space (simplified projection)
+            // For a more accurate projection, we would use the full inverse view-projection matrix
+            val rayOrigin = Vector3(cameraTranslation[0], cameraTranslation[1], cameraTranslation[2])
+            
+            // Simple ray direction calculation (can be improved with proper inverse projection)
+            val forwardDirection = Vector3(0f, 0f, -1f) // Camera looks down -Z
+            val rightDirection = Vector3(1f, 0f, 0f)     // Camera right is +X
+            val upDirection = Vector3(0f, 1f, 0f)        // Camera up is +Y
+            
+            // Use a simpler approach: get the camera's transformation matrix
+            val cameraMatrix = FloatArray(16)
+            cameraPose.toMatrix(cameraMatrix, 0)
+            
+            // Extract forward direction from camera matrix (3rd column, negated)
+            val forwardX = -cameraMatrix[8]
+            val forwardY = -cameraMatrix[9] 
+            val forwardZ = -cameraMatrix[10]
+            
+            // Extract right direction from camera matrix (1st column)
+            val rightX = cameraMatrix[0]
+            val rightY = cameraMatrix[1]
+            val rightZ = cameraMatrix[2]
+            
+            // Extract up direction from camera matrix (2nd column)
+            val upX = cameraMatrix[4]
+            val upY = cameraMatrix[5]
+            val upZ = cameraMatrix[6]
+            
+            // Calculate ray direction with screen offset
+            val rayDirX = forwardX + rightX * ndcX * 0.5f + upX * ndcY * 0.5f
+            val rayDirY = forwardY + rightY * ndcX * 0.5f + upY * ndcY * 0.5f
+            val rayDirZ = forwardZ + rightZ * ndcX * 0.5f + upZ * ndcY * 0.5f
+            
+            val rayDirection = Vector3(rayDirX, rayDirY, rayDirZ)
+            
+            // Intersect ray with horizontal plane at targetHeight
+            val planeY = targetHeight
+            val rayY = rayDirection.y
+            
+            if (Math.abs(rayY) < 0.001f) {
+                Log.w(TAG, "🔒 Custom projection: Ray parallel to target plane")
+                return null
+            }
+            
+            // Calculate intersection parameter t
+            val t = (planeY - rayOrigin.y) / rayY
+            
+            if (t < 0) {
+                Log.w(TAG, "🔒 Custom projection: Intersection behind camera")
+                return null
+            }
+            
+            // Calculate intersection point manually
+            val hitX = rayOrigin.x + rayDirection.x * t
+            val hitY = targetHeight  // Locked to target height
+            val hitZ = rayOrigin.z + rayDirection.z * t
+            
+            val hitPoint = Vector3(hitX, hitY, hitZ)
+            
+            Log.d(TAG, "🔒 Custom projection: Hit at ($hitPoint) for height $targetHeight")
+            return hitPoint
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in custom height projection: ${e.message}")
+            return null
+        }
+    }
+
+    /**
+     * Creates a virtual plane hit when ARCore's hit testing fails in poorly scanned areas
+     * This uses camera ray projection onto a virtual plane at detected floor height
+     */
+    private fun tryVirtualPlaneHit(frame: Frame, screenX: Float, screenY: Float): Map<String, Any>? {
+        try {
+            // Get the average floor height from stored node heights
+            val averageHeight = nodeFloorHeights.values.average().toFloat()
+            Log.d(TAG, "🔮 Virtual hit: Using average floor height: $averageHeight")
+            
+            // Get camera pose and projection
+            val camera = frame.camera
+            val cameraPose = camera.pose
+            
+            // Get view dimensions
+            val view = arSceneView ?: return null
+            val viewWidth = view.width.toFloat()
+            val viewHeight = view.height.toFloat()
+            
+            if (viewWidth <= 0 || viewHeight <= 0) return null
+            
+            // Convert screen coordinates to normalized device coordinates (-1 to 1)
+            val ndcX = (screenX / viewWidth) * 2.0f - 1.0f
+            val ndcY = -((screenY / viewHeight) * 2.0f - 1.0f) // Flip Y
+            
+            // Get camera projection matrix
+            val projectionMatrix = FloatArray(16)
+            camera.getProjectionMatrix(projectionMatrix, 0, 0.1f, 100.0f)
+            
+            // Create ray from camera through screen point
+            val rayOrigin = FloatArray(3)
+            val rayDirection = FloatArray(3)
+            
+            // Camera position
+            val cameraTranslation = cameraPose.translation
+            rayOrigin[0] = cameraTranslation[0]
+            rayOrigin[1] = cameraTranslation[1] 
+            rayOrigin[2] = cameraTranslation[2]
+            
+            // Ray direction (simplified - could be more accurate with full inverse projection)
+            val cameraRotation = cameraPose.rotationQuaternion
+            rayDirection[0] = ndcX * 0.5f // Simplified direction calculation
+            rayDirection[1] = ndcY * 0.5f
+            rayDirection[2] = -1.0f // Forward
+            
+            // Apply camera rotation to ray direction (simplified)
+            // For a more accurate implementation, you'd use the full inverse projection matrix
+            
+            // Calculate intersection with virtual horizontal plane at averageHeight
+            val planeY = averageHeight
+            val cameraY = rayOrigin[1]
+            val directionY = rayDirection[1]
+            
+            if (Math.abs(directionY) < 0.001f) {
+                // Ray is parallel to plane
+                return null
+            }
+            
+            // Calculate intersection distance
+            val t = (planeY - cameraY) / directionY
+            
+            if (t < 0) {
+                // Intersection is behind camera
+                return null
+            }
+            
+            // Calculate intersection point
+            val hitX = rayOrigin[0] + rayDirection[0] * t
+            val hitY = planeY // Locked to virtual plane height
+            val hitZ = rayOrigin[2] + rayDirection[2] * t
+            
+            // Create pose matrix for the hit point
+            val hitMatrix = FloatArray(16)
+            hitMatrix[0] = 1f; hitMatrix[1] = 0f; hitMatrix[2] = 0f; hitMatrix[3] = 0f
+            hitMatrix[4] = 0f; hitMatrix[5] = 1f; hitMatrix[6] = 0f; hitMatrix[7] = 0f
+            hitMatrix[8] = 0f; hitMatrix[9] = 0f; hitMatrix[10] = 1f; hitMatrix[11] = 0f
+            hitMatrix[12] = hitX; hitMatrix[13] = hitY; hitMatrix[14] = hitZ; hitMatrix[15] = 1f
+            
+            val hitResult = mapOf(
+                "pose" to mapOf("matrix" to hitMatrix.toList()),
+                "plane" to mapOf("type" to "horizontal"),
+                "virtual" to true // Mark as virtual hit for debugging
+            )
+            
+            Log.d(TAG, "🔮 Virtual hit created at: ($hitX, $hitY, $hitZ)")
+            return hitResult
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error creating virtual plane hit: ${e.message}")
+            return null
         }
     }
     

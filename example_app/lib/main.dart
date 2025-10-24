@@ -12,6 +12,7 @@ import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:vector_math/vector_math_64.dart' as vector_math;
 import 'auto_placement_test_fixed.dart';
+import 'light_estimation_screen.dart';
 
 void main() {
   runApp(MyApp());
@@ -76,6 +77,28 @@ class MainMenu extends StatelessWidget {
                 minimumSize: Size(200, 50),
               ),
             ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => LightEstimationScreen()),
+                );
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.wb_sunny, size: 20),
+                  SizedBox(width: 8),
+                  Text('Light Estimation'),
+                ],
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                minimumSize: Size(200, 50),
+              ),
+            ),
           ],
         ),
       ),
@@ -106,6 +129,9 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   DateTime? _lastSelectionTime;
   String? _lastDeselectedNode;
   DateTime? _deselectionTime;
+
+  // Height-locked panning state
+  bool _heightLockedPanningEnabled = false;
 
   @override
   void dispose() {
@@ -212,7 +238,71 @@ class _ObjectGesturesState extends State<ObjectGestures> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                // Only remove everything button
+                // Height-locked panning toggle
+                Container(
+                  margin: EdgeInsets.symmetric(horizontal: 20),
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 6,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _heightLockedPanningEnabled ? Icons.lock : Icons.lock_open,
+                        color: _heightLockedPanningEnabled ? Colors.green : Colors.orange,
+                        size: 24,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        _heightLockedPanningEnabled ? 'Height-Locked Panning: ON' : 'Height-Locked Panning: OFF',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Switch(
+                        value: _heightLockedPanningEnabled,
+                        onChanged: _toggleHeightLockedPanning,
+                        activeColor: Colors.green,
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 12),
+                // Info text about the feature
+                Container(
+                  margin: EdgeInsets.symmetric(horizontal: 20),
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    _heightLockedPanningEnabled 
+                      ? '🔒 Objects stay at floor height when dragged, even in poorly scanned areas!'
+                      : '🔓 Normal panning - limited to well-scanned surfaces',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[800],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 12),
+                // Remove everything button
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -287,6 +377,9 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
     print("🎯🎯🎯 FLUTTER: Callback set! Function: $onPlaneOrPointTapped");
+    
+    // Enable height-locked panning by default for better user experience
+    _enableHeightLockedPanningByDefault();
     
     // Add other callbacks as needed...
   }
@@ -405,11 +498,18 @@ class _ObjectGesturesState extends State<ObjectGestures> {
             print("🔄 Selection handler already configured");
           }
           
+          // Log the floor height for debugging (if height-locked panning is enabled)
+          if (_heightLockedPanningEnabled) {
+            _logNodeFloorHeight(nodeId);
+          }
+          
           // Show success message to user
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("🦆 Duck placed! ID: $nodeId"), 
-              duration: Duration(seconds: 2),
+              content: Text(_heightLockedPanningEnabled 
+                ? "🦆 Duck placed! Try dragging it - it will stay at floor height even in poorly scanned areas!"
+                : "🦆 Duck placed! ID: $nodeId"), 
+              duration: Duration(seconds: 3),
               backgroundColor: Colors.green,
             )
           );
@@ -489,5 +589,105 @@ class _ObjectGesturesState extends State<ObjectGestures> {
       }
     });
     print("🔄 _onSelectionChanged completed - _selectedNodeName is now: $_selectedNodeName");
+  }
+
+  /// Enable height-locked panning by default for better user experience
+  Future<void> _enableHeightLockedPanningByDefault() async {
+    try {
+      if (arObjectManager != null) {
+        bool success = await arObjectManager!.enableHeightLockedPanning(tolerance: 0.05);
+        if (success) {
+          setState(() {
+            _heightLockedPanningEnabled = true;
+          });
+          print("🔒 Height-locked panning enabled by default with 5cm tolerance");
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("🔒 Height-locked panning enabled - objects will stay at floor height!"),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 3),
+            )
+          );
+        } else {
+          print("❌ Failed to enable height-locked panning by default");
+        }
+      }
+    } catch (e) {
+      print("❌ Error enabling height-locked panning by default: $e");
+    }
+  }
+
+  /// Toggle height-locked panning on/off
+  Future<void> _toggleHeightLockedPanning(bool enabled) async {
+    try {
+      if (arObjectManager == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("AR not initialized yet"), backgroundColor: Colors.orange)
+        );
+        return;
+      }
+
+      bool success = false;
+      if (enabled) {
+        success = await arObjectManager!.enableHeightLockedPanning(tolerance: 0.05);
+        print("🔒 Attempting to enable height-locked panning...");
+      } else {
+        success = await arObjectManager!.disableHeightLockedPanning();
+        print("🔓 Attempting to disable height-locked panning...");
+      }
+
+      if (success) {
+        setState(() {
+          _heightLockedPanningEnabled = enabled;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(enabled 
+              ? "🔒 Height-locked panning enabled - objects stay at floor height!"
+              : "🔓 Height-locked panning disabled - normal ARCore panning"),
+            backgroundColor: enabled ? Colors.green : Colors.orange,
+            duration: Duration(seconds: 2),
+          )
+        );
+        
+        print(enabled 
+          ? "✅ Height-locked panning enabled successfully"
+          : "✅ Height-locked panning disabled successfully");
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("❌ Failed to ${enabled ? 'enable' : 'disable'} height-locked panning"),
+            backgroundColor: Colors.red,
+          )
+        );
+        print("❌ Failed to ${enabled ? 'enable' : 'disable'} height-locked panning");
+      }
+    } catch (e) {
+      print("❌ Error toggling height-locked panning: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Error: $e"),
+          backgroundColor: Colors.red,
+        )
+      );
+    }
+  }
+
+  /// Log the floor height of a node for debugging purposes
+  Future<void> _logNodeFloorHeight(String nodeId) async {
+    try {
+      if (arObjectManager != null) {
+        double? height = await arObjectManager!.getNodeFloorHeight(nodeId);
+        if (height != null) {
+          print("🔒 Floor height for node $nodeId: ${height.toStringAsFixed(3)}m");
+        } else {
+          print("⚠️ No floor height stored for node $nodeId");
+        }
+      }
+    } catch (e) {
+      print("❌ Error getting floor height for node $nodeId: $e");
+    }
   }
 }

@@ -32,6 +32,37 @@ if (ok) {
 📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
 📖 **[NUKE ALL Complete Documentation](NUKE_ALL_DOCUMENTATION.md)**
 
+## NEW: Light Estimation 💡
+
+Detect and respond to ambient lighting conditions in your AR scenes:
+
+- **Real-time Monitoring**: Continuous lighting condition tracking with configurable intervals
+- **On-Demand Queries**: Get instant light estimates whenever needed
+- **Low-Light Detection**: Automatic warnings when lighting is insufficient
+- **Cross-Platform**: Consistent API for both ARCore (Android) and ARKit (iOS)
+- **Easy Integration**: Simple callback-based API
+
+### Quick Example
+
+```dart
+void _onARViewCreated(ARSessionManager sessionManager, ...) {
+  // Set up lighting callback
+  sessionManager.onLightingConditionChanged = (lightData) {
+    final isLowLight = lightData['isLowLight'] ?? false;
+    if (isLowLight) {
+      showWarning('⚠️ Low light - move to brighter area');
+    }
+  };
+  
+  // Start monitoring every second
+  sessionManager.enableLightingMonitoring(enable: true, intervalMs: 1000);
+}
+```
+
+📖 **[Complete Light Estimation Guide](LIGHT_ESTIMATION_GUIDE.md)**
+📖 **[Quick Reference](LIGHT_ESTIMATION_QUICK_REF.md)**
+📝 **[Full Example](examples/light_estimation_example.dart)**
+
 ---
 
 This version is a direct adaptation of the original ar_flutter_plugin (https://pub.dev/packages/ar_flutter_plugin), 

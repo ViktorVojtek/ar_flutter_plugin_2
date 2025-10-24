@@ -387,4 +387,80 @@ class ARObjectManager {
       return false;
     }
   }
+
+  // =================================================================
+  // Height-Locked Panning Methods
+  // =================================================================
+
+  /// Enable height-locked panning mode - objects will pan freely but stay at detected floor height
+  /// [tolerance] - Height tolerance in meters (default: 0.05m = 5cm)
+  Future<bool> enableHeightLockedPanning({double tolerance = 0.05}) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Enabling height-locked panning with tolerance: ${tolerance}m');
+      }
+      final result = await _channel.invokeMethod<bool>('enableHeightLockedPanning', tolerance);
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in enableHeightLockedPanning: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Disable height-locked panning mode - return to normal ARCore plane-based panning
+  Future<bool> disableHeightLockedPanning() async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Disabling height-locked panning');
+      }
+      final result = await _channel.invokeMethod<bool>('disableHeightLockedPanning');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in disableHeightLockedPanning: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Set the floor height for a specific node (usually called automatically when object is placed)
+  /// [nodeId] - The unique ID of the node
+  /// [height] - The floor height in meters
+  Future<bool> setNodeFloorHeight(String nodeId, double height) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Setting floor height for node $nodeId: ${height}m');
+      }
+      final result = await _channel.invokeMethod<bool>('setNodeFloorHeight', {
+        'nodeId': nodeId,
+        'height': height,
+      });
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error in setNodeFloorHeight: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Get the stored floor height for a specific node
+  /// [nodeId] - The unique ID of the node
+  /// Returns the floor height in meters, or null if not found
+  Future<double?> getNodeFloorHeight(String nodeId) async {
+    try {
+      if (debug) {
+        print('ARObjectManager: Getting floor height for node: $nodeId');
+      }
+      final result = await _channel.invokeMethod<double?>('getNodeFloorHeight', nodeId);
+      return result;
+    } catch (e) {
+      if (debug) {
+        print('Error in getNodeFloorHeight: $e');
+      }
+      return null;
+    }
+  }
 }

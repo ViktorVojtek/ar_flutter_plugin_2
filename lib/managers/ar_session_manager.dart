@@ -13,6 +13,7 @@ import 'package:vector_math/vector_math_64.dart';
 typedef ARHitResultHandler = void Function(List<ARHitTestResult> hits);
 typedef ARPlaneResultHandler = void Function(ARPlane plane);
 typedef ErrorHandler = void Function(String error);
+typedef LightingConditionHandler = void Function(Map<String, dynamic> lightData);
 
 /// Manages the session configuration, parameters and events of an [ARView]
 class ARSessionManager {
@@ -36,6 +37,9 @@ class ARSessionManager {
 
   /// Callback that is triggered once error is triggered
   ErrorHandler? onError;
+
+  /// Receives lighting condition updates when monitoring is enabled
+  LightingConditionHandler? onLightingConditionChanged;
 
   ARSessionManager(int id, this.buildContext, this.planeDetectionConfig,
       {this.debug = false}) {
@@ -232,6 +236,46 @@ class ARSessionManager {
             }
           }
           break;
+        case 'onLightingConditionChanged':
+          print('💡 Flutter: Received onLightingConditionChanged callback');
+          if (onLightingConditionChanged != null) {
+            print('💡 Flutter: Callback handler is registered');
+            try {
+              // Convert Map<Object?, Object?> to Map<String, dynamic>
+              final rawData = call.arguments;
+              print('💡 Flutter: Raw data type: ${rawData.runtimeType}');
+              
+              Map<String, dynamic>? lightData;
+              if (rawData is Map) {
+                lightData = Map<String, dynamic>.from(rawData);
+                print('💡 Flutter: Converted light data: $lightData');
+              } else {
+                lightData = rawData as Map<String, dynamic>?;
+              }
+              
+              if (lightData != null) {
+                print('💡 Flutter: Invoking callback with data');
+                onLightingConditionChanged!(lightData);
+                print('💡 Flutter: Callback invoked successfully');
+                if (debug) {
+                  print('💡 Lighting condition changed: $lightData');
+                }
+              } else {
+                print('💡 Flutter: Warning - light data is null');
+              }
+            } catch (e) {
+              print('❌ Flutter: Error parsing lighting data: $e');
+              print('Arguments: ${call.arguments}');
+              print('Arguments type: ${call.arguments.runtimeType}');
+              if (debug) {
+                print('Error parsing lighting data: $e');
+                print('Arguments: ${call.arguments}');
+              }
+            }
+          } else {
+            print('💡 Flutter: Warning - No callback handler registered!');
+          }
+          break;
         case 'dispose':
           _channel.invokeMethod<void>("dispose");
           break;
@@ -424,6 +468,46 @@ class ARSessionManager {
         print('📍 ARSessionManager: ❌ Phase 3 error: $e');
       }
       return false;
+    }
+  }
+
+  // =================================================================
+  // Light Estimation Methods
+  // =================================================================
+  
+  /// Get current light estimate from the AR scene
+  /// Returns a map containing:
+  /// - Android: pixelIntensity, colorCorrection, isLowLight, isVeryLowLight, timestamp
+  /// - iOS: ambientIntensity, normalizedIntensity, ambientColorTemperature, isLowLight, isVeryLowLight, timestamp
+  Future<Map<String, dynamic>?> getLightEstimate() async {
+    try {
+      final result = await _channel.invokeMethod<Map>('getLightEstimate');
+      return result?.cast<String, dynamic>();
+    } catch (e) {
+      if (debug) print('Error getting light estimate: $e');
+      return null;
+    }
+  }
+
+  /// Enable or disable automatic lighting condition monitoring
+  /// When enabled, [onLightingConditionChanged] callback will be invoked periodically
+  /// 
+  /// [enable] - Set to true to start monitoring, false to stop
+  /// [intervalMs] - Check interval in milliseconds (default: 1000ms = 1 second)
+  Future<void> enableLightingMonitoring({
+    bool enable = true,
+    int intervalMs = 1000,
+  }) async {
+    try {
+      await _channel.invokeMethod('enableLightingMonitoring', {
+        'enable': enable,
+        'intervalMs': intervalMs,
+      });
+      if (debug) {
+        print('💡 Lighting monitoring ${enable ? "enabled" : "disabled"} (interval: ${intervalMs}ms)');
+      }
+    } catch (e) {
+      if (debug) print('Error toggling lighting monitoring: $e');
     }
   }
 
