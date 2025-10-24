@@ -423,10 +423,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     func initializeARView(arguments: Dictionary<String,Any>, result: FlutterResult){
         // Set plane detection configuration
         self.configuration = ARWorldTrackingConfiguration()
+        
+        // Enable automatic environment texturing for realistic reflections and lighting
+        // This captures the real environment and generates dynamic cubemaps for reflections
         self.configuration.environmentTexturing = .automatic
         
-        // Enable light estimation for ARKit
+        // Enable light estimation for realistic lighting that adapts to the environment
         self.configuration.isLightEstimationEnabled = true
+        
+        // Optimize SceneKit rendering for realistic PBR materials
+        configureRealisticRendering()
         
         if let planeDetectionConfig = arguments["planeDetectionConfig"] as? Int {
             switch planeDetectionConfig {
@@ -1859,6 +1865,46 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         ]
         
         sessionManagerChannel.invokeMethod("onLightingConditionChanged", arguments: lightData)
+    }
+    
+    // =================================================================
+    // Realistic Rendering Configuration
+    // =================================================================
+    
+    /**
+     * Configure SceneKit for maximum realism matching ARCore's ENVIRONMENTAL_HDR
+     * Uses ARKit's automatic environment texturing and light estimation
+     */
+    private func configureRealisticRendering() {
+        print("🌅 Configuring realistic rendering for ARKit")
+        
+        // ARKit's .automatic environment texturing generates dynamic cubemaps
+        // from the real environment, similar to ARCore's ENVIRONMENTAL_HDR
+        // This provides:
+        // 1. Real-time environment reflections on metallic/glossy surfaces
+        // 2. Accurate ambient lighting from actual surroundings
+        // 3. Dynamic updates as user moves through different spaces
+        // 4. Realistic integration with the real world
+        
+        // Enable automatic lighting updates from ARKit's light estimation
+        sceneView.automaticallyUpdatesLighting = true
+        
+        // Configure SceneKit's lighting environment for PBR rendering
+        sceneView.scene.lightingEnvironment.intensity = 1.0
+        
+        // Let ARKit automatically provide environment textures
+        // These are generated from the camera feed and provide realistic reflections
+        // This matches ARCore's dynamic environment capture approach
+        
+        // Note: Unlike static HDR files, ARKit's automatic environment texturing:
+        // - Captures the ACTUAL environment around the user
+        // - Updates dynamically as lighting conditions change
+        // - Provides more realistic results than any static HDR
+        // - Works similarly to ARCore's ENVIRONMENTAL_HDR mode
+        
+        print("✅ Realistic rendering configured")
+        print("   ARKit will automatically capture environment for lighting & reflections")
+        print("   This provides the same realism as ARCore's ENVIRONMENTAL_HDR mode")
     }
 }
 

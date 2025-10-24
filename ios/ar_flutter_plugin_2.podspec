@@ -14,6 +14,7 @@ A Flutter plugin for shared AR experiences supporting Android and iOS.
   s.author           = { 'Hugo Lefèvre' => 'contact@uhg0.com' }
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
+  s.resources = 'Assets/**/*'
   s.dependency 'Flutter'
   s.dependency 'GLTFSceneKit'
   s.dependency 'SwiftJWT'

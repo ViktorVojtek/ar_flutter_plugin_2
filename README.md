@@ -32,6 +32,21 @@ if (ok) {
 📖 **[Full Deep Memory Cleanup Documentation](DEEP_MEMORY_CLEANUP.md)**
 📖 **[NUKE ALL Complete Documentation](NUKE_ALL_DOCUMENTATION.md)**
 
+## NEW: Dynamic Environment-Based Lighting 🌅
+
+**Realistic lighting that adapts to the actual environment:**
+
+- **Real-Time Environment Capture**: Uses camera to capture actual surroundings
+- **Dynamic Reflections**: Realistic reflections showing the real environment
+- **Adaptive Lighting**: Automatically adjusts to lighting conditions
+- **Better Realism**: Models look like they truly belong in the space
+- **Automatic**: Works out-of-the-box on both platforms
+
+Both **ARCore (Android)** and **ARKit (iOS)** now use dynamic environment capture instead of static HDR files, providing superior realism!
+
+📖 **[Environment-Based Lighting Guide](HDR_LIGHTING_GUIDE.md)**
+📖 **[Android Implementation Details](ANDROID_HDR_EXPLAINED.md)**
+
 ## NEW: Light Estimation 💡
 
 Detect and respond to ambient lighting conditions in your AR scenes:
