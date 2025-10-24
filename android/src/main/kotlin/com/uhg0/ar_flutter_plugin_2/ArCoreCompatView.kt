@@ -92,6 +92,10 @@ class ArCoreCompatView(
     private var enableHeightLockedPanning = true
     private var heightLockTolerance = 0.05f // 5cm tolerance for height variations
     
+    // Enhanced continuous plane tracking for better object movement
+    private var lastPlaneUpdateTime = 0L
+    private val planeUpdateInterval = 100L // Check for plane updates every 100ms
+    
     // Light estimation monitoring support
     private var isMonitoringLighting = false
     private var lightingCheckInterval = 1000L // Check every second by default
@@ -144,7 +148,7 @@ class ArCoreCompatView(
                 
                 // Configure session for plane detection with memory-optimized settings
                 val config = session.config.apply {
-                    planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                    planeFindingMode = Config.PlaneFindingMode.HORIZONTAL // Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
                     updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     
@@ -331,7 +335,7 @@ class ArCoreCompatView(
                                 Vector3(currentSelectedNode.worldPosition.x, currentSelectedNode.worldPosition.y, currentSelectedNode.worldPosition.z)
                             } else null
                             
-            // ENHANCED PANNING: Handle height-locked panning with custom projection when ARCore fails
+            // ENHANCED PANNING: Always use custom height projection first for consistent behavior
             Log.d(TAG, "🔒 PANNING CHECK: enableHeightLockedPanning=$enableHeightLockedPanning, isTransformable=${currentSelectedNode is TransformableNode}, gestureType=$lastGestureType, active=$isGestureActive, action=${motionEvent?.action}")
             if (enableHeightLockedPanning && currentSelectedNode is TransformableNode && 
                 lastGestureType == "pan" && isGestureActive && motionEvent?.action == MotionEvent.ACTION_MOVE) {
@@ -340,17 +344,17 @@ class ArCoreCompatView(
                 val storedHeight = nodeFloorHeights[nodeId]
                 
                 if (storedHeight != null) {
-                    Log.d(TAG, "🔒 HEIGHT-LOCKED PANNING: Attempting custom projection for node $nodeId at height $storedHeight")
-                    // Try custom height-locked projection first
+                    Log.d(TAG, "🔒 HEIGHT-LOCKED PANNING: Using custom projection for node $nodeId at height $storedHeight")
+                    // Always try custom projection first - this ensures smooth panning everywhere
                     val customProjection = tryCustomHeightProjection(motionEvent, storedHeight)
                     if (customProjection != null) {
-                        // Use custom projection - this bypasses ARCore's failed hit testing
+                        // Use custom projection - this works even in poorly scanned areas
                         val oldPosition = currentSelectedNode.worldPosition
                         currentSelectedNode.worldPosition = customProjection
                         Log.d(TAG, "🔒 CUSTOM PROJECTION SUCCESS: Moved object from $oldPosition to $customProjection (height-locked at $storedHeight)")
                         return // Skip ARCore's transformation since we handled it
                     } else {
-                        Log.w(TAG, "🔒 CUSTOM PROJECTION FAILED: Could not project touch to height $storedHeight")
+                        Log.w(TAG, "🔒 CUSTOM PROJECTION FAILED: Falling back to ARCore hit testing")
                     }
                 } else {
                     Log.w(TAG, "🔒 HEIGHT-LOCKED PANNING: No stored height for node $nodeId")
@@ -3633,6 +3637,11 @@ class ArCoreCompatView(
      * Custom height projection for dragging objects when ARCore's hit testing fails
      * This projects the touch point onto a virtual plane at the stored height
      */
+    /**
+     * Projects a 2D touch point onto a horizontal plane at a specific height
+     * This allows smooth panning even in poorly scanned areas
+     * ENHANCED: More aggressive projection with better FOV calculation
+     */
     private fun tryCustomHeightProjection(motionEvent: MotionEvent, targetHeight: Float): Vector3? {
         try {
             val frame = arSceneView?.arFrame ?: return null
@@ -3660,46 +3669,58 @@ class ArCoreCompatView(
             val cameraPose = camera.pose
             val cameraTranslation = cameraPose.translation
             
-            // Create ray direction in camera space (simplified projection)
-            // For a more accurate projection, we would use the full inverse view-projection matrix
-            val rayOrigin = Vector3(cameraTranslation[0], cameraTranslation[1], cameraTranslation[2])
+            // Get camera intrinsics for accurate projection
+            val intrinsics = camera.imageIntrinsics
+            val focalLength = intrinsics.focalLength
+            val principalPoint = intrinsics.principalPoint
             
-            // Simple ray direction calculation (can be improved with proper inverse projection)
-            val forwardDirection = Vector3(0f, 0f, -1f) // Camera looks down -Z
-            val rightDirection = Vector3(1f, 0f, 0f)     // Camera right is +X
-            val upDirection = Vector3(0f, 1f, 0f)        // Camera up is +Y
+            // Calculate field of view angle (more accurate than before)
+            val fovY = (2.0f * Math.atan(((viewHeight / 2.0f) / focalLength[1]).toDouble())).toFloat()
+            val fovX = (2.0f * Math.atan(((viewWidth / 2.0f) / focalLength[0]).toDouble())).toFloat()
             
-            // Use a simpler approach: get the camera's transformation matrix
+            // Get camera transformation matrix
             val cameraMatrix = FloatArray(16)
             cameraPose.toMatrix(cameraMatrix, 0)
             
-            // Extract forward direction from camera matrix (3rd column, negated)
+            // Extract camera basis vectors from matrix
+            // Forward direction (3rd column, negated because camera looks down -Z)
             val forwardX = -cameraMatrix[8]
             val forwardY = -cameraMatrix[9] 
             val forwardZ = -cameraMatrix[10]
             
-            // Extract right direction from camera matrix (1st column)
+            // Right direction (1st column)
             val rightX = cameraMatrix[0]
             val rightY = cameraMatrix[1]
             val rightZ = cameraMatrix[2]
             
-            // Extract up direction from camera matrix (2nd column)
+            // Up direction (2nd column)
             val upX = cameraMatrix[4]
             val upY = cameraMatrix[5]
             val upZ = cameraMatrix[6]
             
-            // Calculate ray direction with screen offset
-            val rayDirX = forwardX + rightX * ndcX * 0.5f + upX * ndcY * 0.5f
-            val rayDirY = forwardY + rightY * ndcX * 0.5f + upY * ndcY * 0.5f
-            val rayDirZ = forwardZ + rightZ * ndcX * 0.5f + upZ * ndcY * 0.5f
+            // Calculate ray direction using FOV angles for accurate projection
+            val tanHalfFovX = Math.tan((fovX / 2.0f).toDouble()).toFloat()
+            val tanHalfFovY = Math.tan((fovY / 2.0f).toDouble()).toFloat()
             
-            val rayDirection = Vector3(rayDirX, rayDirY, rayDirZ)
+            val rayDirX = forwardX + rightX * ndcX * tanHalfFovX + upX * ndcY * tanHalfFovY
+            val rayDirY = forwardY + rightY * ndcX * tanHalfFovX + upY * ndcY * tanHalfFovY
+            val rayDirZ = forwardZ + rightZ * ndcX * tanHalfFovX + upZ * ndcY * tanHalfFovY
+            
+            // Normalize ray direction
+            val rayLength = Math.sqrt((rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ).toDouble()).toFloat()
+            val normalizedRayX = rayDirX / rayLength
+            val normalizedRayY = rayDirY / rayLength
+            val normalizedRayZ = rayDirZ / rayLength
+            
+            val rayOrigin = Vector3(cameraTranslation[0], cameraTranslation[1], cameraTranslation[2])
+            val rayDirection = Vector3(normalizedRayX, normalizedRayY, normalizedRayZ)
             
             // Intersect ray with horizontal plane at targetHeight
             val planeY = targetHeight
             val rayY = rayDirection.y
             
-            if (Math.abs(rayY) < 0.001f) {
+            // Check if ray is nearly parallel to plane (tolerance increased for edge cases)
+            if (Math.abs(rayY) < 0.0001f) {
                 Log.w(TAG, "🔒 Custom projection: Ray parallel to target plane")
                 return null
             }
@@ -3707,19 +3728,30 @@ class ArCoreCompatView(
             // Calculate intersection parameter t
             val t = (planeY - rayOrigin.y) / rayY
             
-            if (t < 0) {
-                Log.w(TAG, "🔒 Custom projection: Intersection behind camera")
+            // Allow intersection slightly behind camera for edge cases (but not too far)
+            if (t < -0.1f) {
+                Log.w(TAG, "🔒 Custom projection: Intersection too far behind camera")
                 return null
             }
             
-            // Calculate intersection point manually
+            // Calculate intersection point
             val hitX = rayOrigin.x + rayDirection.x * t
             val hitY = targetHeight  // Locked to target height
             val hitZ = rayOrigin.z + rayDirection.z * t
             
+            // Sanity check: ensure hit point is within reasonable distance (10 meters)
+            val distance = Math.sqrt(((hitX - rayOrigin.x) * (hitX - rayOrigin.x) + 
+                                     (hitY - rayOrigin.y) * (hitY - rayOrigin.y) + 
+                                     (hitZ - rayOrigin.z) * (hitZ - rayOrigin.z)).toDouble())
+            
+            if (distance > 10.0) {
+                Log.w(TAG, "🔒 Custom projection: Hit point too far (${distance}m)")
+                return null
+            }
+            
             val hitPoint = Vector3(hitX, hitY, hitZ)
             
-            Log.d(TAG, "🔒 Custom projection: Hit at ($hitPoint) for height $targetHeight")
+            Log.d(TAG, "🔒 Custom projection SUCCESS: Hit at ($hitPoint) for height $targetHeight, distance: ${distance}m")
             return hitPoint
             
         } catch (e: Exception) {
