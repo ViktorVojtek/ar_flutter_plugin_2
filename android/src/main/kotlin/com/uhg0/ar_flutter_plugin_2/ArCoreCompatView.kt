@@ -151,7 +151,7 @@ class ArCoreCompatView(
                 val config = session.config.apply {
                     planeFindingMode = Config.PlaneFindingMode.HORIZONTAL // Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     // Use ENVIRONMENTAL_HDR for realistic lighting, shadows, and reflections
-                    lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                    lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY // Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     
                     // Memory optimizations
