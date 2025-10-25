@@ -2389,21 +2389,33 @@ class ArCoreCompatView(
                 val node = nodesMap[nodeName]
                 if (node != null) {
                     Log.d(TAG, "🗑️ Removing node by name: $nodeName")
-                    node.setParent(null) // Remove from scene
+                    
+                    // CRITICAL FIX: Scene graph operations MUST run on UI thread
+                    activity.runOnUiThread {
+                        try {
+                            node.setParent(null) // Remove from scene
+                            
+                            // Also remove associated virtual anchor if it exists
+                            val virtualAnchorName = "${nodeName}_anchor"
+                            val virtualAnchor = nodesMap[virtualAnchorName]
+                            if (virtualAnchor != null) {
+                                Log.d(TAG, "🗑️ Also removing virtual anchor: $virtualAnchorName")
+                                virtualAnchor.setParent(null)
+                                nodesMap.remove(virtualAnchorName)
+                            }
+                            
+                            Log.d(TAG, "✅ Node removed from scene graph: $nodeName")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Error removing node from scene graph: ${e.message}")
+                        }
+                    }
+                    
+                    // Thread-safe map operations
                     nodesMap.remove(nodeName)
                     
                     // NAVIGATION LIFECYCLE FIX: Remove from persistent state
                     persistentNodeStates.remove(nodeName)
                     Log.d(TAG, "🗑️ Removed node from persistent state: $nodeName")
-                    
-                    // Also remove associated virtual anchor if it exists
-                    val virtualAnchorName = "${nodeName}_anchor"
-                    val virtualAnchor = nodesMap[virtualAnchorName]
-                    if (virtualAnchor != null) {
-                        Log.d(TAG, "🗑️ Also removing virtual anchor: $virtualAnchorName")
-                        virtualAnchor.setParent(null)
-                        nodesMap.remove(virtualAnchorName)
-                    }
                     
                     result.success(true)
                 } else {
@@ -2416,6 +2428,7 @@ class ArCoreCompatView(
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error removing node: ${e.message}")
+            e.printStackTrace()
             result.error("REMOVE_NODE_ERROR", e.message ?: "Unknown error", null)
         }
     }
@@ -2439,44 +2452,70 @@ class ArCoreCompatView(
                     val nodeCountBefore = nodesMap.size
                     Log.d(TAG, "🔍 REMOVE SAFETY: Node count BEFORE removal: $nodeCountBefore")
                     
-                    // First, deselect this SPECIFIC node from TransformationSystem
-                    if (node is TransformableNode && transformationSystem != null) {
+                    // Check if anchor exists before removal (for verification)
+                    val anchorNodeId = "${nodeId}_anchor"
+                    val hasAnchor = nodesMap.containsKey(anchorNodeId)
+                    
+                    // CRITICAL FIX: All scene graph operations MUST run on UI thread
+                    activity.runOnUiThread {
                         try {
-                            // Only deselect if THIS node is currently selected
-                            if (transformationSystem?.selectedNode == node) {
-                                transformationSystem?.selectNode(null)
-                                Log.d(TAG, "🗑️ SPECIFIC DESELECT: Deselected ONLY the target node from TransformationSystem")
-                            } else {
-                                Log.d(TAG, "🗑️ SKIP DESELECT: Target node was not selected, skipping deselection")
+                            // First, deselect this SPECIFIC node from TransformationSystem
+                            if (node is TransformableNode && transformationSystem != null) {
+                                try {
+                                    // Only deselect if THIS node is currently selected
+                                    if (transformationSystem?.selectedNode == node) {
+                                        transformationSystem?.selectNode(null)
+                                        Log.d(TAG, "🗑️ SPECIFIC DESELECT: Deselected ONLY the target node from TransformationSystem")
+                                    } else {
+                                        Log.d(TAG, "🗑️ SKIP DESELECT: Target node was not selected, skipping deselection")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Could not deselect specific node from TransformationSystem: ${e.message}")
+                                }
                             }
+                            
+                            // Disable ONLY this specific TransformableNode's properties
+                            if (node is TransformableNode) {
+                                try {
+                                    node.isEnabled = false
+                                    node.translationController.isEnabled = false
+                                    node.rotationController.isEnabled = false
+                                    node.scaleController.isEnabled = false
+                                    node.renderable = null
+                                    Log.d(TAG, "🗑️ SPECIFIC DISABLE: Disabled ONLY the target TransformableNode properties")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Error disabling specific TransformableNode properties: ${e.message}")
+                                }
+                            }
+                            
+                            // Remove ONLY this specific node from scene graph
+                            try {
+                                node.setParent(null)
+                                Log.d(TAG, "🗑️ SPECIFIC REMOVAL: Removed ONLY the target node from scene graph")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "⚠️ Error removing specific node from scene graph: ${e.message}")
+                            }
+                            
+                            // Also remove associated anchor if it exists (but ONLY for this node)
+                            val anchorNode = nodesMap[anchorNodeId]
+                            if (anchorNode != null) {
+                                Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Also removing associated anchor for SPECIFIC node: $anchorNodeId")
+                                try {
+                                    anchorNode.setParent(null)
+                                    Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Successfully removed ONLY the associated anchor: $anchorNodeId")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ Error removing specific anchor: ${e.message}")
+                                }
+                            }
+                            
+                            Log.d(TAG, "✅ UI thread scene operations completed for node: $nodeId")
                         } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Could not deselect specific node from TransformationSystem: ${e.message}")
+                            Log.e(TAG, "❌ Error in UI thread scene operations: ${e.message}")
+                            e.printStackTrace()
                         }
                     }
                     
-                    // Disable ONLY this specific TransformableNode's properties
-                    if (node is TransformableNode) {
-                        try {
-                            node.isEnabled = false
-                            node.translationController.isEnabled = false
-                            node.rotationController.isEnabled = false
-                            node.scaleController.isEnabled = false
-                            node.renderable = null
-                            Log.d(TAG, "🗑️ SPECIFIC DISABLE: Disabled ONLY the target TransformableNode properties")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Error disabling specific TransformableNode properties: ${e.message}")
-                        }
-                    }
-                    
-                    // Remove ONLY this specific node from scene graph
-                    try {
-                        node.setParent(null)
-                        Log.d(TAG, "🗑️ SPECIFIC REMOVAL: Removed ONLY the target node from scene graph")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "⚠️ Error removing specific node from scene graph: ${e.message}")
-                    }
-                    
-                    // Remove ONLY this specific node from our tracking map
+                    // Remove ONLY this specific node from our tracking map (thread-safe)
                     val removedNode = nodesMap.remove(nodeId)
                     if (removedNode != null) {
                         Log.d(TAG, "🗑️ SPECIFIC TRACKING: Successfully removed ONLY target node from nodesMap")
@@ -2491,23 +2530,12 @@ class ArCoreCompatView(
                         Log.w(TAG, "⚠️ SPECIFIC TRACKING: Node was not in nodesMap during removal")
                     }
                     
-                    // Also remove associated anchor if it exists (but ONLY for this node)
-                    val anchorNodeId = "${nodeId}_anchor"
-                    val anchorNode = nodesMap[anchorNodeId]
-                    if (anchorNode != null) {
-                        Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Also removing associated anchor for SPECIFIC node: $anchorNodeId")
-                        try {
-                            anchorNode.setParent(null)
-                            nodesMap.remove(anchorNodeId)
-                            Log.d(TAG, "🗑️ SPECIFIC ANCHOR: Successfully removed ONLY the associated anchor: $anchorNodeId")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Error removing specific anchor: ${e.message}")
-                        }
-                    }
+                    // Remove associated anchor from tracking map (thread-safe)
+                    nodesMap.remove(anchorNodeId)
                     
                     // SAFETY VERIFICATION: Count nodes after removal
                     val nodeCountAfter = nodesMap.size
-                    val expectedCount = nodeCountBefore - if (anchorNode != null) 2 else 1
+                    val expectedCount = nodeCountBefore - if (hasAnchor) 2 else 1
                     Log.d(TAG, "🔍 REMOVE VERIFICATION: Node count AFTER removal: $nodeCountAfter")
                     Log.d(TAG, "🔍 REMOVE VERIFICATION: Expected count: $expectedCount")
                     Log.d(TAG, "🔍 REMOVE VERIFICATION: Actually removed: ${nodeCountBefore - nodeCountAfter} nodes")
