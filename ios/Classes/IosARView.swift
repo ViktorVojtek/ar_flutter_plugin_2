@@ -1110,10 +1110,25 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     
     private func removeNodeDeep(nodeId: String) -> Bool {
         
-        // 1) Get resource handle
-        guard let resourceHandle = resourceHandles.removeValue(forKey: nodeId) else {
+        // 1) Get resource handle - try exact match first
+        var resourceHandle = resourceHandles.removeValue(forKey: nodeId)
+        
+        // IOS FIX: If not found, try with [# prefix (modelBuilder adds this prefix)
+        if resourceHandle == nil && !nodeId.hasPrefix("[#") {
+            let prefixedNodeId = "[#\(nodeId)"
+            resourceHandle = resourceHandles.removeValue(forKey: prefixedNodeId)
+        }
+        
+        guard let resourceHandle = resourceHandle else {
             // Still try to remove from scene if it exists
             if let node = sceneView.scene.rootNode.childNode(withName: nodeId, recursively: true) {
+                node.removeFromParentNode()
+                // IOS FIX: Also remove from reverse mapping
+                nodeToUniqueIdMap.removeValue(forKey: node)
+                return true
+            }
+            // IOS FIX: Also try with [# prefix
+            if let node = sceneView.scene.rootNode.childNode(withName: "[#\(nodeId)", recursively: true) {
                 node.removeFromParentNode()
                 // IOS FIX: Also remove from reverse mapping
                 nodeToUniqueIdMap.removeValue(forKey: node)
