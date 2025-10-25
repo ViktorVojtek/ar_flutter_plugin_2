@@ -1122,6 +1122,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             return false
         }
         
+        // IOS FIX: Also remove the alternate key (original name or unique ID)
+        // If we found it by unique ID, also remove by original name
+        if let originalName = resourceHandle.node.name, originalName != nodeId {
+            resourceHandles.removeValue(forKey: originalName)
+        }
+        // Get the unique ID from reverse mapping to remove the other entry
+        if let uniqueId = nodeToUniqueIdMap[resourceHandle.node], uniqueId != nodeId {
+            resourceHandles.removeValue(forKey: uniqueId)
+        }
+        
         // 2) Remove from scene
         resourceHandle.node.removeFromParentNode()
         
@@ -1767,7 +1777,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     // Update existing addNode methods to track resource handles
     private func trackResourceHandle(for node: SCNNode, nodeId: String, assetKey: String? = nil) {
         let resourceHandle = ResourceHandle(nodeId: nodeId, node: node, assetKey: assetKey)
+        // Store with unique ID (for new API)
         resourceHandles[nodeId] = resourceHandle
+        // IOS FIX: Also store with original node name for backward compatibility with Flutter
+        if let originalName = node.name, originalName != nodeId {
+            resourceHandles[originalName] = resourceHandle
+        }
         // IOS FIX: Also store reverse mapping for tap detection
         nodeToUniqueIdMap[node] = nodeId
     }
