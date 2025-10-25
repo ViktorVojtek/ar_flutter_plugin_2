@@ -310,11 +310,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             case "removeNode":
                 if let nodeId = arguments!["name"] as? String {
                     // IOS FIX: Use the new unique ID system for removal
-                    let success = removeNodeDeep(nodeId: nodeId)
-                    result(success)
-                } else {
-                    result(false)
+                    removeNodeDeep(nodeId: nodeId)
                 }
+                // Note: removeNode does not return a result (legacy behavior)
                 break
             case "removeNodeDeep":
                 if let nodeId = arguments!["nodeId"] as? String {
