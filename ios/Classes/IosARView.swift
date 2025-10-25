@@ -84,6 +84,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private let maxCacheAge: TimeInterval = 300.0 // 5 minutes
     private let loadingQueue = DispatchQueue(label: "ar.model.loading", qos: .userInitiated)
     
+    // IOS FIX: Reverse mapping from node to unique ID (like Android's nodeToUniqueIdMap)
+    private var nodeToUniqueIdMap: [SCNNode: String] = [:]
+    
     // Performance optimization: Object pools to reduce allocations
     private let nodeHitResultsPool = NSMutableArray()
     private let matrixPool = NSMutableArray()
@@ -142,6 +145,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         
         // Clear all resources efficiently
         resourceHandles.removeAll()
+        nodeToUniqueIdMap.removeAll()
         assetCache.removeAll()
         anchorCollection.removeAll()
         trackedPlanes.removeAll()
@@ -764,8 +768,21 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         let touchLocation = recognizer.location(in: sceneView)
     
         let allHitResults = sceneView.hitTest(touchLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-        // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-        let nodeHitResults: Array<String> = allHitResults.compactMap { nearestParentWithNameStart(node: $0.node, characters: "[#")?.name }
+        
+        // IOS FIX: Use nodeToUniqueIdMap to find unique IDs from hit nodes
+        var nodeHitResults: Array<String> = []
+        for hitResult in allHitResults {
+            var currentNode: SCNNode? = hitResult.node
+            // Traverse up the node hierarchy to find a tracked node
+            while currentNode != nil {
+                if let uniqueId = nodeToUniqueIdMap[currentNode!] {
+                    nodeHitResults.append(uniqueId)
+                    break
+                }
+                currentNode = currentNode?.parent
+            }
+        }
+        
         if (nodeHitResults.count != 0) {
             DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onNodeTap", arguments: Array(Set(nodeHitResults)))} // Chaining of Array and Set is used to remove duplicates
             return
@@ -802,21 +819,20 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             panStartLocation = recognizer.location(in: sceneView)
             if let startLocation = panStartLocation {
                 let allHitResults = sceneView.hitTest(startLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-                // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-                let nodeHitResults: Array<String> = allHitResults.compactMap {
-                    if let nearestNode = nearestParentWithNameStart(node: $0.node, characters: "[#") {
-                        panningNode = nearestNode
-                        return nearestNode.name
-                    }else{
-                        return nil
+                
+                // IOS FIX: Use nodeToUniqueIdMap to find unique IDs from hit nodes
+                for hitResult in allHitResults {
+                    var currentNode: SCNNode? = hitResult.node
+                    // Traverse up the node hierarchy to find a tracked node
+                    while currentNode != nil {
+                        if let uniqueId = nodeToUniqueIdMap[currentNode!] {
+                            panningNode = currentNode
+                            panningNodeCurrentWorldLocation = panningNode?.worldPosition
+                            DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: uniqueId)}
+                            return
+                        }
+                        currentNode = currentNode?.parent
                     }
-                }
-                if (nodeHitResults.count != 0 && panningNode != nil) {
-                    panningNodeCurrentWorldLocation = panningNode?.worldPosition
-                    if let panningNodeName = panningNode?.name {
-                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onPanStart", arguments: panningNodeName)}
-                    }
-                    return
                 }
             }
         }
@@ -868,20 +884,19 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             rotationStartLocation = recognizer.location(in: sceneView)
             if let startLocation = rotationStartLocation {
                 let allHitResults = sceneView.hitTest(startLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
-                // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-                let nodeHitResults: Array<String> = allHitResults.compactMap {
-                    if let nearestNode = nearestParentWithNameStart(node: $0.node, characters: "[#") {
-                        panningNode = nearestNode
-                        return nearestNode.name
-                    }else{
-                        return nil
+                
+                // IOS FIX: Use nodeToUniqueIdMap to find unique IDs from hit nodes
+                for hitResult in allHitResults {
+                    var currentNode: SCNNode? = hitResult.node
+                    // Traverse up the node hierarchy to find a tracked node
+                    while currentNode != nil {
+                        if let uniqueId = nodeToUniqueIdMap[currentNode!] {
+                            panningNode = currentNode
+                            DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: uniqueId)}
+                            return
+                        }
+                        currentNode = currentNode?.parent
                     }
-                }
-                if (nodeHitResults.count != 0 && panningNode != nil) {
-                    if let panNodeName = panningNode?.name {
-                        DispatchQueue.main.async {self.objectManagerChannel.invokeMethod("onRotationStart", arguments: panNodeName)}
-                    }
-                    return
                 }
             }
         }
@@ -1098,6 +1113,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             // Still try to remove from scene if it exists
             if let node = sceneView.scene.rootNode.childNode(withName: nodeId, recursively: true) {
                 node.removeFromParentNode()
+                // IOS FIX: Also remove from reverse mapping
+                nodeToUniqueIdMap.removeValue(forKey: node)
                 return true
             }
             return false
@@ -1105,6 +1122,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         
         // 2) Remove from scene
         resourceHandle.node.removeFromParentNode()
+        
+        // IOS FIX: Remove from reverse mapping
+        nodeToUniqueIdMap.removeValue(forKey: resourceHandle.node)
         
         // 3) Deep destroy resources
         // Clear material references to help with memory cleanup
@@ -1141,6 +1161,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private func purgeCaches() -> Bool {
         assetCache.removeAll()
         resourceHandles.removeAll()
+        nodeToUniqueIdMap.removeAll()
         return true
     }
     
@@ -1745,6 +1766,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private func trackResourceHandle(for node: SCNNode, nodeId: String, assetKey: String? = nil) {
         let resourceHandle = ResourceHandle(nodeId: nodeId, node: node, assetKey: assetKey)
         resourceHandles[nodeId] = resourceHandle
+        // IOS FIX: Also store reverse mapping for tap detection
+        nodeToUniqueIdMap[node] = nodeId
     }
     
     // Cleanup old cached assets (call periodically)
