@@ -592,17 +592,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromGltf(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        let nodeName = dict_node["name"] as? String
+                        // IOS FIX: Generate unique ID like Android for consistent deletion
+                        let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                        
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        if let nodeId = nodeName {
-                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                                        }
-                                        promise(.success(nodeName))
+                                        // Track with unique ID for reliable deletion
+                                        self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                                        promise(.success(uniqueNodeId))
                                     } else {
                                         promise(.success(nil))
                                     }
@@ -613,10 +614,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            if let nodeId = nodeName {
-                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                            }
-                            promise(.success(nodeName))
+                            // Track with unique ID for reliable deletion
+                            self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                            promise(.success(uniqueNodeId))
                         }
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
@@ -635,17 +635,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         }
                     }, receiveValue: { val in
                         if let node: SCNNode = val {
-                            let nodeName = dict_node["name"] as? String
+                            // IOS FIX: Generate unique ID like Android for consistent deletion
+                            let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                            
                             if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                                 switch anchorType{
                                     case 0: //PlaneAnchor
                                         if let anchor = self.anchorCollection[anchorName]{
                                             // Attach node to the top-level node of the specified anchor
                                             self.sceneView.node(for: anchor)?.addChildNode(node)
-                                            if let nodeId = nodeName {
-                                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                                            }
-                                            promise(.success(nodeName))
+                                            // Track with unique ID for reliable deletion
+                                            self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                                            promise(.success(uniqueNodeId))
                                         } else {
                                             promise(.success(nil))
                                         }
@@ -656,10 +657,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                             } else {
                                 // Attach to top-level node of the scene
                                 self.sceneView.scene.rootNode.addChildNode(node)
-                                if let nodeId = nodeName {
-                                    self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                                }
-                                promise(.success(nodeName))
+                                // Track with unique ID for reliable deletion
+                                self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                                promise(.success(uniqueNodeId))
                             }
                         } else {
                             DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["name"] as! String)"])}
@@ -675,17 +675,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
  
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGLB(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        let nodeName = dict_node["name"] as? String
+                        // IOS FIX: Generate unique ID like Android for consistent deletion
+                        let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                        
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        if let nodeId = nodeName {
-                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                                        }
-                                        promise(.success(nodeName))
+                                        // Track with unique ID for reliable deletion
+                                        self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                                        promise(.success(uniqueNodeId))
                                     } else {
                                         promise(.success(nil))
                                     }
@@ -696,10 +697,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            if let nodeId = nodeName {
-                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                            }
-                            promise(.success(nodeName))
+                            // Track with unique ID for reliable deletion
+                            self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                            promise(.success(uniqueNodeId))
                         }
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
@@ -714,17 +714,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
                     // Add object to scene
                     if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGltf(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        let nodeName = dict_node["name"] as? String
+                        // IOS FIX: Generate unique ID like Android for consistent deletion
+                        let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                        
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
                                 case 0: //PlaneAnchor
                                     if let anchor = self.anchorCollection[anchorName]{
                                         // Attach node to the top-level node of the specified anchor
                                         self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        if let nodeId = nodeName {
-                                            self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                                        }
-                                        promise(.success(nodeName))
+                                        // Track with unique ID for reliable deletion
+                                        self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                                        promise(.success(uniqueNodeId))
                                     } else {
                                         promise(.success(nil))
                                     }
@@ -735,10 +736,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
-                            if let nodeId = nodeName {
-                                self.trackResourceHandle(for: node, nodeId: nodeId, assetKey: dict_node["uri"] as? String)
-                            }
-                            promise(.success(nodeName))
+                            // Track with unique ID for reliable deletion
+                            self.trackResourceHandle(for: node, nodeId: uniqueNodeId, assetKey: dict_node["uri"] as? String)
+                            promise(.success(uniqueNodeId))
                         }
                     } else {
                         DispatchQueue.main.async {self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])}
@@ -1637,16 +1637,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                                         webNode.transform = transform
                                     }
                                     
-                                    // Set node name and add to scene
-                                    let nodeName = "[#SharedAsset_\(Date().timeIntervalSince1970)"
-                                    webNode.name = nodeName
+                                    // IOS FIX: Generate unique ID like Android for consistent deletion
+                                    let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                                    webNode.name = uniqueNodeId
                                     self.sceneView.scene.rootNode.addChildNode(webNode)
                                     
-                                    // Track resource handle
-                                    let resourceHandle = ResourceHandle(nodeId: nodeName, node: webNode, assetKey: uri)
-                                    self.resourceHandles[nodeName] = resourceHandle
+                                    // Track resource handle with unique ID
+                                    let resourceHandle = ResourceHandle(nodeId: uniqueNodeId, node: webNode, assetKey: uri)
+                                    self.resourceHandles[uniqueNodeId] = resourceHandle
                                     
-                                    completion(nodeName)
+                                    completion(uniqueNodeId)
                                 } else {
                                     completion(nil)
                                 }
@@ -1697,18 +1697,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     finalNode.transform = transform
                 }
                 
-                // Set node name with "[#" prefix for gesture detection
-                let nodeName = "[#SharedAsset_\(Date().timeIntervalSince1970)"
-                finalNode.name = nodeName
+                // IOS FIX: Generate unique ID like Android for consistent deletion
+                let uniqueNodeId = "ios_node_\(Int(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 0...9999))"
+                finalNode.name = uniqueNodeId
                 
                 // Add to scene
                 self.sceneView.scene.rootNode.addChildNode(finalNode)
                 
-                // Track resource handle
-                let resourceHandle = ResourceHandle(nodeId: nodeName, node: finalNode, assetKey: uri)
-                self.resourceHandles[nodeName] = resourceHandle
+                // Track resource handle with unique ID
+                let resourceHandle = ResourceHandle(nodeId: uniqueNodeId, node: finalNode, assetKey: uri)
+                self.resourceHandles[uniqueNodeId] = resourceHandle
                 
-                completion(nodeName)
+                completion(uniqueNodeId)
             }
         }
     }
