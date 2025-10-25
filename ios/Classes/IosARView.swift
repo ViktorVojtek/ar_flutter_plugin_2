@@ -308,8 +308,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 }
                 break
             case "removeNode":
-                if let name = arguments!["name"] as? String {
-                    sceneView.scene.rootNode.childNode(withName: name, recursively: true)?.removeFromParentNode()
+                if let nodeId = arguments!["name"] as? String {
+                    // IOS FIX: Use the new unique ID system for removal
+                    let success = removeNodeDeep(nodeId: nodeId)
+                    result(success)
+                } else {
+                    result(false)
                 }
                 break
             case "removeNodeDeep":
