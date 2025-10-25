@@ -62,7 +62,7 @@ Get the current light estimate from the AR scene.
 
 **Example:**
 ```dart
-final lightData = await arSessionManager.getLightEstimate();
+git s
 if (lightData != null) {
   final intensity = lightData['pixelIntensity'] ?? 
                    lightData['normalizedIntensity'] ?? 0.0;

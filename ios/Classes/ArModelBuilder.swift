@@ -225,6 +225,10 @@ class ArModelBuilder: NSObject {
                                 //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
                                 //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
                                 //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
+                                
+                                // AMBIENT OCCLUSION FIX: Enable shadow receiving on all materials
+                                self.enableShadowsOnNode(child)
+                                
                                 node?.addChildNode(child)
                             }
 
@@ -261,6 +265,45 @@ class ArModelBuilder: NSObject {
             
         }
         
+    }
+    
+    // MARK: - Ambient Occlusion / Shadow Support
+    
+    /**
+     * Recursively enable shadow casting and receiving on all materials in a node hierarchy
+     * This is critical for ambient occlusion to work properly in SceneKit
+     */
+    private func enableShadowsOnNode(_ node: SCNNode) {
+        // Enable shadow receiving on the node's geometry
+        if let geometry = node.geometry {
+            // Enable shadow casting and receiving
+            geometry.firstMaterial?.lightingModel = .physicallyBased  // PBR for realistic lighting
+            geometry.firstMaterial?.isDoubleSided = false  // Cull backfaces for better performance
+            
+            // Process all materials
+            for material in geometry.materials {
+                material.lightingModel = .physicallyBased
+                material.isDoubleSided = false
+                
+                // Ensure materials receive shadows
+                material.writesToDepthBuffer = true
+                material.readsFromDepthBuffer = true
+                
+                // Enhance ambient occlusion appearance
+                if material.ambientOcclusion.contents == nil {
+                    // If no AO map, make the material more receptive to lighting
+                    material.ambient.intensity = 0.3  // Darker ambient for pronounced shadows
+                }
+            }
+        }
+        
+        // Cast shadows from this node
+        node.castsShadow = true
+        
+        // Recursively apply to all child nodes
+        for child in node.childNodes {
+            enableShadowsOnNode(child)
+        }
     }
     
 }

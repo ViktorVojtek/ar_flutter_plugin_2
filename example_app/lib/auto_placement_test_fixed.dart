@@ -29,28 +29,10 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   // Different models to test with
   final List<Map<String, dynamic>> _testModels = [
     {
-      'name': 'Duck',
-      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb',
-      'scale': 0.5,
+      'name': 'Room Model',
+      'url': 'https://storage.googleapis.com/room-bucket/laira-a6e5eaae-09d1-406d-896c-64117a20c10e.glb',
+      'scale': 1.0,
       'position': [0.0, -1.2, -0.8], // Front center
-    },
-    {
-      'name': 'Avocado',
-      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Avocado/glTF-Binary/Avocado.glb',
-      'scale': 0.3,
-      'position': [0.5, -1.0, -1.0], // Right side
-    },
-    {
-      'name': 'DamagedHelmet',
-      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/DamagedHelmet/glTF-Binary/DamagedHelmet.glb',
-      'scale': 0.4,
-      'position': [-0.5, -1.0, -1.0], // Left side
-    },
-    {
-      'name': 'FlightHelmet',
-      'url': 'https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/FlightHelmet/glTF-Binary/FlightHelmet.glb',
-      'scale': 0.2,
-      'position': [0.0, -0.8, -1.2], // Front higher
     },
   ];
 

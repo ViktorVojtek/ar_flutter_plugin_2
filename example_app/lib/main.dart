@@ -309,7 +309,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
                     ElevatedButton(
                       onPressed: onRemoveEverything,
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: Text("Remove All Ducks")
+                      child: Text("Remove All Models")
                     ),
                   ]
                 ),
@@ -462,11 +462,11 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         this.anchors.add(newAnchor);
         debugPrint("AR_DEBUG: ✅ Anchor added successfully, total anchors: ${anchors.length}");
         
-        // Create Duck node with gesture support enabled (better Filament compatibility than Avocado)
+        // Create Room model node - complex geometry perfect for testing ambient occlusion
         var newNode = ARNode(
           type: NodeType.webGLB,
-          uri: "https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb",
-          scale: vector_math.Vector3(0.5, 0.5, 0.5), // Larger scale for visibility
+          uri: "https://storage.googleapis.com/room-bucket/laira-a6e5eaae-09d1-406d-896c-64117a20c10e.glb",
+          scale: vector_math.Vector3(1.0, 1.0, 1.0), // Full scale for room model
           position: vector_math.Vector3(0.0, 0.0, 0.0), // Place directly on the plane
           rotation: vector_math.Vector4(1.0, 0.0, 0.0, 0.0), // No rotation
           isTransformable: true,        // Enable transformations
@@ -474,8 +474,8 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           enableRotationGestures: true, // Enable rotation gestures
         );
         
-        debugPrint("AR_DEBUG: 🦆 Creating Duck node...");
-        debugPrint("AR_DEBUG: 📊 Duck details - URI: Duck.glb, Type: webGLB, Scale: (0.5, 0.5, 0.5)");
+        debugPrint("AR_DEBUG: 🏠 Creating Room model node...");
+        debugPrint("AR_DEBUG: 📊 Room details - URI: laira-room.glb, Type: webGLB, Scale: (1.0, 1.0, 1.0)");
         
         // Add the node to the anchor
         String? nodeId = await this.arObjectManager!.addNode(newNode, planeAnchor: newAnchor);
@@ -485,7 +485,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
         if (nodeId != null) {
           this.nodes.add(newNode);
           this.nodeToIdMap[newNode] = nodeId; // Store the mapping for removal
-          debugPrint("AR_DEBUG: ✅ Duck added successfully with ID: $nodeId, total nodes: ${nodes.length}");
+          debugPrint("AR_DEBUG: ✅ Room model added successfully with ID: $nodeId, total nodes: ${nodes.length}");
           debugPrint("AR_DEBUG: 📝 Stored node ID mapping for removal: $nodeId");
           
           // CRITICAL FIX: Set up selection handler after successful object placement
@@ -507,16 +507,16 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(_heightLockedPanningEnabled 
-                ? "🦆 Duck placed! Try dragging it - it will stay at floor height even in poorly scanned areas!"
-                : "🦆 Duck placed! ID: $nodeId"), 
+                ? "🏠 Room model placed! Try dragging it - check the ambient occlusion shadows in corners!"
+                : "🏠 Room model placed! ID: $nodeId - Look for AO shadows!"), 
               duration: Duration(seconds: 3),
               backgroundColor: Colors.green,
             )
           );
         } else {
-          debugPrint("AR_DEBUG: ❌ Failed to add Duck to anchor");
+          debugPrint("AR_DEBUG: ❌ Failed to add Room model to anchor");
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Failed to place Duck"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
+            SnackBar(content: Text("Failed to place Room model"), backgroundColor: Colors.red, duration: Duration(seconds: 3))
           );
         }
       } else {
