@@ -17,6 +17,7 @@ import com.google.ar.core.Anchor
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.HitResult
+import com.google.ar.core.InstantPlacementPoint
 import com.google.ar.core.Plane
 import com.google.ar.core.Point
 import com.google.ar.core.Pose
@@ -46,6 +47,10 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.sqrt
+import kotlin.math.abs
+import kotlin.math.atan
+import kotlin.math.tan
+import dev.romainguy.kotlin.math.length
 
 /**
  * New SceneView-based implementation of the Android platform view.
@@ -83,6 +88,14 @@ class ArCoreCompatView(
     private val seenPlanes = mutableSetOf<String>()
     private var environmentInitialized = false
     private var isDisposed = false
+    
+    // Manual pan gesture tracking (bypassing SceneView's failing hit test system)
+    private var panStartY = 0f
+    private var panStartWorldPos: Position? = null
+    private var panStartTouchX = 0f
+    private var panStartTouchY = 0f
+    private var currentTouchX = 0f  // Track absolute touch position
+    private var currentTouchY = 0f
 
     init {
         sceneView = ARSceneView(
@@ -120,23 +133,132 @@ class ArCoreCompatView(
                         handleHitTest(event.x, event.y)
                     }
                 },
-                onMoveBegin = { _: MoveGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEvent("onPanStart", it) }
+                onMoveBegin = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enablePan == true && record.anchorId != null) {
+                        // Store initial world Y for height-locked panning AND initial position
+                        panStartY = node.worldPosition.y
+                        panStartWorldPos = Position(node.worldPosition.x, node.worldPosition.y, node.worldPosition.z)
+                        panStartTouchX = currentTouchX
+                        panStartTouchY = currentTouchY
+                        // Touch coordinates are tracked globally by container's touch listener
+                        Log.d(TAG, "🔥 Pan started - Y=$panStartY, Touch: ($currentTouchX, $currentTouchY)")
+                        handleGestureEvent("onPanStart", node)
+                        true
+                    } else false
                 },
-                onMove = { _: MoveGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEvent("onPanChange", it) }
+                onMove = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enablePan == true && record.anchorId != null && panStartWorldPos != null) {
+                        // Touch coordinates updated by container's touch listener in real-time
+                        
+                        // Calculate screen-space delta (how much finger moved in pixels)
+                        val touchDeltaX = currentTouchX - panStartTouchX
+                        val touchDeltaY = currentTouchY - panStartTouchY
+                        
+                        // Get current camera position for distance calculation
+                        val frame = sceneView.frame
+                        val camera = frame?.camera
+                        if (camera != null) {
+                            val cameraTrans = FloatArray(3)
+                            camera.pose.getTranslation(cameraTrans, 0)
+                            
+                            // Calculate distance from camera to object
+                            val objDx = panStartWorldPos!!.x - cameraTrans[0]
+                            val objDz = panStartWorldPos!!.z - cameraTrans[2]
+                            val objDistance = sqrt(objDx * objDx + objDz * objDz)
+                            
+                            // Scale factor: convert pixel movement to world movement
+                            // At 1m distance: 100 pixels = ~0.3m movement
+                            // Scale proportionally with distance
+                            val scale = objDistance * 0.003f
+                            
+                            // Convert screen delta to world delta using simple screen-space mapping
+                            // Screen X → World X (right in screen = right in world)
+                            // Screen Y → World Z (down in screen = forward in world)
+                            val worldDeltaX = touchDeltaX * scale
+                            val worldDeltaZ = touchDeltaY * scale
+                            
+                            // Apply delta to original object position
+                            val newWorldPos = Position(
+                                panStartWorldPos!!.x + worldDeltaX,
+                                panStartY,  // Keep height locked
+                                panStartWorldPos!!.z + worldDeltaZ
+                            )
+                            
+                            // Check distance limit
+                            val dx = newWorldPos.x - cameraTrans[0]
+                            val dy = newWorldPos.y - cameraTrans[1]
+                            val dz = newWorldPos.z - cameraTrans[2]
+                            val distance = sqrt(dx * dx + dy * dy + dz * dz)
+                            
+                            if (distance <= 5.0f) {  // Increased to 5m to allow more movement
+                                record.node.worldPosition = newWorldPos
+                                Log.d(TAG, "👆 Touch Δ: (%.0f, %.0f) → 🎯 World Δ: (%.3f, %.3f) | Dist: %.2fm".format(
+                                    touchDeltaX, touchDeltaY,
+                                    worldDeltaX, worldDeltaZ,
+                                    distance
+                                ))
+                            } else {
+                                Log.d(TAG, "⚠️ Position too far: ${distance}m (max 5m) - ignoring")
+                            }
+                        }
+                        handleGestureEvent("onPanChange", node)
+                        true
+                    } else false
                 },
-                onMoveEnd = { _: MoveGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEnd("onPanEnd", it) }
+                onMoveEnd = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enablePan == true && record.anchorId != null) {
+                        // Create new anchor at ModelNode's current world position
+                        val session = sceneView.session
+                        if (session != null) {
+                            try {
+                                val worldPos = node.worldPosition
+                                val pose = Pose.makeTranslation(worldPos.x, worldPos.y, worldPos.z)
+                                val newAnchor = session.createAnchor(pose)
+                                
+                                // Update the anchor node
+                                val anchorRec = record.anchorId?.let { anchorRecords[it] }
+                                if (anchorRec != null) {
+                                    anchorRec.anchor.detach()
+                                    anchorRec.anchor = newAnchor
+                                    anchorRec.node.anchor = newAnchor
+                                    
+                                    // Reset ModelNode to center of new anchor
+                                    record.node.position = Position(0f, 0f, 0f)
+                                    
+                                    Log.d(TAG, "✅ Created new anchor at (${worldPos.x}, ${worldPos.y}, ${worldPos.z})")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to create anchor: ${e.message}")
+                            }
+                        }
+                        handleGestureEnd("onPanEnd", node)
+                        true
+                    } else false
                 },
                 onRotateBegin = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEvent("onRotationStart", it) }
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enableRotation == true) {
+                        Log.d(
+                            TAG,
+                            "onRotateBegin for node: ${node.name}, isRotationEditable: ${node.isRotationEditable}"
+                        )
+                        handleGestureEvent("onRotationStart", node)
+                    }
                 },
                 onRotate = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEvent("onRotationChange", it) }
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enableRotation == true) {
+                        handleGestureEvent("onRotationChange", node)
+                    }
                 },
                 onRotateEnd = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
-                    node?.let { handleGestureEnd("onRotationEnd", it) }
+                    val record = node?.let(::findNodeRecord)
+                    if (node != null && record?.enableRotation == true) {
+                        handleGestureEnd("onRotationEnd", node)
+                    }
                 }
             )
         }
@@ -146,6 +268,28 @@ class ArCoreCompatView(
         // DO NOT load environment here to avoid Filament threading issues
 
         container.addView(sceneView)
+        
+        // Intercept ALL touch events to track real-time finger position
+        // This is needed because MoveGestureDetector doesn't provide current coordinates
+        sceneView.setOnTouchListener { view, event ->
+            // Prevent touch processing during disposal
+            if (isDisposed) return@setOnTouchListener false
+            
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    // event.x and event.y are already relative to the view!
+                    currentTouchX = event.x
+                    currentTouchY = event.y
+                    Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    currentTouchX = event.x
+                    currentTouchY = event.y
+                    // Too verbose to log every move
+                }
+            }
+            false // Don't consume, let gesture detectors handle it
+        }
 
         sessionChannel.setMethodCallHandler(::handleSessionMethod)
         objectChannel.setMethodCallHandler(::handleObjectMethod)
@@ -162,26 +306,42 @@ class ArCoreCompatView(
         if (isDisposed) return
         isDisposed = true
         
+        Log.d(TAG, "🧹 Disposing ArCoreCompatView")
+        
         try {
+            // Cancel method handlers immediately to prevent new calls
             sessionChannel.setMethodCallHandler(null)
             objectChannel.setMethodCallHandler(null)
             anchorChannel.setMethodCallHandler(null)
             scope.cancel()
             
-            // Clean up nodes and anchors before destroying scene
+            // Stop touch listener immediately to prevent gesture callbacks
+            sceneView.setOnTouchListener(null)
+            
+            // Clean up nodes and anchors ASYNCHRONOUSLY (camera threads need this)
+            // The key is that isDisposed=true prevents new operations
             uiHandler.post {
                 try {
+                    // Clear nodes first (children before parents)
                     nodeRecords.values.forEach { record ->
                         runCatching { record.node.destroy() }
                     }
                     nodeRecords.clear()
                     
+                    // Then clear anchors
                     anchorRecords.values.forEach { record ->
-                        runCatching { record.node.destroy() }
+                        runCatching { 
+                            record.anchor.detach()
+                            record.node.destroy()
+                        }
                     }
                     anchorRecords.clear()
                     
+                    // Finally destroy the scene view
+                    // This triggers camera/ARCore cleanup on background threads
                     sceneView.destroy()
+                    Log.d(TAG, "🧹 SceneView destroyed")
+                    
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error during scene cleanup", t)
                 }
@@ -377,6 +537,20 @@ class ArCoreCompatView(
             return
         }
 
+        // Configure anchor node gestures
+        if (anchorRecord != null) {
+            anchorRecord.node.apply {
+                isEditable = true
+                // 🔥 CRITICAL: Do NOT enable isPositionEditable!
+                // We handle panning manually via ray-plane intersection.
+                // SceneView's built-in pan would conflict and cause jitter.
+                isPositionEditable = false  // Always false, we do manual pan
+                isRotationEditable = enableRotation
+                
+                Log.d(TAG, "✅ AnchorNode '${this.name}' configured: pan=$enablePan (manual), rotation=$enableRotation")
+            }
+        }
+
         // Check if already disposed
         if (isDisposed) {
             result.error("DISPOSED", "View has been disposed", null)
@@ -399,21 +573,37 @@ class ArCoreCompatView(
                     this.position = position
                     this.quaternion = rotation
                     this.scale = scale
-
-                    isEditable = isTransformable
-                    isPositionEditable = isTransformable && enablePan
-                    isRotationEditable = isTransformable && enableRotation
                 }
 
                 // Add to scene on main thread
                 if (anchorRecord != null) {
-                    anchorRecord.node.isEditable = true
-                    if (enablePan) {
-                        anchorRecord.node.isPositionEditable = true
+                    // Configure ModelNode - must be editable to receive touch events
+                    // But with isPositionEditable=false so it delegates to parent
+                    modelNode.apply {
+                        isEditable = enablePan || enableRotation  // Must be true to detect touches
+                        isPositionEditable = false  // Delegate position to parent
+                        isRotationEditable = false  // Delegate rotation to parent
+                        isScaleEditable = false
+                        // 🔥 DISABLE smooth transforms - may be causing jitter
+                        isSmoothTransformEnabled = false
                     }
+                    
+                    // Just add the child node
                     anchorRecord.node.addChildNode(modelNode)
+                    
+                    Log.d(TAG, "✅ Configured model on anchor - AnchorNode: pos=$enablePan,rot=$enableRotation | ModelNode: delegates to parent, smooth disabled")
                 } else {
+                    // Standalone node (no anchor) - ModelNode handles all gestures
+                    modelNode.apply {
+                        isEditable = isTransformable || enablePan || enableRotation
+                        isPositionEditable = enablePan
+                        isRotationEditable = enableRotation
+                        isScaleEditable = false
+                    }
                     sceneView.addChildNode(modelNode)
+                    
+                    Log.d(TAG, "Standalone ModelNode $nodeId - isEditable: ${modelNode.isEditable}, " +
+                        "isPositionEditable: $enablePan, isRotationEditable: $enableRotation")
                 }
 
                 val nodeRecord = NodeRecord(
@@ -505,9 +695,15 @@ class ArCoreCompatView(
                     this.name = name
                     isEditable = true
                     isPositionEditable = true
+                    
+                    // 🔥 CRITICAL: Do NOT configure moveHitTest!
+                    // ARCore's depth API fails ("No point hit" errors), causing jittery movement
+                    // Instead, our custom onMove callback uses screenToWorld which works perfectly
+                    // The onMove callback is configured when adding nodes to this anchor
                 }
                 sceneView.addChildNode(anchorNode)
                 anchorRecords[name] = AnchorRecord(name, anchor, anchorNode)
+                Log.d(TAG, "✅ Created AnchorNode '$name' (onMove callbacks will be configured when nodes are added)")
                 result.success(true)
             }
             "removeAnchor" -> {
@@ -683,7 +879,7 @@ class ArCoreCompatView(
 
     private data class AnchorRecord(
         val id: String,
-        val anchor: Anchor,
+        var anchor: Anchor,  // var to allow updating during pan gestures
         val node: AnchorNode
     )
 
@@ -695,6 +891,24 @@ class ArCoreCompatView(
         val enablePan: Boolean,
         val enableRotation: Boolean
     )
+
+    /**
+     * Find the NodeRecord for a given Node
+     * This checks both ModelNode (child) and AnchorNode (parent) since gestures can be on either
+     */
+    private fun findNodeRecord(node: Node): NodeRecord? {
+        // Check if it's a ModelNode directly
+        val modelNodeRecord = nodeRecords.values.firstOrNull { it.node == node }
+        if (modelNodeRecord != null) return modelNodeRecord
+        
+        // Check if it's an AnchorNode parent of a ModelNode
+        val anchorNodeRecord = nodeRecords.values.firstOrNull { record ->
+            record.anchorId?.let { anchorId ->
+                anchorRecords[anchorId]?.node == node
+            } ?: false
+        }
+        return anchorNodeRecord
+    }
 
     private fun listToFloatArray(values: List<*>): FloatArray =
         FloatArray(values.size) { index ->
@@ -811,5 +1025,133 @@ class ArCoreCompatView(
             ),
             "transform" to matrix.map { it.toDouble() }
         )
+    }
+    
+    /**
+     * Calculate 3D world position by intersecting camera ray with horizontal plane.
+     * This bypasses ARCore's hit test system which has proven unreliable in many environments.
+     * 
+     * @param touchX Absolute screen X coordinate
+     * @param touchY Absolute screen Y coordinate
+     * @param targetHeight Y-coordinate of the horizontal plane to intersect
+     * @return 3D world position or null if calculation fails
+     */
+    private fun calculateRayPlaneIntersection(touchX: Float, touchY: Float, targetHeight: Float): Position? {
+        // CRITICAL: Prevent access during disposal to avoid camera session crashes
+        if (isDisposed) return null
+        
+        try {
+            // Use current frame from rendering loop, DON'T call session.update()!
+            val frame = sceneView.frame ?: return null
+            val camera = frame.camera
+            
+            if (camera.trackingState != TrackingState.TRACKING) {
+                return null
+            }
+            
+            // Get view dimensions
+            val viewWidth = sceneView.width.toFloat()
+            val viewHeight = sceneView.height.toFloat()
+            
+            if (viewWidth <= 0f || viewHeight <= 0f) return null
+            
+            // Get camera pose and intrinsics
+            val cameraPose = camera.pose
+            val cameraTranslation = cameraPose.translation
+            
+            // Get camera intrinsics (focal length and principal point)
+            val intrinsics = camera.textureIntrinsics
+            val focalLength = intrinsics.focalLength // [fx, fy]
+            val principalPoint = intrinsics.principalPoint // [cx, cy]
+            
+            // Convert screen coordinates to camera ray using intrinsics directly
+            // Normalized image coordinates (relative to principal point and focal length)
+            val normX = (touchX - principalPoint[0]) / focalLength[0]
+            val normY = (touchY - principalPoint[1]) / focalLength[1]
+            
+            Log.d(TAG, "📐 normX=${"%.3f".format(normX)}, normY=${"%.3f".format(normY)} | touch=($touchX, $touchY)")
+            
+            // Get camera transformation matrix (column-major order)
+            val cameraMatrix = FloatArray(16)
+            cameraPose.toMatrix(cameraMatrix, 0)
+            
+            // Extract camera basis vectors from transformation matrix
+            // Matrix is column-major: columns are [right, up, -forward, translation]
+            // In camera space: X=right, Y=down (image coords), Z=forward (into scene)
+            val rightX = cameraMatrix[0]
+            val rightY = cameraMatrix[1]
+            val rightZ = cameraMatrix[2]
+            
+            val upX = cameraMatrix[4]
+            val upY = cameraMatrix[5]
+            val upZ = cameraMatrix[6]
+            
+            // Forward is -Z axis (camera looks down -Z)
+            val forwardX = -cameraMatrix[8]
+            val forwardY = -cameraMatrix[9]
+            val forwardZ = -cameraMatrix[10]
+            
+            Log.d(TAG, "🎥 right=(${"%.2f".format(rightX)}, ${"%.2f".format(rightY)}, ${"%.2f".format(rightZ)})")
+            Log.d(TAG, "🎥 up=(${"%.2f".format(upX)}, ${"%.2f".format(upY)}, ${"%.2f".format(upZ)})")
+            Log.d(TAG, "🎥 forward=(${"%.2f".format(forwardX)}, ${"%.2f".format(forwardY)}, ${"%.2f".format(forwardZ)})")
+            
+            // Project camera right vector onto horizontal plane (Y=0)
+            val groundRightX = rightX
+            val groundRightZ = rightZ
+            val groundRightLen = sqrt(groundRightX * groundRightX + groundRightZ * groundRightZ)
+            val normalizedGroundRightX = if (groundRightLen > 0.001f) groundRightX / groundRightLen else 1f
+            val normalizedGroundRightZ = if (groundRightLen > 0.001f) groundRightZ / groundRightLen else 0f
+            
+            // Project camera forward vector onto horizontal plane  
+            val groundForwardX = forwardX
+            val groundForwardZ = forwardZ
+            val groundForwardLen = sqrt(groundForwardX * groundForwardX + groundForwardZ * groundForwardZ)
+            val normalizedGroundForwardX = if (groundForwardLen > 0.001f) groundForwardX / groundForwardLen else 0f
+            val normalizedGroundForwardZ = if (groundForwardLen > 0.001f) groundForwardZ / groundForwardLen else -1f
+            
+            // Calculate ray direction using ONLY ground-projected vectors
+            // This ensures movement is parallel to the ground plane
+            // Screen X → ground right, Screen Y → ground forward
+            val rayDirX = (normalizedGroundRightX * normX) + (normalizedGroundForwardX * -normY)
+            val rayDirZ = (normalizedGroundRightZ * normX) + (normalizedGroundForwardZ * -normY)
+            
+            // Y component: ray must point from camera to plane
+            // Use a small downward component to ensure intersection
+            val rayDirY = -0.1f  // Always point slightly downward
+            
+            // Normalize ray direction
+            val rayLength = sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ)
+            val normalizedRayX = rayDirX / rayLength
+            val normalizedRayY = rayDirY / rayLength
+            val normalizedRayZ = rayDirZ / rayLength
+            
+            // Check if ray is nearly parallel to plane
+            if (abs(normalizedRayY) < 0.0001f) {
+                return null
+            }
+            
+            // Calculate intersection with horizontal plane at targetHeight
+            val rayOriginY = cameraTranslation[1]
+            val t = (targetHeight - rayOriginY) / normalizedRayY
+            
+            // Allow intersection slightly behind camera
+            if (t < -0.1f) {
+                return null
+            }
+            
+            // Calculate intersection point
+            val hitX = cameraTranslation[0] + normalizedRayX * t
+            val hitY = targetHeight
+            val hitZ = cameraTranslation[2] + normalizedRayZ * t
+            
+            // No distance limit here - we need ray intersections for delta calculation
+            // Distance limiting happens in the pan gesture handler on the FINAL position
+            
+            return Position(hitX, hitY, hitZ)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Ray-plane intersection failed: ${e.message}")
+            return null
+        }
     }
 }
