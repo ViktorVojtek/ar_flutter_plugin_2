@@ -150,59 +150,62 @@ class ArCoreCompatView(
                 onMove = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enablePan == true && record.anchorId != null && panStartWorldPos != null) {
-                        // Touch coordinates updated by container's touch listener in real-time
+                        // Use ARCore hit testing to project touch position onto AR plane
+                        // This works correctly regardless of camera position/rotation
+                        val hitResult = sceneView.hitTestAR(
+                            xPx = currentTouchX,
+                            yPx = currentTouchY,
+                            planeTypes = setOf(
+                                Plane.Type.HORIZONTAL_UPWARD_FACING,
+                                Plane.Type.HORIZONTAL_DOWNWARD_FACING
+                            ),
+                            point = true,
+                            depthPoint = true,
+                            pointOrientationModes = setOf(Point.OrientationMode.ESTIMATED_SURFACE_NORMAL)
+                        )
                         
-                        // Calculate screen-space delta (how much finger moved in pixels)
-                        val touchDeltaX = currentTouchX - panStartTouchX
-                        val touchDeltaY = currentTouchY - panStartTouchY
-                        
-                        // Get current camera position for distance calculation
-                        val frame = sceneView.frame
-                        val camera = frame?.camera
-                        if (camera != null) {
-                            val cameraTrans = FloatArray(3)
-                            camera.pose.getTranslation(cameraTrans, 0)
+                        if (hitResult != null) {
+                            // Get the 3D world position where the touch ray hits the AR plane
+                            val hitPose = hitResult.hitPose
+                            val hitTranslation = FloatArray(3)
+                            hitPose.getTranslation(hitTranslation, 0)
                             
-                            // Calculate distance from camera to object
-                            val objDx = panStartWorldPos!!.x - cameraTrans[0]
-                            val objDz = panStartWorldPos!!.z - cameraTrans[2]
-                            val objDistance = sqrt(objDx * objDx + objDz * objDz)
+                            // Calculate delta from the pan start position
+                            val worldDeltaX = hitTranslation[0] - panStartWorldPos!!.x
+                            val worldDeltaZ = hitTranslation[2] - panStartWorldPos!!.z
                             
-                            // Scale factor: convert pixel movement to world movement
-                            // At 1m distance: 100 pixels = ~0.3m movement
-                            // Scale proportionally with distance
-                            val scale = objDistance * 0.003f
-                            
-                            // Convert screen delta to world delta using simple screen-space mapping
-                            // Screen X → World X (right in screen = right in world)
-                            // Screen Y → World Z (down in screen = forward in world)
-                            val worldDeltaX = touchDeltaX * scale
-                            val worldDeltaZ = touchDeltaY * scale
-                            
-                            // Apply delta to original object position
+                            // Apply delta while keeping height locked
                             val newWorldPos = Position(
                                 panStartWorldPos!!.x + worldDeltaX,
-                                panStartY,  // Keep height locked
+                                panStartY,  // Keep height locked at start Y
                                 panStartWorldPos!!.z + worldDeltaZ
                             )
                             
                             // Check distance limit
-                            val dx = newWorldPos.x - cameraTrans[0]
-                            val dy = newWorldPos.y - cameraTrans[1]
-                            val dz = newWorldPos.z - cameraTrans[2]
-                            val distance = sqrt(dx * dx + dy * dy + dz * dz)
-                            
-                            if (distance <= 5.0f) {  // Increased to 5m to allow more movement
-                                record.node.worldPosition = newWorldPos
-                                Log.d(TAG, "👆 Touch Δ: (%.0f, %.0f) → 🎯 World Δ: (%.3f, %.3f) | Dist: %.2fm".format(
-                                    touchDeltaX, touchDeltaY,
-                                    worldDeltaX, worldDeltaZ,
-                                    distance
-                                ))
-                            } else {
-                                Log.d(TAG, "⚠️ Position too far: ${distance}m (max 5m) - ignoring")
+                            val frame = sceneView.frame
+                            val camera = frame?.camera
+                            if (camera != null) {
+                                val cameraTrans = FloatArray(3)
+                                camera.pose.getTranslation(cameraTrans, 0)
+                                
+                                val dx = newWorldPos.x - cameraTrans[0]
+                                val dy = newWorldPos.y - cameraTrans[1]
+                                val dz = newWorldPos.z - cameraTrans[2]
+                                val distance = sqrt(dx * dx + dy * dy + dz * dz)
+                                
+                                if (distance <= 5.0f) {
+                                    record.node.worldPosition = newWorldPos
+                                    Log.d(TAG, "🎯 Hit-test pan → World Pos: (%.3f, %.3f, %.3f) | Dist: %.2fm".format(
+                                        newWorldPos.x, newWorldPos.y, newWorldPos.z, distance
+                                    ))
+                                } else {
+                                    Log.d(TAG, "⚠️ Position too far: ${distance}m (max 5m) - ignoring")
+                                }
                             }
+                        } else {
+                            Log.d(TAG, "⚠️ No hit result - pan ignored")
                         }
+                        
                         handleGestureEvent("onPanChange", node)
                         true
                     } else false
