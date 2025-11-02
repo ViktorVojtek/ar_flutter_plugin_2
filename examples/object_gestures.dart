@@ -106,13 +106,17 @@ class _ObjectGesturesState extends State<ObjectGestures> {
   }
 
   Future<void> onRemoveEverything() async {
-    /*nodes.forEach((node) {
-      this.arObjectManager.removeNode(node);
-    });*/
-    anchors.forEach((anchor) {
-      this.arAnchorManager!.removeAnchor(anchor);
-    });
-    anchors = [];
+    // Remove all nodes first
+    for (var node in nodes) {
+      await this.arObjectManager!.removeNode(node);
+    }
+    nodes.clear();
+    
+    // Then remove all anchors
+    for (var anchor in anchors) {
+      await this.arAnchorManager!.removeAnchor(anchor);
+    }
+    anchors.clear();
   }
 
   Future<void> onPlaneOrPointTapped(
@@ -132,16 +136,14 @@ class _ObjectGesturesState extends State<ObjectGestures> {
           scale: Vector3(0.2, 0.2, 0.2),
           position: Vector3(0.0, 0.0, 0.0),
           rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-      bool? didAddNodeToAnchor = await this
+      String? nodeName = await this
           .arObjectManager!
           .addNode(newNode, planeAnchor: newAnchor);
-      if (didAddNodeToAnchor!) {
+      if (nodeName != null) {
         this.nodes.add(newNode);
+        print("Added node: $nodeName");
       } else {
-        AlertDialog(
-          title: Text("Error"),
-          content: Text("Adding Node to Anchor failed"),
-        );
+        print("Error: Adding Node to Anchor failed");
       }
     } else {
       AlertDialog(
@@ -161,14 +163,17 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   onPanEnded(String nodeName, Matrix4 newTransform) {
     print("Ended panning node " + nodeName);
-    final pannedNode =
-        this.nodes.firstWhere((element) => element.name == nodeName);
-
-    /*
-    * Uncomment the following command if you want to keep the transformations of the Flutter representations of the nodes up to date
-    * (e.g. if you intend to share the nodes through the cloud)
-    */
-    //pannedNode.transform = newTransform;
+    
+    // Update the node's transform if you want to keep track of it
+    try {
+      final pannedNode =
+          this.nodes.firstWhere((element) => element.name == nodeName);
+      // Uncomment the following line if you want to keep the transformations up to date
+      // (e.g. if you intend to share the nodes through the cloud)
+      // pannedNode.transform = newTransform;
+    } catch (e) {
+      print("Node not found: $nodeName");
+    }
   }
 
   onRotationStarted(String nodeName) {
@@ -181,13 +186,16 @@ class _ObjectGesturesState extends State<ObjectGestures> {
 
   onRotationEnded(String nodeName, Matrix4 newTransform) {
     print("Ended rotating node " + nodeName);
-    final rotatedNode =
-        this.nodes.firstWhere((element) => element.name == nodeName);
-
-    /*
-    * Uncomment the following command if you want to keep the transformations of the Flutter representations of the nodes up to date
-    * (e.g. if you intend to share the nodes through the cloud)
-    */
-    //rotatedNode.transform = newTransform;
+    
+    // Update the node's transform if you want to keep track of it
+    try {
+      final rotatedNode =
+          this.nodes.firstWhere((element) => element.name == nodeName);
+      // Uncomment the following line if you want to keep the transformations up to date
+      // (e.g. if you intend to share the nodes through the cloud)
+      // rotatedNode.transform = newTransform;
+    } catch (e) {
+      print("Node not found: $nodeName");
+    }
   }
 }

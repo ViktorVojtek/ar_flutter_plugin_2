@@ -23,7 +23,6 @@ import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 //Other custom imports
 import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math_64.dart';
-import 'dart:math';
 
 class ObjectsOnPlanes extends StatefulWidget {
   const ObjectsOnPlanes({
@@ -92,31 +91,75 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
           showPlanes: true,
           customPlaneTexturePath: "Images/triangle.png",
           showWorldOrigin: true,
+          handlePans: true,
+          handleRotation: true,
         );
     this.arObjectManager!.onInitialize();
 
     this.arSessionManager!.onPlaneOrPointTap = onPlaneOrPointTapped;
     this.arObjectManager!.onNodeTap = onNodeTapped;
+    this.arObjectManager!.onPanStart = onPanStarted;
+    this.arObjectManager!.onPanChange = onPanChanged;
+    this.arObjectManager!.onPanEnd = onPanEnded;
+    this.arObjectManager!.onRotationStart = onRotationStarted;
+    this.arObjectManager!.onRotationChange = onRotationChanged;
+    this.arObjectManager!.onRotationEnd = onRotationEnded;
     // Optional: Set up plane detection callback
     this.arSessionManager!.onPlaneDetected = onPlaneDetected;
   }
 
   Future<void> onRemoveEverything() async {
-    /*nodes.forEach((node) {
-      this.arObjectManager.removeNode(node);
-    });*/
-    anchors.forEach((anchor) {
-      this.arAnchorManager!.removeAnchor(anchor);
-    });
-    anchors = [];
+    // Remove all nodes first
+    for (var node in nodes) {
+      await this.arObjectManager!.removeNode(node);
+    }
+    nodes.clear();
+    
+    // Then remove all anchors
+    for (var anchor in anchors) {
+      await this.arAnchorManager!.removeAnchor(anchor);
+    }
+    anchors.clear();
   }
 
-  Future<void> onNodeTapped(List<String> nodes) async {
-    var number = nodes.length;
-    AlertDialog(
-      title: Text("Information"),
-      content: Text("Tapped $number node(s)"),
+  Future<void> onNodeTapped(List<String> nodeNames) async {
+    if (nodeNames.isEmpty) return;
+    
+    // Find and remove the tapped node
+    final tappedNodeName = nodeNames.first;
+    final nodeToRemove = nodes.firstWhere(
+      (node) => node.name == tappedNodeName,
+      orElse: () => nodes.first,
     );
+    
+    await this.arObjectManager!.removeNode(nodeToRemove);
+    nodes.removeWhere((node) => node.name == tappedNodeName);
+    
+    print("Removed node: $tappedNodeName");
+  }
+
+  onPanStarted(String nodeName) {
+    print("Started panning node $nodeName");
+  }
+
+  onPanChanged(String nodeName) {
+    print("Panning node $nodeName");
+  }
+
+  onPanEnded(String nodeName, Matrix4 newTransform) {
+    print("Ended panning node $nodeName");
+  }
+
+  onRotationStarted(String nodeName) {
+    print("Started rotating node $nodeName");
+  }
+
+  onRotationChanged(String nodeName) {
+    print("Rotating node $nodeName");
+  }
+
+  onRotationEnded(String nodeName, Matrix4 newTransform) {
+    print("Ended rotating node $nodeName");
   }
 
   Future<void> onPlaneOrPointTapped(
@@ -136,16 +179,14 @@ class _ObjectsOnPlanesState extends State<ObjectsOnPlanes> {
           scale: Vector3(0.2, 0.2, 0.2),
           position: Vector3(0.0, 0.0, 0.0),
           rotation: Vector4(1.0, 0.0, 0.0, 0.0));
-      bool? didAddNodeToAnchor = await this
+      String? nodeName = await this
           .arObjectManager!
           .addNode(newNode, planeAnchor: newAnchor);
-      if (didAddNodeToAnchor!) {
+      if (nodeName != null) {
         this.nodes.add(newNode);
+        print("Added node: $nodeName");
       } else {
-        AlertDialog(
-          title: Text("Error"),
-          content: Text("Adding Node to Anchor failed"),
-        );
+        print("Error: Adding Node to Anchor failed");
       }
     } else {
       AlertDialog(

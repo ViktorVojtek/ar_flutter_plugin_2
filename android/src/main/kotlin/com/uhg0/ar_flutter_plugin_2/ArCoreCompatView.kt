@@ -122,32 +122,43 @@ class ArCoreCompatView(
             }
 
             onSessionUpdated = { _, frame ->
-                handleFrame(frame)
+                if (!isDisposed) {
+                    handleFrame(frame)
+                }
             }
 
             setOnGestureListener(
                 onSingleTapConfirmed = { event, node ->
-                    if (node != null) {
-                        handleNodeTap(node)
-                    } else {
-                        handleHitTest(event.x, event.y)
+                    if (!isDisposed) {
+                        if (node != null) {
+                            handleNodeTap(node)
+                        } else {
+                            handleHitTest(event.x, event.y)
+                        }
                     }
                 },
                 onMoveBegin = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
-                    val record = node?.let(::findNodeRecord)
-                    if (node != null && record?.enablePan == true && record.anchorId != null) {
-                        // Store initial world Y for height-locked panning AND initial position
-                        panStartY = node.worldPosition.y
-                        panStartWorldPos = Position(node.worldPosition.x, node.worldPosition.y, node.worldPosition.z)
-                        panStartTouchX = currentTouchX
-                        panStartTouchY = currentTouchY
-                        // Touch coordinates are tracked globally by container's touch listener
-                        Log.d(TAG, "🔥 Pan started - Y=$panStartY, Touch: ($currentTouchX, $currentTouchY)")
-                        handleGestureEvent("onPanStart", node)
-                        true
-                    } else false
+                    if (isDisposed) {
+                        false
+                    } else {
+                        val record = node?.let(::findNodeRecord)
+                        if (node != null && record?.enablePan == true && record.anchorId != null) {
+                            // Store initial world Y for height-locked panning AND initial position
+                            panStartY = node.worldPosition.y
+                            panStartWorldPos = Position(node.worldPosition.x, node.worldPosition.y, node.worldPosition.z)
+                            panStartTouchX = currentTouchX
+                            panStartTouchY = currentTouchY
+                            // Touch coordinates are tracked globally by container's touch listener
+                            Log.d(TAG, "🔥 Pan started - Y=$panStartY, Touch: ($currentTouchX, $currentTouchY)")
+                            handleGestureEvent("onPanStart", node)
+                            true
+                        } else false
+                    }
                 },
                 onMove = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
+                    if (isDisposed) {
+                        false
+                    } else {
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enablePan == true && record.anchorId != null && panStartWorldPos != null) {
                         // Use ARCore hit testing to project touch position onto AR plane
@@ -209,6 +220,7 @@ class ArCoreCompatView(
                         handleGestureEvent("onPanChange", node)
                         true
                     } else false
+                    }
                 },
                 onMoveEnd = { detector: MoveGestureDetector, event: MotionEvent, node: Node? ->
                     val record = node?.let(::findNodeRecord)
@@ -309,7 +321,7 @@ class ArCoreCompatView(
         if (isDisposed) return
         isDisposed = true
         
-        Log.d(TAG, "🧹 Disposing ArCoreCompatView")
+        Log.d(TAG, "🧹 Disposing ArCoreCompatView - starting cleanup")
         
         try {
             // Cancel method handlers immediately to prevent new calls
@@ -321,10 +333,20 @@ class ArCoreCompatView(
             // Stop touch listener immediately to prevent gesture callbacks
             sceneView.setOnTouchListener(null)
             
-            // Clean up nodes and anchors ASYNCHRONOUSLY (camera threads need this)
-            // The key is that isDisposed=true prevents new operations
+            // CRITICAL FIX: Pause AR session FIRST to prevent camera errors
+            // Must be done on UI thread before any cleanup
             uiHandler.post {
                 try {
+                    Log.d(TAG, "🧹 Phase 1: Pausing AR session")
+                    
+                    // Pause the AR session to stop camera
+                    sceneView.session?.pause()
+                    
+                    // Give the camera time to actually stop (prevents "session already closed" errors)
+                    Thread.sleep(100)
+                    
+                    Log.d(TAG, "🧹 Phase 2: Clearing nodes and anchors")
+                    
                     // Clear nodes first (children before parents)
                     nodeRecords.values.forEach { record ->
                         runCatching { record.node.destroy() }
@@ -340,17 +362,19 @@ class ArCoreCompatView(
                     }
                     anchorRecords.clear()
                     
-                    // Finally destroy the scene view
-                    // This triggers camera/ARCore cleanup on background threads
+                    Log.d(TAG, "🧹 Phase 3: Destroying SceneView")
+                    
+                    // Finally destroy the scene view (this will close the session properly)
                     sceneView.destroy()
-                    Log.d(TAG, "🧹 SceneView destroyed")
+                    
+                    Log.d(TAG, "✅ Disposal complete - all resources cleaned up")
                     
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Error during scene cleanup", t)
+                    Log.e(TAG, "❌ Error during scene cleanup", t)
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Error during dispose", t)
+            Log.e(TAG, "❌ Error during dispose", t)
         }
     }
 
@@ -408,13 +432,42 @@ class ArCoreCompatView(
                     result.error("NO_LIGHT", "Light estimate unavailable", null)
                 }
             }
-            "softResetSession",
-            "ar#nukeAll",
-            "ar#nukeAllNonBlocking",
-            "removeAllObjects",
+            "dispose" -> {
+                dispose()
+                result.success(null)
+            }
+            "softResetSession" -> {
+                val removeAnchors = (call.arguments as? Map<*, *>)?.get("removeExistingAnchors") as? Boolean ?: true
+                val resetTracking = (call.arguments as? Map<*, *>)?.get("resetTracking") as? Boolean ?: true
+                softResetSession(removeAnchors, resetTracking)
+                result.success(true)
+            }
+            "ar#nukeAll" -> {
+                val args = call.arguments as? Map<*, *>
+                val purgeCaches = args?.get("purgeCaches") as? Boolean ?: true
+                val removeAnchors = args?.get("removeExistingAnchors") as? Boolean ?: true
+                val resetTracking = args?.get("resetTracking") as? Boolean ?: true
+                nukeAll(purgeCaches, removeAnchors, resetTracking)
+                result.success(true)
+            }
+            "ar#nukeAllNonBlocking" -> {
+                val args = call.arguments as? Map<*, *>
+                val purgeCaches = args?.get("purgeCaches") as? Boolean ?: true
+                val removeAnchors = args?.get("removeExistingAnchors") as? Boolean ?: true
+                val resetTracking = args?.get("resetTracking") as? Boolean ?: false
+                // Execute async and return immediately
+                scope.launch {
+                    nukeAll(purgeCaches, removeAnchors, resetTracking)
+                }
+                result.success(true)
+            }
+            "removeAllObjects" -> {
+                removeAllNodes()
+                result.success(true)
+            }
             "ar#getPluginState" -> {
-                // TODO: Port advanced memory / cleanup routines from previous implementation.
-                result.success(false)
+                val state = getPluginState()
+                result.success(state)
             }
             "enableLightingMonitoring" -> {
                 // TODO: Implement polling listener once parity requirements are clarified.
@@ -479,13 +532,30 @@ class ArCoreCompatView(
                     result.error("NODE_NOT_FOUND", "Unknown node: $name", null)
                 }
             }
+            "removeNodeDeep" -> {
+                val nodeId = (call.arguments as? Map<*, *>)?.get("nodeId") as? String
+                if (nodeId != null) {
+                    val success = removeNodeDeep(nodeId)
+                    result.success(success)
+                } else {
+                    result.success(false)
+                }
+            }
+            "purgeCaches" -> {
+                // SceneView manages its own caches, but we can force GC
+                System.gc()
+                result.success(true)
+            }
+            "getMemoryInfo" -> {
+                val memoryInfo = getMemoryInfo()
+                result.success(memoryInfo)
+            }
             "transformationChanged" -> {
                 val args = call.arguments as? Map<*, *>
                 handleTransformationChanged(args)
                 result.success(null)
             }
             else -> {
-                // TODO: Port remaining advanced APIs (gestures, caching, memory diagnostics, etc.)
                 result.notImplemented()
             }
         }
@@ -633,6 +703,42 @@ class ArCoreCompatView(
             record.node.destroy()
         }
         return true
+    }
+
+    private fun removeNodeDeep(nodeId: String): Boolean {
+        Log.d(TAG, "🗑️ Deep remove node: $nodeId")
+        
+        val record = nodeRecords.remove(nodeId)
+        if (record == null) {
+            Log.w(TAG, "⚠️ Node not found: $nodeId")
+            return false
+        }
+        
+        try {
+            // Destroy the node (SceneView handles resource cleanup)
+            record.node.destroy()
+            
+            Log.d(TAG, "✅ Node removed successfully: $nodeId")
+            return true
+        } catch (t: Throwable) {
+            Log.e(TAG, "❌ Error removing node: $nodeId", t)
+            return false
+        }
+    }
+
+    private fun getMemoryInfo(): Map<String, Any> {
+        val runtime = Runtime.getRuntime()
+        val usedMemory = runtime.totalMemory() - runtime.freeMemory()
+        
+        return mapOf(
+            "usedMemoryBytes" to usedMemory,
+            "totalMemoryBytes" to runtime.totalMemory(),
+            "maxMemoryBytes" to runtime.maxMemory(),
+            "freeMemoryBytes" to runtime.freeMemory(),
+            "nodeCount" to nodeRecords.size,
+            "anchorCount" to anchorRecords.size,
+            "planeCount" to seenPlanes.size
+        )
     }
 
     private fun handleTransformationChanged(payload: Map<*, *>?) {
@@ -874,6 +980,122 @@ class ArCoreCompatView(
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         return stream.toByteArray()
+    }
+
+    // ------------------------------------------------------------------------
+    // Advanced cleanup methods
+    // ------------------------------------------------------------------------
+
+    private fun softResetSession(removeAnchors: Boolean, resetTracking: Boolean) {
+        Log.d(TAG, "🔄 Soft reset session - removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+        
+        uiHandler.post {
+            try {
+                if (removeAnchors) {
+                    // Clear all anchors
+                    anchorRecords.values.forEach { record ->
+                        runCatching {
+                            record.anchor.detach()
+                            record.node.destroy()
+                        }
+                    }
+                    anchorRecords.clear()
+                    
+                    // Clear nodes
+                    nodeRecords.values.forEach { record ->
+                        runCatching { record.node.destroy() }
+                    }
+                    nodeRecords.clear()
+                }
+                
+                if (resetTracking) {
+                    // Reset AR tracking by pausing and resuming
+                    sceneView.session?.pause()
+                    sceneView.session?.resume()
+                    Log.d(TAG, "✅ AR tracking reset")
+                }
+                
+                // Clear plane tracking
+                seenPlanes.clear()
+                
+                Log.d(TAG, "✅ Soft reset complete")
+            } catch (t: Throwable) {
+                Log.e(TAG, "❌ Error during soft reset", t)
+            }
+        }
+    }
+
+    private fun nukeAll(purgeCaches: Boolean, removeAnchors: Boolean, resetTracking: Boolean) {
+        Log.d(TAG, "💣 NUKE ALL - purgeCaches: $purgeCaches, removeAnchors: $removeAnchors, resetTracking: $resetTracking")
+        
+        uiHandler.post {
+            try {
+                // Phase 1: Clear all nodes (deep cleanup)
+                Log.d(TAG, "Phase 1: Clearing nodes")
+                nodeRecords.values.forEach { record ->
+                    runCatching {
+                        // Destroy node (SceneView handles resource cleanup)
+                        record.node.destroy()
+                    }
+                }
+                nodeRecords.clear()
+                
+                // Phase 2: Clear all anchors
+                if (removeAnchors) {
+                    Log.d(TAG, "Phase 2: Clearing anchors")
+                    anchorRecords.values.forEach { record ->
+                        runCatching {
+                            record.anchor.detach()
+                            record.node.destroy()
+                        }
+                    }
+                    anchorRecords.clear()
+                }
+                
+                // Phase 3: Clear tracking data
+                Log.d(TAG, "Phase 3: Clearing tracking data")
+                seenPlanes.clear()
+                
+                // Phase 4: Reset AR session
+                if (resetTracking) {
+                    Log.d(TAG, "Phase 4: Resetting AR session")
+                    val session = sceneView.session
+                    session?.pause()
+                    session?.resume()
+                }
+                
+                // Phase 5: Clear caches and force GC
+                if (purgeCaches) {
+                    Log.d(TAG, "Phase 5: Purging caches")
+                    // SceneView manages its own caches, but we can suggest GC
+                    System.gc()
+                }
+                
+                Log.d(TAG, "✅ NUKE ALL complete")
+            } catch (t: Throwable) {
+                Log.e(TAG, "❌ Error during nuke all", t)
+            }
+        }
+    }
+
+    private fun removeAllNodes() {
+        Log.d(TAG, "🗑️ Removing all nodes")
+        nodeRecords.values.forEach { record ->
+            runCatching { record.node.destroy() }
+        }
+        nodeRecords.clear()
+        Log.d(TAG, "✅ All nodes removed")
+    }
+
+    private fun getPluginState(): Map<String, Any> {
+        return mapOf(
+            "isDisposed" to isDisposed,
+            "nodeCount" to nodeRecords.size,
+            "anchorCount" to anchorRecords.size,
+            "planeCount" to seenPlanes.size,
+            "isSessionActive" to (sceneView.session != null),
+            "isSessionTracking" to (sceneView.frame?.camera?.trackingState == TrackingState.TRACKING)
+        )
     }
 
     // ------------------------------------------------------------------------

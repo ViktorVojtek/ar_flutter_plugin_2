@@ -388,14 +388,21 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     debugPrint("AR_DEBUG: 🧹 Removing all objects and anchors...");
     debugPrint("AR_DEBUG: 🧹 Current nodes: ${nodes.length}, nodeToIdMap: ${nodeToIdMap.length}");
     
-    // Remove all nodes first using the stored IDs
+    // Remove all nodes first - try using stored IDs, fallback to regular removal
     for (var node in nodes) {
       String? nodeId = nodeToIdMap[node];
       if (nodeId != null) {
-        debugPrint("AR_DEBUG: 🧹 Removing node with ID: $nodeId");
-        await this.arObjectManager!.removeNodeDeep(nodeId);
+        debugPrint("AR_DEBUG: 🧹 Removing node with deep cleanup using ID: $nodeId");
+        try {
+          bool? success = await this.arObjectManager!.removeNodeDeep(nodeId);
+          debugPrint("AR_DEBUG: ${success == true ? '✅' : '❌'} Remove result for $nodeId: $success");
+        } catch (e) {
+          debugPrint("AR_DEBUG: ❌ Error removing node $nodeId: $e, trying regular removal");
+          await this.arObjectManager!.removeNode(node);
+        }
       } else {
-        debugPrint("AR_DEBUG: ⚠️ Node ID not found for removal: ${node.name}");
+        debugPrint("AR_DEBUG: ⚠️ Node ID not found, using regular removal for: ${node.name}");
+        await this.arObjectManager!.removeNode(node);
       }
     }
     nodes.clear();
@@ -408,10 +415,20 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     }
     anchors.clear();
     
+    // Clear selection state
+    setState(() {
+      _selectedNodeName = null;
+      _lastDeselectedNode = null;
+      _deselectionTime = null;
+    });
+    
     debugPrint("AR_DEBUG: ✅ Removed all objects and anchors. Nodes: ${nodes.length}, Anchors: ${anchors.length}");
     
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("All objects removed"))
+      SnackBar(
+        content: Text("All objects removed - Scene cleared"),
+        backgroundColor: Colors.green,
+      )
     );
   }
 

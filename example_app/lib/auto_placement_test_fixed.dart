@@ -4,6 +4,7 @@ import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
 import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
@@ -22,6 +23,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   ARAnchorManager? arAnchorManager;
 
   List<ARNode> nodes = <ARNode>[];
+  List<ARAnchor> anchors = <ARAnchor>[]; // Track anchors for cleanup
   bool _isARInitialized = false;
   String _statusText = "Initializing AR...";
   int _modelIndex = 0; // Track which model to place next
@@ -237,8 +239,8 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   }
 
   Future<void> _placeNextModel() async {
-    if (!_isARInitialized || arObjectManager == null) {
-      print("❌ AR not initialized or object manager not available");
+    if (!_isARInitialized || arObjectManager == null || arAnchorManager == null) {
+      print("❌ AR not initialized or managers not available");
       return;
     }
 
@@ -256,37 +258,54 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     try {
       print("🎯 Testing placement of $modelName on Android ARCore");
       
-      // Create a node with the specific model's position and scale
+      // CRITICAL FIX: Create an anchor first (like the working ObjectGestures example)
+      // This ensures gestures work properly
       vm.Vector3 autoPosition = vm.Vector3(position[0], position[1], position[2]);
-      
-      // Create transformation matrix for the position
       Matrix4 transformation = Matrix4.identity();
       transformation.setTranslationRaw(autoPosition.x, autoPosition.y, autoPosition.z);
       
+      // Create anchor at the specified position
+      var newAnchor = ARPlaneAnchor(transformation: transformation);
+      bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
+      
+      print("🔗 Add anchor result: $didAddAnchor");
+      
+      if (didAddAnchor != true) {
+        print("❌ Failed to create anchor for $modelName");
+        setState(() {
+          _statusText = "❌ Failed to create anchor for $modelName";
+        });
+        return;
+      }
+      
+      print("✅ Anchor created successfully");
+      
+      // Now create the node and attach it to the anchor
       String nodeName = "${modelName}_${DateTime.now().millisecondsSinceEpoch}";
       
       ARNode node = ARNode(
         type: NodeType.webGLB,
         uri: modelUrl,
         name: nodeName,
-        transformation: transformation,
         scale: vm.Vector3(modelScale, modelScale, modelScale),
+        position: vm.Vector3(0.0, 0.0, 0.0), // Position relative to anchor
+        rotation: vm.Vector4(1.0, 0.0, 0.0, 0.0),
         isTransformable: true,
         enablePanGestures: true,
         enableRotationGestures: true,
       );
 
       print("📦 Created ARNode: $nodeName");
-      print("📍 Position: $autoPosition");
       print("📏 Scale: ${node.scale}");
       print("🌐 URL: $modelUrl");
       
-      // Place the model
-      String? result = await arObjectManager!.addNode(node);
+      // CRITICAL: Add node to anchor (not standalone)
+      String? nodeId = await arObjectManager!.addNode(node, planeAnchor: newAnchor);
       
-      if (result != null) {
-        print("✅ PLACEMENT SUCCESS! Node ID: $result for $modelName");
+      if (nodeId != null) {
+        print("✅ PLACEMENT SUCCESS! Node ID: $nodeId for $modelName");
         nodes.add(node);
+        anchors.add(newAnchor); // Track anchor for cleanup
         
         // Move to next model for next placement
         _modelIndex++;
@@ -299,6 +318,8 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         setState(() {
           _statusText = "❌ $modelName placement failed - addNode returned null";
         });
+        // Clean up the anchor since node placement failed
+        await arAnchorManager!.removeAnchor(newAnchor);
       }
       
     } catch (e) {
@@ -317,16 +338,27 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     });
 
     try {
+      print("🧹 Removing ${nodes.length} nodes and ${anchors.length} anchors...");
+      
+      // Remove all nodes
       for (ARNode node in nodes) {
         await arObjectManager!.removeNode(node);
       }
-      
       nodes.clear();
+      
+      // Remove all anchors
+      for (ARAnchor anchor in anchors) {
+        await arAnchorManager!.removeAnchor(anchor);
+      }
+      anchors.clear();
+      
       _modelIndex = 0; // Reset for fresh testing
       
       setState(() {
         _statusText = "All objects removed. Ready for new multi-model test.";
       });
+      
+      print("✅ Successfully removed all nodes and anchors");
       
     } catch (e) {
       print("❌ Error removing objects: $e");
