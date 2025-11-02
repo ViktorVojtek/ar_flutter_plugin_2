@@ -13,6 +13,7 @@ import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:vector_math/vector_math_64.dart' as vector_math;
 import 'auto_placement_test_fixed.dart';
 import 'light_estimation_screen.dart';
+import 'ar_coaching_example.dart';
 
 void main() {
   runApp(MyApp());
@@ -95,6 +96,28 @@ class MainMenu extends StatelessWidget {
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                minimumSize: Size(200, 50),
+              ),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ARCoachingExample()),
+                );
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.assistant, size: 20),
+                  SizedBox(width: 8),
+                  Text('Coaching Overlay Demo'),
+                ],
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.purple,
                 foregroundColor: Colors.white,
                 minimumSize: Size(200, 50),
               ),

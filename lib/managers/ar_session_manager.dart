@@ -525,4 +525,99 @@ class ARSessionManager {
       return null;
     }
   }
+
+  // =================================================================
+  // Depth API / Occlusion Methods
+  // =================================================================
+  
+  /// Check if the device supports the Depth API
+  /// Returns true if depth mode is supported, false otherwise
+  /// 
+  /// Note: Not all ARCore devices support depth. Devices without ToF sensors
+  /// can still support depth through motion-based calculation.
+  Future<bool> isDepthSupported() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isDepthSupported');
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error checking depth support: $e');
+      return false;
+    }
+  }
+
+  /// Enable or disable depth-based occlusion
+  /// 
+  /// When enabled, virtual objects will be realistically occluded by real-world objects.
+  /// This makes AR scenes look much more realistic - objects can appear behind real furniture,
+  /// walls, or people.
+  /// 
+  /// [enable] - Set to true to enable occlusion, false to disable
+  /// Returns true if the operation succeeded
+  /// 
+  /// Example:
+  /// ```dart
+  /// // Enable occlusion for realistic rendering
+  /// bool success = await sessionManager.enableDepthOcclusion(true);
+  /// if (success) {
+  ///   print("Depth occlusion enabled - objects will be hidden behind real objects");
+  /// }
+  /// ```
+  Future<bool> enableDepthOcclusion(bool enable) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('enableDepthOcclusion', {
+        'enable': enable,
+      });
+      if (debug) {
+        print('🔍 Depth occlusion ${enable ? "ENABLED" : "DISABLED"}: ${result == true ? "✅" : "❌"}');
+      }
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error toggling depth occlusion: $e');
+      return false;
+    }
+  }
+
+  /// Check if depth occlusion is currently enabled
+  /// Returns true if occlusion is enabled, false otherwise
+  Future<bool> isDepthOcclusionEnabled() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isDepthOcclusionEnabled');
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error checking depth occlusion status: $e');
+      return false;
+    }
+  }
+
+  /// Acquire the current depth image from ARCore
+  /// 
+  /// Returns a map containing:
+  /// - width: Width of the depth image
+  /// - height: Height of the depth image
+  /// - depthData: List of depth values in millimeters
+  /// - format: "millimeters" (the unit of depth values)
+  /// 
+  /// Returns null if depth data is not available yet.
+  /// 
+  /// Note: Depth data may not be available immediately after starting the AR session.
+  /// It requires motion and tracked feature points to calculate depth.
+  /// 
+  /// Example:
+  /// ```dart
+  /// final depthImage = await sessionManager.acquireDepthImage();
+  /// if (depthImage != null) {
+  ///   print("Depth image: ${depthImage['width']}x${depthImage['height']}");
+  ///   List<int> depths = depthImage['depthData'];
+  ///   print("First pixel depth: ${depths[0]}mm");
+  /// }
+  /// ```
+  Future<Map<String, dynamic>?> acquireDepthImage() async {
+    try {
+      final result = await _channel.invokeMethod<Map>('acquireDepthImage');
+      return result?.cast<String, dynamic>();
+    } catch (e) {
+      if (debug) print('Depth image not available: $e');
+      return null;
+    }
+  }
 }

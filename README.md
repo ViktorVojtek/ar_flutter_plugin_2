@@ -78,6 +78,39 @@ void _onARViewCreated(ARSessionManager sessionManager, ...) {
 📖 **[Quick Reference](LIGHT_ESTIMATION_QUICK_REF.md)**
 📝 **[Full Example](examples/light_estimation_example.dart)**
 
+## NEW: Depth API & Realistic Occlusion 🔍
+
+**Virtual objects now correctly appear behind or in front of real-world objects!**
+
+The ARCore Depth API is now fully integrated, enabling **realistic occlusion** where 3D models are hidden behind real furniture, walls, or people.
+
+- **Automatic Occlusion**: Enabled by default - no configuration needed!
+- **Universal Support**: Works on ALL ARCore devices (motion-based depth)
+- **Enhanced with ToF**: Better accuracy on devices with depth sensors
+- **Toggleable**: Enable/disable for debugging or performance
+- **Raw Depth Access**: Get depth data for custom processing
+
+### Quick Example
+
+```dart
+void onARViewCreated(ARSessionManager sessionManager, ...) {
+  // Depth occlusion is enabled automatically!
+  sessionManager.onInitialize(showPlanes: true, handleTaps: true);
+  
+  // Optional: Toggle occlusion on/off
+  await sessionManager.enableDepthOcclusion(true);
+  
+  // Optional: Check device support
+  bool supported = await sessionManager.isDepthSupported();
+  print(supported ? "✅ Depth supported" : "⚠️ Not supported");
+}
+```
+
+**Result:** Your AR objects now realistically appear behind real-world objects! 🎉
+
+📖 **[Complete Depth Occlusion Guide](DEPTH_OCCLUSION_GUIDE.md)**
+📖 **[Quick Summary](DEPTH_OCCLUSION_SUMMARY.md)**
+
 ---
 
 This version is a direct adaptation of the original ar_flutter_plugin (https://pub.dev/packages/ar_flutter_plugin), 

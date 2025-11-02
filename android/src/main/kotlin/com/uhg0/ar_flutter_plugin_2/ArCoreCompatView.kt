@@ -96,6 +96,10 @@ class ArCoreCompatView(
     private var panStartTouchY = 0f
     private var currentTouchX = 0f  // Track absolute touch position
     private var currentTouchY = 0f
+    
+    // Depth occlusion state tracking (SceneView handles this automatically when depth is enabled)
+    // We just track the state for the Flutter API
+    private var depthOcclusionEnabled = true  // Enabled by default when depth mode is AUTOMATIC
 
     init {
         sceneView = ARSceneView(
@@ -111,14 +115,29 @@ class ArCoreCompatView(
             planeRenderer.isEnabled = true
 
             configureSession { session, config ->
-                config.depthMode = if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                // Enable depth mode for occlusion support
+                val depthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                config.depthMode = if (depthSupported) {
                     Config.DepthMode.AUTOMATIC
                 } else {
                     Config.DepthMode.DISABLED
                 }
+                
                 config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                 config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                 config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                
+                Log.i(TAG, "🔍 Depth API: ${if (depthSupported) "ENABLED - Occlusion supported" else "DISABLED - Device doesn't support depth"}")
+                
+                // When depth mode is enabled, SceneView automatically handles depth-based occlusion
+                // Virtual objects will appear behind real-world objects
+                if (depthSupported) {
+                    depthOcclusionEnabled = true
+                    Log.i(TAG, "✅ Depth occlusion ENABLED - Virtual objects will be occluded by real objects")
+                } else {
+                    depthOcclusionEnabled = false
+                    Log.i(TAG, "⚠️ Depth not supported on this device - occlusion unavailable")
+                }
             }
 
             onSessionUpdated = { _, frame ->
@@ -420,6 +439,38 @@ class ArCoreCompatView(
                 result.success(null)
             }
             "snapshot" -> takeSnapshot(result)
+            "isDepthSupported" -> {
+                val session = sceneView.session
+                val supported = session?.isDepthModeSupported(Config.DepthMode.AUTOMATIC) ?: false
+                result.success(supported)
+            }
+            "enableDepthOcclusion" -> {
+                val enable = call.argument<Boolean>("enable") ?: true
+                val session = sceneView.session
+                if (session != null && session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    // Reconfigure session to change depth mode
+                    sceneView.configureSession { _, config ->
+                        config.depthMode = if (enable) {
+                            Config.DepthMode.AUTOMATIC
+                        } else {
+                            Config.DepthMode.DISABLED
+                        }
+                    }
+                    depthOcclusionEnabled = enable
+                    Log.i(TAG, "🔍 Depth occlusion ${if (enable) "ENABLED" else "DISABLED"}")
+                    result.success(true)
+                } else {
+                    Log.w(TAG, "⚠️ Depth not supported on this device")
+                    depthOcclusionEnabled = false
+                    result.success(false)
+                }
+            }
+            "isDepthOcclusionEnabled" -> {
+                result.success(depthOcclusionEnabled)
+            }
+            "acquireDepthImage" -> {
+                acquireDepthImage(result)
+            }
             "getLightEstimate" -> {
                 val estimate = sceneView.frame?.lightEstimate
                 if (estimate != null && estimate.state == com.google.ar.core.LightEstimate.State.VALID) {
@@ -481,6 +532,7 @@ class ArCoreCompatView(
         val showPlanes = arguments?.get("showPlanes") as? Boolean ?: true
         val planeDetectionIndex = (arguments?.get("planeDetectionConfig") as? Number)?.toInt()
         val showFeaturePoints = arguments?.get("showFeaturePoints") as? Boolean ?: false
+        val showAnimatedGuide = arguments?.get("showAnimatedGuide") as? Boolean ?: false
 
         sceneView.configureSession { session, config ->
             config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
@@ -503,6 +555,17 @@ class ArCoreCompatView(
         sceneView.planeRenderer.isEnabled = planeDetectionIndex != null && planeDetectionIndex != 0
         if (showFeaturePoints) {
             Log.w(TAG, "Feature point visualization is not yet supported in the SceneView migration.")
+        }
+
+        // Handle coaching overlay for Android
+        if (showAnimatedGuide) {
+            Log.i(TAG, "📱 Coaching overlay requested - ARCore doesn't have a native equivalent to ARCoachingOverlayView")
+            Log.i(TAG, "💡 Consider using the HandMotionView or implementing a custom Flutter overlay")
+            // Note: ARCore doesn't provide a built-in coaching overlay like ARKit
+            // You can implement custom guidance using:
+            // 1. TrackingState monitoring (see handleFrame method)
+            // 2. Custom Flutter overlay with instructions
+            // 3. HandMotionView for plane scanning guidance
         }
     }
 
@@ -980,6 +1043,59 @@ class ArCoreCompatView(
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         return stream.toByteArray()
+    }
+
+    // ------------------------------------------------------------------------
+    // Depth API
+    // ------------------------------------------------------------------------
+    
+    private fun acquireDepthImage(result: MethodChannel.Result) {
+        try {
+            val frame = sceneView.frame
+            if (frame == null) {
+                result.error("NO_FRAME", "AR frame not available", null)
+                return
+            }
+            
+            // Try to acquire depth image
+            val depthImage = try {
+                frame.acquireDepthImage16Bits()
+            } catch (e: Exception) {
+                // Depth data not yet available
+                result.error("DEPTH_NOT_AVAILABLE", "Depth data not yet available: ${e.message}", null)
+                return
+            }
+            
+            try {
+                // Extract depth information
+                val width = depthImage.width
+                val height = depthImage.height
+                val plane = depthImage.planes[0]
+                val buffer = plane.buffer
+                
+                // Convert depth data to a list of millimeter values
+                val depthData = mutableListOf<Int>()
+                buffer.rewind()
+                while (buffer.remaining() >= 2) {
+                    val depthMm = buffer.short.toInt() and 0xFFFF
+                    depthData.add(depthMm)
+                }
+                
+                result.success(mapOf(
+                    "width" to width,
+                    "height" to height,
+                    "depthData" to depthData,
+                    "format" to "millimeters"
+                ))
+                
+                Log.d(TAG, "✅ Depth image acquired: ${width}x${height}, ${depthData.size} depth values")
+            } finally {
+                depthImage.close()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error acquiring depth image", e)
+            result.error("DEPTH_ERROR", e.message, null)
+        }
     }
 
     // ------------------------------------------------------------------------
