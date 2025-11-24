@@ -45,7 +45,12 @@ The plugin **automatically enables depth occlusion** when you initialize the AR 
 
 ### iOS (ARKit)
 
-iOS depth features coming soon! ARKit has similar depth capabilities through LiDAR sensors.
+ARKit provides depth through LiDAR sensors:
+1. **LiDAR sensor** - Available on iPhone 12 Pro+, iPad Pro 2020+ (requires iOS 14.0+)
+2. **Scene depth** - High-accuracy depth data at 60 FPS
+3. **Confidence maps** - Per-pixel confidence levels (low/medium/high)
+
+The plugin **automatically enables depth occlusion** on supported LiDAR devices!
 
 ---
 
@@ -222,6 +227,87 @@ if (depthImage != null) {
   print("Depth data not available yet - keep moving device");
 }
 ```
+
+---
+
+## Platform Comparison
+
+### Depth Data Format Differences
+
+| Aspect | Android (ARCore) | iOS (ARKit) |
+|--------|-----------------|-------------|
+| **Data Type** | 16-bit unsigned int | 32-bit float |
+| **Units** | Millimeters | Meters |
+| **Format String** | `"DEPTH16"` | `"DEPTH_FLOAT32"` |
+| **Value Range** | 0 - 65,535 mm | 0.0 - unlimited meters |
+| **Precision** | 1mm | Sub-millimeter |
+
+### Converting Between Formats
+
+**iOS to Android (meters to millimeters):**
+```dart
+final depthImage = await sessionManager.acquireDepthImage();
+if (depthImage != null) {
+  String format = depthImage['format'];
+  
+  if (format == "DEPTH_FLOAT32") {
+    // iOS format - convert meters to millimeters
+    Uint8List rawData = depthImage['depthData'];
+    Float32List iosDepth = rawData.buffer.asFloat32List();
+    
+    // Convert to Android-compatible format
+    Uint16List androidDepth = Uint16List(iosDepth.length);
+    for (int i = 0; i < iosDepth.length; i++) {
+      int mm = (iosDepth[i] * 1000).toInt();
+      androidDepth[i] = mm.clamp(0, 65535);
+    }
+    print("Converted iOS depth to Android format");
+  } else if (format == "DEPTH16") {
+    // Android format - already in millimeters
+    Uint8List rawData = depthImage['depthData'];
+    Uint16List androidDepth = rawData.buffer.asUint16List();
+    print("Using native Android depth format");
+  }
+}
+```
+
+**Android to iOS (millimeters to meters):**
+```dart
+// Android DEPTH16 → iOS DEPTH_FLOAT32
+Uint16List androidDepth = depthData.buffer.asUint16List();
+Float32List iosDepth = Float32List(androidDepth.length);
+for (int i = 0; i < androidDepth.length; i++) {
+  iosDepth[i] = androidDepth[i] / 1000.0; // mm → meters
+}
+```
+
+### Technology Comparison
+
+| Feature | Android | iOS |
+|---------|---------|-----|
+| **Depth Method** | Motion tracking + ToF | LiDAR sensor |
+| **Requires Movement** | Yes (motion-based) | No (instant depth) |
+| **Works in Dark** | Limited | Yes (LiDAR) |
+| **Accuracy** | Good | Excellent |
+| **Range** | Up to 5-8 meters | Up to 5 meters |
+| **Update Rate** | 30 FPS | 60 FPS |
+| **Device Support** | Most ARCore devices | LiDAR devices only |
+| **Confidence Data** | Not exposed | Available |
+
+### Platform-Specific Features
+
+**iOS-Only Features:**
+- ✅ Confidence maps (`confidenceAvailable` in depth image)
+- ✅ Smoothed scene depth (temporally filtered)
+- ✅ Higher precision (32-bit float vs 16-bit int)
+- ✅ Works without device motion
+- ✅ Better in low-light conditions
+
+**Android-Only Features:**
+- ✅ Works on more devices (no LiDAR required)
+- ✅ Motion-based depth works everywhere
+- ✅ ToF sensor support where available
+- ✅ More accessible to users
 
 ---
 
@@ -415,7 +501,7 @@ class _DepthOcclusionExampleState extends State<DepthOcclusionExample> {
 
 ## Device Compatibility
 
-### Supported Devices
+### Android - ARCore Depth API
 
 ARCore Depth API is supported on:
 - ✅ **All ARCore-compatible devices** (motion-based depth)
@@ -424,6 +510,19 @@ ARCore Depth API is supported on:
   - Samsung Galaxy Note 10+ / Note 20 Ultra
   - Huawei P30 Pro / Mate 30 Pro
   - And more! See [ARCore supported devices](https://developers.google.com/ar/discover/supported-devices)
+
+### iOS - ARKit Scene Depth
+
+ARKit Scene Depth API is supported on:
+- ✅ **LiDAR-equipped devices** (requires iOS 14.0+):
+  - **iPhone 12 Pro / 12 Pro Max**
+  - **iPhone 13 Pro / 13 Pro Max**
+  - **iPhone 14 Pro / 14 Pro Max**
+  - **iPhone 15 Pro / 15 Pro Max**
+  - **iPad Pro 11-inch** (2020, 2021, 2022)
+  - **iPad Pro 12.9-inch** (2020, 2021, 2022)
+
+**Note:** Non-LiDAR iOS devices (iPhone 12/13/14/15 standard models, iPad Air/mini) do **not** support depth occlusion.
 
 ### Checking at Runtime
 
