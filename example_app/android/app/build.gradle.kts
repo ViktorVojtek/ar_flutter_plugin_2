@@ -28,6 +28,13 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        
+        // Exclude 32-bit ABIs to comply with Google Play's 16KB page size requirement
+        // ARCore SDK 1.44.0 has non-compliant 32-bit libraries (armeabi-v7a)
+        // Modern Android devices (2019+) are 64-bit, so this only affects very old devices
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        }
     }
 
     buildTypes {
@@ -41,6 +48,18 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+    
+    packaging {
+        // Forcefully exclude 32-bit native libraries at packaging stage
+        // This ensures ARCore SDK's 32-bit libraries are not included in the APK/AAB
+        jniLibs {
+            excludes.add("lib/armeabi-v7a/**")
+            excludes.add("lib/x86/**")
+        }
+        resources {
+            excludes.add("/META-INF/{AL2.0,LGPL2.1}")
         }
     }
 }
