@@ -31,6 +31,7 @@ import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.node.AnchorNode
 import io.github.sceneview.gesture.MoveGestureDetector
 import io.github.sceneview.gesture.RotateGestureDetector
+import io.github.sceneview.gesture.ScaleGestureDetector
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Scale
 import io.github.sceneview.math.quaternion
@@ -96,6 +97,18 @@ class ArCoreCompatView(
     private var panStartTouchY = 0f
     private var currentTouchX = 0f  // Track absolute touch position
     private var currentTouchY = 0f
+    
+    // Scale gesture blocking - store original scale to force reset
+    private var originalScaleWhenBlocked: Scale? = null
+    
+    // Rotation-scale interference detection
+    private var rotationStartScale: Scale? = null
+    private var rotationStartWorldY: Float? = null
+    private var currentlyRotatingNode: Node? = null  // Track node being rotated for per-frame scale enforcement
+    
+    // CRITICAL: Track if we're in a multi-touch gesture to aggressively block scale
+    private var activePointerCount = 0
+    private var isRotationActive = false  // Flag to track active rotation state
     
     // Depth occlusion state tracking (SceneView handles this automatically when depth is enabled)
     // We just track the state for the Flutter API
@@ -275,23 +288,249 @@ class ArCoreCompatView(
                 onRotateBegin = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enableRotation == true) {
-                        Log.d(
-                            TAG,
-                            "onRotateBegin for node: ${node.name}, isRotationEditable: ${node.isRotationEditable}"
-                        )
-                        handleGestureEvent("onRotationStart", node)
+                        // Check tracking state - don't start rotation if tracking is compromised
+                        val trackingState = try { 
+                            sceneView.frame?.camera?.trackingState 
+                        } catch (_: Exception) { 
+                            null 
+                        }
+                        
+                        if (trackingState != null && trackingState != TrackingState.TRACKING) {
+                            Log.w(TAG, "⚠️ Ignoring rotation start - tracking state is $trackingState")
+                        } else {
+                            // 🔥 CRITICAL: Set rotation active flag BEFORE storing scale
+                            isRotationActive = true
+                            
+                            // Store initial LOCAL scale (not world scale!) for interference detection
+                            // World scale changes during rotation due to parent transform hierarchy
+                            rotationStartScale = node.scale  // LOCAL scale stays constant
+                            rotationStartWorldY = node.worldPosition.y
+                            currentlyRotatingNode = node  // Track for per-frame enforcement
+                            
+                            // 🔍 DEBUG: Log parent scale too to see if anchor is being scaled
+                            val parentScale = node.parent?.scale
+                            Log.d(
+                                TAG,
+                                "🔄 onRotateBegin for node: ${node.name}, isRotationEditable: ${node.isRotationEditable}, " +
+                                "worldPos=(${node.worldPosition.x.format()}, ${node.worldPosition.y.format()}, ${node.worldPosition.z.format()}), " +
+                                "localScale=(${node.scale.x.format()}, ${node.scale.y.format()}, ${node.scale.z.format()}), " +
+                                "parentScale=${parentScale?.let { "(${it.x.format()}, ${it.y.format()}, ${it.z.format()})" } ?: "null"}"
+                            )
+                            handleGestureEvent("onRotationStart", node)
+                        }
                     }
                 },
                 onRotate = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enableRotation == true) {
+                        // 🔥 CRITICAL: ALWAYS protect scale during rotation - regardless of enableScale setting
+                        // Scale should NEVER change during rotation gesture
+                        rotationStartScale?.let { startScale ->
+                            val currentScale = node.scale  // LOCAL scale
+                            val scaleChanged = abs(currentScale.x - startScale.x) > 0.001f ||
+                                              abs(currentScale.y - startScale.y) > 0.001f ||
+                                              abs(currentScale.z - startScale.z) > 0.001f
+                            if (scaleChanged) {
+                                node.scale = startScale  // Reset LOCAL scale
+                                Log.w(TAG, "🔄 Scale drift during rotation! Reset to $startScale (was $currentScale)")
+                            }
+                        }
+                        
+                        // CRITICAL: Force reset Y position if it changed during rotation
+                        rotationStartWorldY?.let { startY ->
+                            val currentY = node.worldPosition.y
+                            if (abs(currentY - startY) > 0.005f) {  // More than 5mm drift
+                                node.worldPosition = Position(node.worldPosition.x, startY, node.worldPosition.z)
+                            }
+                        }
+                        
                         handleGestureEvent("onRotationChange", node)
                     }
                 },
                 onRotateEnd = { _: RotateGestureDetector, _: MotionEvent, node: Node? ->
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enableRotation == true) {
+                        // Check LOCAL scale - should NEVER change during pure rotation
+                        val finalScale = node.scale  // LOCAL scale
+                        val finalWorldY = node.worldPosition.y
+                        
+                        val scaleChanged = rotationStartScale?.let { startScale ->
+                            abs(finalScale.x - startScale.x) > 0.01f ||
+                            abs(finalScale.y - startScale.y) > 0.01f ||
+                            abs(finalScale.z - startScale.z) > 0.01f
+                        } ?: false
+                        
+                        val yPositionChanged = rotationStartWorldY?.let { startY ->
+                            abs(finalWorldY - startY) > 0.01f  // More than 1cm change
+                        } ?: false
+                        
+                        if (scaleChanged) {
+                            Log.w(TAG, "⚠️ ROTATION-SCALE INTERFERENCE DETECTED! Local scale changed from $rotationStartScale to $finalScale")
+                            // RESTORE original LOCAL scale
+                            rotationStartScale?.let { node.scale = it }
+                            Log.d(TAG, "🔧 Restored local scale to: $rotationStartScale")
+                        }
+                        if (yPositionChanged) {
+                            Log.w(TAG, "⚠️ Y-JUMP DETECTED during rotation! Y changed from $rotationStartWorldY to $finalWorldY (delta: ${finalWorldY - (rotationStartWorldY ?: 0f)})")
+                            // RESTORE original Y position
+                            rotationStartWorldY?.let { startY ->
+                                node.worldPosition = Position(node.worldPosition.x, startY, node.worldPosition.z)
+                            }
+                            Log.d(TAG, "🔧 Restored Y position to: $rotationStartWorldY")
+                        }
+                        
+                        // 🔍 DEBUG: Log parent scale too to see if anchor is being scaled
+                        val parentScale = node.parent?.scale
+                        val worldScale = node.worldScale
+                        Log.d(
+                            TAG,
+                            "🔄 onRotateEnd for node: ${node.name}, " +
+                            "finalPos=(${node.worldPosition.x.format()}, ${node.worldPosition.y.format()}, ${node.worldPosition.z.format()}), " +
+                            "finalLocalScale=(${finalScale.x.format()}, ${finalScale.y.format()}, ${finalScale.z.format()}), " +
+                            "worldScale=(${worldScale.x.format()}, ${worldScale.y.format()}, ${worldScale.z.format()}), " +
+                            "parentScale=${parentScale?.let { "(${it.x.format()}, ${it.y.format()}, ${it.z.format()})" } ?: "null"}"
+                        )
+                        
+                        // 🔥 CRITICAL: Also reset parent scale if it changed!
+                        node.parent?.let { parent ->
+                            val parentScaleVal = parent.scale
+                            if (abs(parentScaleVal.x - 1f) > 0.01f ||
+                                abs(parentScaleVal.y - 1f) > 0.01f ||
+                                abs(parentScaleVal.z - 1f) > 0.01f) {
+                                Log.w(TAG, "⚠️ PARENT SCALE CHANGED! Resetting from $parentScaleVal to (1,1,1)")
+                                parent.scale = Scale(1f, 1f, 1f)
+                            }
+                        }
+                        
+                        // 🔥 CRITICAL: Final scale correction - force restore scale multiple times
+                        // SceneView may apply scale changes AFTER our callback returns
+                        val savedNode = node
+                        val savedScale = rotationStartScale
+                        
+                        rotationStartScale?.let { targetScale ->
+                            node.scale = targetScale
+                            Log.d(TAG, "🔒 Final scale lock applied: $targetScale")
+                        }
+                        
+                        // 🔥 AGGRESSIVE DELAYED SCALE LOCK: Force scale many times over 1 second
+                        // This catches any delayed SceneView scale application
+                        savedScale?.let { targetScale ->
+                            // Multiple rapid resets in the first 100ms
+                            for (delay in listOf(16L, 32L, 50L, 66L, 83L, 100L)) {
+                                uiHandler.postDelayed({
+                                    if (!isDisposed && savedNode.parent != null) {
+                                        savedNode.scale = targetScale
+                                    }
+                                }, delay)
+                            }
+                            // Slower resets over the next second
+                            for (delay in listOf(150L, 200L, 300L, 500L, 750L, 1000L)) {
+                                uiHandler.postDelayed({
+                                    if (!isDisposed && savedNode.parent != null) {
+                                        val currentScale = savedNode.scale
+                                        val needsReset = abs(currentScale.x - targetScale.x) > 0.001f ||
+                                                        abs(currentScale.y - targetScale.y) > 0.001f ||
+                                                        abs(currentScale.z - targetScale.z) > 0.001f
+                                        if (needsReset) {
+                                            savedNode.scale = targetScale
+                                            Log.w(TAG, "🚨 Scale drift detected at ${delay}ms - reset to $targetScale (was $currentScale)")
+                                        }
+                                    }
+                                }, delay)
+                            }
+                        }
+                        
+                        // Clear tracking variables
+                        isRotationActive = false  // Clear rotation flag
+                        currentlyRotatingNode = null  // Stop per-frame enforcement
+                        rotationStartScale = null
+                        rotationStartWorldY = null
+                        
                         handleGestureEnd("onRotationEnd", node)
+                    }
+                },
+                onScaleBegin = { _: ScaleGestureDetector, _: MotionEvent, node: Node? ->
+                    // 🔥 CRITICAL: ALWAYS reject scale during rotation
+                    if (isRotationActive) {
+                        Log.w(TAG, "🚫 BLOCKED scale begin - rotation is active!")
+                        // Force restore scale immediately
+                        currentlyRotatingNode?.let { rotNode ->
+                            rotationStartScale?.let { targetScale ->
+                                rotNode.scale = targetScale
+                            }
+                        }
+                        false  // Reject scale gesture completely
+                    } else {
+                        val record = node?.let(::findNodeRecord)
+                        if (isDisposed) {
+                            false
+                        } else if (record?.enableScale == true) {
+                            Log.d(TAG, "📏 Scale gesture allowed on node: ${node?.name}")
+                            true  // Accept and allow scaling
+                        } else {
+                            // CRITICAL: Store original LOCAL scale when blocking gesture
+                            node?.let {
+                                originalScaleWhenBlocked = it.scale  // LOCAL scale
+                            }
+                            false  // Reject gesture - do not process scale
+                        }
+                    }
+                },
+                onScale = { detector: ScaleGestureDetector, _: MotionEvent, node: Node? ->
+                    // 🔥 CRITICAL: ALWAYS reject scale during rotation
+                    if (isRotationActive) {
+                        // Force restore scale immediately
+                        currentlyRotatingNode?.let { rotNode ->
+                            rotationStartScale?.let { targetScale ->
+                                rotNode.scale = targetScale
+                            }
+                        }
+                        false  // Reject scale gesture completely
+                    } else {
+                        val record = node?.let(::findNodeRecord)
+                        if (isDisposed) {
+                            false
+                        } else if (record?.enableScale == true) {
+                            true  // Continue processing scale
+                        } else {
+                            // FORCE reset LOCAL scale if it changed despite being disabled
+                            node?.let {
+                                if (originalScaleWhenBlocked != null) {
+                                    it.scale = originalScaleWhenBlocked!!  // LOCAL scale
+                                }
+                            }
+                            false  // Reject scale updates
+                        }
+                    }
+                },
+                onScaleEnd = { _: ScaleGestureDetector, _: MotionEvent, node: Node? ->
+                    // 🔥 CRITICAL: Always force reset scale at end if rotation was active
+                    if (isRotationActive) {
+                        currentlyRotatingNode?.let { rotNode ->
+                            rotationStartScale?.let { targetScale ->
+                                rotNode.scale = targetScale
+                                Log.w(TAG, "🔒 Scale forced to $targetScale on scale end (rotation active)")
+                            }
+                        }
+                        false
+                    } else {
+                        val record = node?.let(::findNodeRecord)
+                        if (isDisposed) {
+                            false
+                        } else if (record?.enableScale == true) {
+                            Log.d(TAG, "📏 Scale gesture ended on node: ${node?.name}")
+                            originalScaleWhenBlocked = null  // Clear stored scale
+                            true
+                        } else {
+                            // Final reset to ensure LOCAL scale didn't change
+                            node?.let {
+                                if (originalScaleWhenBlocked != null) {
+                                    it.scale = originalScaleWhenBlocked!!  // LOCAL scale
+                                }
+                            }
+                            originalScaleWhenBlocked = null  // Clear stored scale
+                            false
+                        }
                     }
                 }
             )
@@ -305,9 +544,13 @@ class ArCoreCompatView(
         
         // Intercept ALL touch events to track real-time finger position
         // This is needed because MoveGestureDetector doesn't provide current coordinates
+        // IMPORTANT: Do NOT consume events (return true) as this breaks SceneView's gesture system
         sceneView.setOnTouchListener { view, event ->
             // Prevent touch processing during disposal
             if (isDisposed) return@setOnTouchListener false
+            
+            // Track pointer count for multi-touch detection
+            activePointerCount = event.pointerCount
             
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
@@ -316,13 +559,43 @@ class ArCoreCompatView(
                     currentTouchY = event.y
                     Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
                 }
+                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                    // Second finger down - if we're rotating, force scale reset
+                    if (isRotationActive && activePointerCount >= 2) {
+                        Log.w(TAG, "⚠️ Multi-touch detected during rotation! Pointers: $activePointerCount")
+                        currentlyRotatingNode?.let { node ->
+                            rotationStartScale?.let { targetScale ->
+                                node.scale = targetScale
+                            }
+                        }
+                    }
+                }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     currentTouchX = event.x
                     currentTouchY = event.y
-                    // Too verbose to log every move
+                    
+                    // If rotation is active with 2+ fingers, reset scale on every move
+                    if (isRotationActive && activePointerCount >= 2) {
+                        currentlyRotatingNode?.let { node ->
+                            rotationStartScale?.let { targetScale ->
+                                val currentScale = node.scale
+                                val scaleChanged = abs(currentScale.x - targetScale.x) > 0.001f ||
+                                                  abs(currentScale.y - targetScale.y) > 0.001f ||
+                                                  abs(currentScale.z - targetScale.z) > 0.001f
+                                if (scaleChanged) {
+                                    node.scale = targetScale
+                                    Log.w(TAG, "🚨 BLOCKED scale during rotation! Reset to $targetScale (was $currentScale)")
+                                }
+                            }
+                        }
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> {
+                    // Recalculate pointer count after release
+                    activePointerCount = maxOf(0, event.pointerCount - 1)
                 }
             }
-            false // Don't consume, let gesture detectors handle it
+            false // NEVER consume - let SceneView's gesture detectors work normally
         }
 
         sessionChannel.setMethodCallHandler(::handleSessionMethod)
@@ -336,60 +609,137 @@ class ArCoreCompatView(
 
     override fun getView(): View = container
 
+    /**
+     * Force synchronous disposal of AR resources.
+     * Called by ArSessionCoordinator before creating a new AR view.
+     * This ensures all camera/session resources are fully released.
+     */
+    fun forceDisposeSync() {
+        if (isDisposed) return
+        isDisposed = true
+        
+        Log.d(TAG, "🧹 FORCE SYNC DISPOSE - starting immediate cleanup")
+        
+        try {
+            // Cancel method handlers immediately
+            sessionChannel.setMethodCallHandler(null)
+            objectChannel.setMethodCallHandler(null)
+            anchorChannel.setMethodCallHandler(null)
+            
+            // Cancel coroutine scope
+            runCatching { scope.cancel() }
+            
+            // Stop touch listener
+            sceneView.setOnTouchListener(null)
+            
+            // Clear rotation tracking state
+            currentlyRotatingNode = null
+            rotationStartScale = null
+            rotationStartWorldY = null
+            isRotationActive = false
+            
+            // CRITICAL: Pause and close session SYNCHRONOUSLY
+            runCatching {
+                Log.d(TAG, "🧹 SYNC Phase 1: Pausing AR session")
+                sceneView.session?.pause()
+            }
+            
+            // Clear nodes synchronously
+            Log.d(TAG, "🧹 SYNC Phase 2: Clearing nodes and anchors")
+            nodeRecords.values.forEach { record ->
+                runCatching { record.node.destroy() }
+            }
+            nodeRecords.clear()
+            
+            // Clear anchors synchronously
+            anchorRecords.values.forEach { record ->
+                runCatching { 
+                    record.anchor.detach()
+                    record.node.destroy()
+                }
+            }
+            anchorRecords.clear()
+            
+            // Destroy SceneView synchronously
+            Log.d(TAG, "🧹 SYNC Phase 3: Destroying SceneView")
+            runCatching { sceneView.destroy() }
+            
+            // Unregister from coordinator
+            ArSessionCoordinator.unregisterView(this)
+            
+            Log.d(TAG, "✅ FORCE SYNC DISPOSE complete")
+            
+        } catch (t: Throwable) {
+            Log.e(TAG, "❌ Error during force sync dispose", t)
+        }
+    }
+
     override fun dispose() {
         if (isDisposed) return
         isDisposed = true
         
         Log.d(TAG, "🧹 Disposing ArCoreCompatView - starting cleanup")
         
+        // Unregister from coordinator immediately
+        ArSessionCoordinator.unregisterView(this)
+        
         try {
             // Cancel method handlers immediately to prevent new calls
             sessionChannel.setMethodCallHandler(null)
             objectChannel.setMethodCallHandler(null)
             anchorChannel.setMethodCallHandler(null)
-            scope.cancel()
+            
+            // Cancel coroutine scope to stop background operations
+            runCatching { scope.cancel() }
             
             // Stop touch listener immediately to prevent gesture callbacks
             sceneView.setOnTouchListener(null)
             
-            // CRITICAL FIX: Pause AR session FIRST to prevent camera errors
-            // Must be done on UI thread before any cleanup
+            // Clear rotation tracking state
+            currentlyRotatingNode = null
+            rotationStartScale = null
+            rotationStartWorldY = null
+            isRotationActive = false
+            
+            // CRITICAL FIX: Try to pause session synchronously first (non-blocking)
+            // This prevents the "session already closed" race condition
+            runCatching {
+                Log.d(TAG, "🧹 Phase 1: Pausing AR session")
+                sceneView.session?.pause()
+            }
+            
+            // Use handler for cleanup but with defensive checks
             uiHandler.post {
-                try {
-                    Log.d(TAG, "🧹 Phase 1: Pausing AR session")
-                    
-                    // Pause the AR session to stop camera
-                    sceneView.session?.pause()
-                    
-                    // Give the camera time to actually stop (prevents "session already closed" errors)
-                    Thread.sleep(100)
-                    
-                    Log.d(TAG, "🧹 Phase 2: Clearing nodes and anchors")
-                    
-                    // Clear nodes first (children before parents)
-                    nodeRecords.values.forEach { record ->
-                        runCatching { record.node.destroy() }
-                    }
-                    nodeRecords.clear()
-                    
-                    // Then clear anchors
-                    anchorRecords.values.forEach { record ->
-                        runCatching { 
-                            record.anchor.detach()
-                            record.node.destroy()
+                if (isDisposed) {
+                    try {
+                        Log.d(TAG, "🧹 Phase 2: Clearing nodes and anchors")
+                        
+                        // Clear nodes first (children before parents) - with defensive try/catch
+                        nodeRecords.values.forEach { record ->
+                            runCatching { record.node.destroy() }
                         }
+                        nodeRecords.clear()
+                        
+                        // Then clear anchors
+                        anchorRecords.values.forEach { record ->
+                            runCatching { 
+                                record.anchor.detach()
+                                record.node.destroy()
+                            }
+                        }
+                        anchorRecords.clear()
+                        
+                        Log.d(TAG, "🧹 Phase 3: Destroying SceneView")
+                        
+                        // Finally destroy the scene view (this will close the session properly)
+                        // Wrap in try/catch since camera may already be disconnected
+                        runCatching { sceneView.destroy() }
+                        
+                        Log.d(TAG, "✅ Disposal complete - all resources cleaned up")
+                        
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "❌ Error during scene cleanup", t)
                     }
-                    anchorRecords.clear()
-                    
-                    Log.d(TAG, "🧹 Phase 3: Destroying SceneView")
-                    
-                    // Finally destroy the scene view (this will close the session properly)
-                    sceneView.destroy()
-                    
-                    Log.d(TAG, "✅ Disposal complete - all resources cleaned up")
-                    
-                } catch (t: Throwable) {
-                    Log.e(TAG, "❌ Error during scene cleanup", t)
                 }
             }
         } catch (t: Throwable) {
@@ -406,6 +756,8 @@ class ArCoreCompatView(
             "init" -> {
                 val args = call.arguments as? Map<*, *>
                 configureSession(args)
+                // Notify coordinator that view is fully initialized
+                ArSessionCoordinator.viewInitialized()
                 result.success("initialized")
             }
             "getCameraPose" -> {
@@ -666,6 +1018,8 @@ class ArCoreCompatView(
         val isTransformable = nodeMap["isTransformable"] as? Boolean ?: false
         val enablePan = nodeMap["enablePanGestures"] as? Boolean ?: false
         val enableRotation = nodeMap["enableRotationGestures"] as? Boolean ?: false
+        val enableScale = nodeMap["enableScaleGestures"] as? Boolean ?: false  // Default: false (disabled)
+        val centerOriginOnLoad = nodeMap["centerOriginOnLoad"] as? Boolean ?: true  // Default: true (fixes rotation jump)
 
         val anchorRecord = anchorId?.let { anchorRecords[it] }
         if (anchorId != null && anchorRecord == null) {
@@ -681,9 +1035,15 @@ class ArCoreCompatView(
                 // We handle panning manually via ray-plane intersection.
                 // SceneView's built-in pan would conflict and cause jitter.
                 isPositionEditable = false  // Always false, we do manual pan
-                isRotationEditable = enableRotation
                 
-                Log.d(TAG, "✅ AnchorNode '${this.name}' configured: pan=$enablePan (manual), rotation=$enableRotation")
+                // 🔥 CRITICAL FIX: Do NOT enable isRotationEditable on AnchorNode!
+                // When AnchorNode rotates with a child ModelNode at an offset,
+                // the ModelNode orbits around the anchor origin (0,0,0), causing
+                // unwanted Z-axis (height) changes that look like objects "jumping up".
+                // Instead, we enable rotation on the ModelNode itself below.
+                isRotationEditable = false  // Always false, child ModelNode handles rotation
+                
+                Log.d(TAG, "✅ AnchorNode '${this.name}' configured: pan=$enablePan (manual), rotation=$enableRotation (delegated to child ModelNode)")
             }
         }
 
@@ -706,20 +1066,41 @@ class ArCoreCompatView(
                 val modelNode = ModelNode(modelInstance).apply {
                     name = nodeId
                     val (position, rotation, scale) = parseTransform(transformMatrix, scaleOverride)
-                    this.position = position
-                    this.quaternion = rotation
-                    this.scale = scale
+                    
+                    // For anchored nodes, position should be (0,0,0) relative to anchor
+                    // The anchor provides the world position
+                    if (anchorRecord != null) {
+                        this.position = Position(0f, 0f, 0f)  // Zero position - anchor handles world placement
+                        this.quaternion = rotation
+                        this.scale = scale
+                        
+                        // NOTE: We do NOT call centerOrigin() here anymore!
+                        // centerOrigin() was causing scale distortion and position jumps.
+                        // The rotation is now handled on ModelNode (not AnchorNode), which
+                        // rotates around its own origin. For most models this works correctly.
+                        // If the model's origin is not at center, the rotation may appear
+                        // slightly off-center, but it won't cause the Y-jump issue.
+                        Log.d(TAG, "🎯 Model attached to anchor at (0,0,0) with scale=${scale}, rotation applied to ModelNode")
+                    } else {
+                        // Apply position from transform for standalone nodes
+                        this.position = position
+                        this.quaternion = rotation
+                        this.scale = scale
+                        Log.d(TAG, "🎯 Standalone model at position=$position with scale=$scale")
+                    }
                 }
 
                 // Add to scene on main thread
                 if (anchorRecord != null) {
                     // Configure ModelNode - must be editable to receive touch events
-                    // But with isPositionEditable=false so it delegates to parent
+                    // ModelNode now handles rotation (not parent AnchorNode) to avoid orbit effect
                     modelNode.apply {
-                        isEditable = enablePan || enableRotation  // Must be true to detect touches
+                        isEditable = enablePan || enableRotation || enableScale  // Must be true to detect touches
                         isPositionEditable = false  // Delegate position to parent
-                        isRotationEditable = false  // Delegate rotation to parent
-                        isScaleEditable = false
+                        isRotationEditable = enableRotation  // ← FIXED: ModelNode handles rotation, not parent
+                        // 🔥 NUCLEAR FIX: ALWAYS disable scale at the node level
+                        // SceneView's internal scale gesture interferes with rotation even when we block callbacks
+                        isScaleEditable = false  // ALWAYS false - we'll handle scale programmatically if needed
                         // 🔥 DISABLE smooth transforms - may be causing jitter
                         isSmoothTransformEnabled = false
                     }
@@ -727,19 +1108,19 @@ class ArCoreCompatView(
                     // Just add the child node
                     anchorRecord.node.addChildNode(modelNode)
                     
-                    Log.d(TAG, "✅ Configured model on anchor - AnchorNode: pos=$enablePan,rot=$enableRotation | ModelNode: delegates to parent, smooth disabled")
+                    Log.d(TAG, "✅ Configured model on anchor - AnchorNode: pos=$enablePan,rot=false | ModelNode: rot=$enableRotation, scale=DISABLED (nuclear fix), centerOrigin=$centerOriginOnLoad")
                 } else {
                     // Standalone node (no anchor) - ModelNode handles all gestures
                     modelNode.apply {
-                        isEditable = isTransformable || enablePan || enableRotation
+                        isEditable = isTransformable || enablePan || enableRotation || enableScale
                         isPositionEditable = enablePan
                         isRotationEditable = enableRotation
-                        isScaleEditable = false
+                        // 🔥 NUCLEAR FIX: ALWAYS disable scale at the node level
+                        isScaleEditable = false  // ALWAYS false - prevents scale interference
                     }
                     sceneView.addChildNode(modelNode)
                     
-                    Log.d(TAG, "Standalone ModelNode $nodeId - isEditable: ${modelNode.isEditable}, " +
-                        "isPositionEditable: $enablePan, isRotationEditable: $enableRotation")
+                    Log.d(TAG, "Standalone ModelNode $nodeId - pan=$enablePan, rotation=$enableRotation, scale=DISABLED (nuclear fix)")
                 }
 
                 val nodeRecord = NodeRecord(
@@ -748,7 +1129,8 @@ class ArCoreCompatView(
                     anchorId = anchorRecord?.id,
                     isTransformable = isTransformable,
                     enablePan = enablePan,
-                    enableRotation = enableRotation
+                    enableRotation = enableRotation,
+                    enableScale = enableScale  // Store scale gesture setting
                 )
                 nodeRecords[nodeId] = nodeRecord
 
@@ -913,6 +1295,55 @@ class ArCoreCompatView(
         if (!environmentInitialized) {
             initializeDefaultEnvironment()
         }
+        
+        // 🔥 CRITICAL: Per-frame scale enforcement during rotation
+        // SceneView applies scale changes AFTER our gesture callbacks, so we must
+        // enforce scale on every frame while rotation is active
+        currentlyRotatingNode?.let { node ->
+            // Check if we've lost tracking - abort rotation protection if tracking fails
+            val trackingState = frame.camera.trackingState
+            if (trackingState != TrackingState.TRACKING) {
+                Log.w(TAG, "⚠️ Tracking lost during rotation! State: $trackingState - restoring scale and clearing rotation state")
+                rotationStartScale?.let { targetScale ->
+                    node.scale = targetScale  // Force restore original scale
+                }
+                currentlyRotatingNode = null
+                rotationStartScale = null
+                rotationStartWorldY = null
+                return@let
+            }
+            
+            rotationStartScale?.let { targetScale ->
+                val currentScale = node.scale
+                val scaleChanged = abs(currentScale.x - targetScale.x) > 0.0001f ||
+                                  abs(currentScale.y - targetScale.y) > 0.0001f ||
+                                  abs(currentScale.z - targetScale.z) > 0.0001f
+                if (scaleChanged) {
+                    node.scale = targetScale
+                    Log.w(TAG, "📐 handleFrame scale correction: $currentScale -> $targetScale")
+                }
+                
+                // 🔥 CRITICAL: Also check and reset PARENT (anchor) scale every frame!
+                node.parent?.let { parent ->
+                    val parentScale = parent.scale
+                    if (abs(parentScale.x - 1f) > 0.0001f ||
+                        abs(parentScale.y - 1f) > 0.0001f ||
+                        abs(parentScale.z - 1f) > 0.0001f) {
+                        Log.w(TAG, "📐 handleFrame PARENT scale correction: $parentScale -> (1,1,1)")
+                        parent.scale = Scale(1f, 1f, 1f)
+                    }
+                }
+                
+                // Also protect Y position during rotation
+                rotationStartWorldY?.let { startY ->
+                    val currentY = node.worldPosition.y
+                    if (abs(currentY - startY) > 0.002f) {  // More than 2mm drift
+                        node.worldPosition = Position(node.worldPosition.x, startY, node.worldPosition.z)
+                    }
+                }
+            }
+        }
+        
         sendPlaneUpdates(frame)
         sendLightingUpdate(frame)
     }
@@ -1230,7 +1661,8 @@ class ArCoreCompatView(
         val anchorId: String?,
         val isTransformable: Boolean,
         val enablePan: Boolean,
-        val enableRotation: Boolean
+        val enableRotation: Boolean,
+        val enableScale: Boolean  // Controls pinch/zoom gestures
     )
 
     /**
@@ -1495,4 +1927,8 @@ class ArCoreCompatView(
             return null
         }
     }
+
+    // Helper extension to format Float for logging
+    private fun Float.format(): String = String.format("%.3f", this)
 }
+

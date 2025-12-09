@@ -14,6 +14,7 @@ import 'package:vector_math/vector_math_64.dart' as vector_math;
 import 'auto_placement_test_fixed.dart';
 import 'light_estimation_screen.dart';
 import 'ar_coaching_example.dart';
+import 'rotation_jump_test.dart';
 
 void main() {
   runApp(MyApp());
@@ -118,6 +119,28 @@ class MainMenu extends StatelessWidget {
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.purple,
+                foregroundColor: Colors.white,
+                minimumSize: Size(200, 50),
+              ),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => RotationJumpTest()),
+                );
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.rotate_right, size: 20),
+                  SizedBox(width: 8),
+                  Text('Rotation Jump Test'),
+                ],
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
                 foregroundColor: Colors.white,
                 minimumSize: Size(200, 50),
               ),

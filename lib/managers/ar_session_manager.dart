@@ -237,7 +237,7 @@ class ARSessionManager {
           }
           break;
         case 'onLightingConditionChanged':
-          print('💡 Flutter: Received onLightingConditionChanged callback');
+          // print('💡 Flutter: Received onLightingConditionChanged callback');
           if (onLightingConditionChanged != null) {
             print('💡 Flutter: Callback handler is registered');
             try {
@@ -273,7 +273,7 @@ class ARSessionManager {
               }
             }
           } else {
-            print('💡 Flutter: Warning - No callback handler registered!');
+            // print('💡 Flutter: Warning - No callback handler registered!');
           }
           break;
         case 'dispose':

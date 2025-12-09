@@ -1,6 +1,7 @@
 package com.uhg0.ar_flutter_plugin_2
 
 import android.app.Activity
+import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -12,8 +13,16 @@ class ArFlutterPlugin: FlutterPlugin, ActivityAware {
     private var lifecycle: Lifecycle? = null
     private var flutterPluginBinding: FlutterPlugin.FlutterPluginBinding? = null
 
+    companion object {
+        private const val TAG = "ArFlutterPlugin"
+    }
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         flutterPluginBinding = binding
+        
+        // Install the global exception handler for camera-related exceptions
+        ArSessionCoordinator.installExceptionHandler()
+        Log.d(TAG, "✅ AR Flutter Plugin attached to engine")
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -35,6 +44,8 @@ class ArFlutterPlugin: FlutterPlugin, ActivityAware {
                 )
             )
         }
+        
+        Log.d(TAG, "✅ AR Flutter Plugin attached to activity")
     }
 
     override fun onDetachedFromActivityForConfigChanges() {

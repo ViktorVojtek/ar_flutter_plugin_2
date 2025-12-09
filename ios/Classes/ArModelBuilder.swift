@@ -267,6 +267,36 @@ class ArModelBuilder: NSObject {
         
     }
     
+    // MARK: - Origin Centering for Stable Rotation
+    
+    /**
+     * Centers the pivot point of a node so rotation happens around the geometric center.
+     * This prevents objects from "jumping" during rotation gestures.
+     * 
+     * - Parameter node: The node to center
+     * - Parameter centerX: Whether to center the X axis (default: true)
+     * - Parameter centerY: Whether to center the Y axis (default: false - keeps bottom aligned)
+     * - Parameter centerZ: Whether to center the Z axis (default: true)
+     * 
+     * For furniture-style placement, use centerY=false to keep objects floor-aligned.
+     */
+    func centerOrigin(node: SCNNode, centerX: Bool = true, centerY: Bool = false, centerZ: Bool = true) {
+        // Get the bounding box of the node in local coordinates
+        let (bbMin, bbMax) = node.boundingBox
+        
+        // Calculate the pivot offset for each axis
+        // -1 on an axis = bottom aligned, 0 = centered
+        let pivotX = centerX ? (bbMin.x + bbMax.x) / 2 : 0
+        let pivotY = centerY ? (bbMin.y + bbMax.y) / 2 : bbMin.y  // Bottom aligned by default
+        let pivotZ = centerZ ? (bbMin.z + bbMax.z) / 2 : 0
+        
+        // Set the pivot point
+        // The pivot is in local coordinates - moving the pivot effectively moves the rotation center
+        node.pivot = SCNMatrix4MakeTranslation(pivotX, pivotY, pivotZ)
+        
+        print("🎯 iOS centerOrigin applied - pivot: (\(pivotX), \(pivotY), \(pivotZ)) | boundingBox: min(\(bbMin.x), \(bbMin.y), \(bbMin.z)) max(\(bbMax.x), \(bbMax.y), \(bbMax.z))")
+    }
+    
     // MARK: - Ambient Occlusion / Shadow Support
     
     /**

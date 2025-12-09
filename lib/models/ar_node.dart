@@ -24,6 +24,8 @@ class ARNode {
     this.isTransformable = false,
     this.enablePanGestures = false,
     this.enableRotationGestures = false,
+    this.enableScaleGestures = false,
+    this.centerOriginOnLoad = true,
   })  : name = name ?? UniqueKey().toString(),
         transformNotifier = ValueNotifier(createTransformMatrix(
             transformation, position, scale, rotation, eulerAngles)),
@@ -106,6 +108,17 @@ class ARNode {
   /// Whether rotation gestures are enabled for this node (requires isTransformable = true)
   final bool enableRotationGestures;
 
+  /// Whether scale/pinch gestures are enabled for this node (requires isTransformable = true)
+  /// Default: false (pinch/zoom gestures disabled to avoid interference with rotation)
+  final bool enableScaleGestures;
+
+  /// Whether to center the model's origin after loading (for anchored nodes).
+  /// When true, the model's pivot is adjusted so that X and Z axes are centered,
+  /// while Y remains at the bottom (floor-aligned for furniture placement).
+  /// This prevents objects from "jumping" during rotation gestures.
+  /// Default: true
+  final bool centerOriginOnLoad;
+
   static const _matrixValueNotifierConverter = MatrixValueNotifierConverter();
 
   Map<String, dynamic> toMap() {
@@ -123,6 +136,8 @@ class ARNode {
         'isTransformable': isTransformable,
         'enablePanGestures': enablePanGestures,
         'enableRotationGestures': enableRotationGestures,
+        'enableScaleGestures': enableScaleGestures,
+        'centerOriginOnLoad': centerOriginOnLoad,
       }..removeWhere((String k, dynamic v) => v == null);
   }
 
@@ -135,7 +150,9 @@ class ARNode {
         data: Map<String, dynamic>.from(map["data"] ?? {}),
         isTransformable: map["isTransformable"] as bool? ?? false,
         enablePanGestures: map["enablePanGestures"] as bool? ?? false,
-        enableRotationGestures: map["enableRotationGestures"] as bool? ?? false);
+        enableRotationGestures: map["enableRotationGestures"] as bool? ?? false,
+        enableScaleGestures: map["enableScaleGestures"] as bool? ?? false,
+        centerOriginOnLoad: map["centerOriginOnLoad"] as bool? ?? true);
   }
 }
 

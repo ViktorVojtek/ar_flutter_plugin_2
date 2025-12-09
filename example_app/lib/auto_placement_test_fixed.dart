@@ -34,7 +34,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       'name': 'Room Model',
       'url': 'https://storage.googleapis.com/room-bucket/laira-a6e5eaae-09d1-406d-896c-64117a20c10e.glb',
       'scale': 1.0,
-      'position': [0.0, -1.2, -0.8], // Front center
+      'position': [0.0, 0.0, -0.8], // Front center at floor level (Y=0)
     },
   ];
 
@@ -151,7 +151,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   void _initializeAR() async {
     try {
       await arSessionManager!.onInitialize(
-        showPlanes: false,
+        showPlanes: true,  // Show detected planes so user can see floor detection
         customPlaneTexturePath: null,
         showWorldOrigin: false,
         showFeaturePoints: false,
@@ -218,7 +218,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
 
       setState(() {
         _isARInitialized = true;
-        _statusText = "AR initialized. Tap 'Place Model' to test multi-model placement.";
+        _statusText = "AR initialized. Objects will be placed in front of camera.";
       });
 
       print("✅ AR initialization completed");
@@ -227,7 +227,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       await Future.delayed(Duration(seconds: 2));
       
       setState(() {
-        _statusText = "AR ready for multi-model placement testing!";
+        _statusText = "Ready! Tap 'Place Model' to add objects.";
       });
       
     } catch (e) {
@@ -239,7 +239,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
   }
 
   Future<void> _placeNextModel() async {
-    if (!_isARInitialized || arObjectManager == null || arAnchorManager == null) {
+    if (!_isARInitialized || arObjectManager == null || arAnchorManager == null || arSessionManager == null) {
       print("❌ AR not initialized or managers not available");
       return;
     }
@@ -249,7 +249,6 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     String modelName = currentModel['name'];
     String modelUrl = currentModel['url'];
     double modelScale = currentModel['scale'];
-    List<double> position = List<double>.from(currentModel['position']);
 
     setState(() {
       _statusText = "Placing $modelName (${nodes.length + 1})...";
@@ -258,13 +257,44 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
     try {
       print("🎯 Testing placement of $modelName on Android ARCore");
       
-      // CRITICAL FIX: Create an anchor first (like the working ObjectGestures example)
-      // This ensures gestures work properly
-      vm.Vector3 autoPosition = vm.Vector3(position[0], position[1], position[2]);
-      Matrix4 transformation = Matrix4.identity();
-      transformation.setTranslationRaw(autoPosition.x, autoPosition.y, autoPosition.z);
+      // Get camera pose to place object in front of camera
+      Matrix4? cameraPose = await arSessionManager!.getCameraPose();
       
-      // Create anchor at the specified position
+      if (cameraPose == null) {
+        print("❌ Failed to get camera pose");
+        setState(() {
+          _statusText = "❌ Failed to get camera position. Try moving the device.";
+        });
+        return;
+      }
+      
+      // Extract camera position
+      vm.Vector3 cameraPosition = vm.Vector3(
+        cameraPose.getColumn(3).x,
+        cameraPose.getColumn(3).y,
+        cameraPose.getColumn(3).z,
+      );
+      
+      // Extract camera forward direction (negative Z axis in camera space)
+      vm.Vector3 cameraForward = vm.Vector3(
+        -cameraPose.getColumn(2).x,
+        -cameraPose.getColumn(2).y,
+        -cameraPose.getColumn(2).z,
+      ).normalized();
+      
+      // Place object 1.5 meters in front of camera, slightly below camera height
+      vm.Vector3 placementPosition = cameraPosition + (cameraForward * 1.5);
+      placementPosition.y -= 0.5; // 50cm below camera (approximate floor level)
+      
+      print("📍 Camera position: $cameraPosition");
+      print("📍 Camera forward: $cameraForward");
+      print("📍 Placement position: $placementPosition");
+      
+      // Create transformation matrix for anchor
+      Matrix4 transformation = Matrix4.identity();
+      transformation.setTranslationRaw(placementPosition.x, placementPosition.y, placementPosition.z);
+      
+      // Create anchor at the calculated position
       var newAnchor = ARPlaneAnchor(transformation: transformation);
       bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
       
@@ -278,7 +308,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         return;
       }
       
-      print("✅ Anchor created successfully");
+      print("✅ Anchor created successfully at calculated position");
       
       // Now create the node and attach it to the anchor
       String nodeName = "${modelName}_${DateTime.now().millisecondsSinceEpoch}";
@@ -293,6 +323,7 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
         isTransformable: true,
         enablePanGestures: true,
         enableRotationGestures: true,
+        enableScaleGestures: false,
       );
 
       print("📦 Created ARNode: $nodeName");

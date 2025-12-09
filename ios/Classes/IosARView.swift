@@ -638,6 +638,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
     func addNode(dict_node: Dictionary<String, Any>, dict_anchor: Dictionary<String, Any>? = nil) -> Future<String?, Never> {
 
+        // Note: centerOriginOnLoad flag is available but we don't use centerOrigin() on iOS
+        // as it causes similar scale/position issues as on Android. The model's native origin is used.
+        // let centerOriginOnLoad = dict_node["centerOriginOnLoad"] as? Bool ?? true
+        
         return Future {promise in
             
             switch (dict_node["type"] as! Int) {
