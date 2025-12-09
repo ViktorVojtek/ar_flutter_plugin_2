@@ -336,6 +336,65 @@ class ARSessionManager {
     }
   }
 
+  /// Pause the AR session gracefully.
+  /// 
+  /// This stops camera capture and rendering without destroying resources.
+  /// **IMPORTANT:** Call this before [dispose] to prevent EGL context crashes on Android.
+  /// 
+  /// Recommended usage pattern:
+  /// ```dart
+  /// await arSessionManager.pause();
+  /// await Future.delayed(Duration(milliseconds: 100)); // Give ARCore time to cleanup
+  /// await arSessionManager.dispose();
+  /// ```
+  Future<bool> pause() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('pause');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('Error pausing AR session: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Pause the AR session, wait briefly, then dispose.
+  /// 
+  /// This is the recommended way to safely dispose the AR session on Android
+  /// to prevent EGL context crashes. The delay gives ARCore time to complete
+  /// pause operations before the OpenGL context is destroyed.
+  /// 
+  /// [delayMs] - milliseconds to wait between pause and dispose (default: 100ms)
+  Future<void> safeDispose({int delayMs = 100}) async {
+    try {
+      if (debug) {
+        print('🛑 Safe dispose: pausing AR session...');
+      }
+      await pause();
+      
+      if (debug) {
+        print('⏳ Safe dispose: waiting ${delayMs}ms for cleanup...');
+      }
+      await Future.delayed(Duration(milliseconds: delayMs));
+      
+      if (debug) {
+        print('🧹 Safe dispose: disposing AR session...');
+      }
+      await dispose();
+      
+      if (debug) {
+        print('✅ Safe dispose: complete');
+      }
+    } catch (e) {
+      if (debug) {
+        print('❌ Error during safe dispose: $e');
+      }
+      // Still try to dispose even if pause failed
+      await dispose();
+    }
+  }
+
   /// Returns a future ImageProvider that contains a screenshot of the current AR Scene
   Future<ImageProvider> snapshot() async {
     final result = await _channel.invokeMethod<Uint8List>('snapshot');

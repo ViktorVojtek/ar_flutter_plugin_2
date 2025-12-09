@@ -79,7 +79,7 @@ class _RotationJumpTestState extends State<RotationJumpTest> {
         children: [
           ARView(
             onARViewCreated: onARViewCreated,
-            planeDetectionConfig: PlaneDetectionConfig.horizontal,
+            planeDetectionConfig: PlaneDetectionConfig.horizontalAndVertical,  // Enable both horizontal AND vertical planes for wall snapping
           ),
           // Status panel
           Positioned(
@@ -164,6 +164,10 @@ class _RotationJumpTestState extends State<RotationJumpTest> {
                       style: TextStyle(fontSize: 14),
                     ),
                     Text(
+                      '👆 Drag with one finger to pan (try walls!)',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                    Text(
                       '📊 Watch the Y position - it should stay stable!',
                       style: TextStyle(fontSize: 14),
                     ),
@@ -214,6 +218,9 @@ class _RotationJumpTestState extends State<RotationJumpTest> {
     arObjectManager!.onRotationStart = onRotationStart;
     arObjectManager!.onRotationChange = onRotationChange;
     arObjectManager!.onRotationEnd = onRotationEnd;
+    arObjectManager!.onPanStart = onPanStart;
+    arObjectManager!.onPanChange = onPanChange;
+    arObjectManager!.onPanEnd = onPanEnd;
 
     setState(() {
       _isARInitialized = true;
@@ -328,6 +335,31 @@ class _RotationJumpTestState extends State<RotationJumpTest> {
         }
       }
     });
+  }
+
+  void onPanStart(String nodeName) {
+    debugPrint("👆 Pan START for $nodeName");
+    setState(() {
+      _statusText = "Panning $nodeName... try moving to a wall!";
+    });
+  }
+
+  void onPanChange(String nodeName) {
+    // Called during panning - you could track position here
+  }
+
+  void onPanEnd(String nodeName, Matrix4 transform) {
+    debugPrint("👆 Pan END for $nodeName");
+    
+    // Extract position from transform
+    final pos = transform.getTranslation();
+    
+    setState(() {
+      _currentY = pos.y;
+      _statusText = "Pan complete! Pos: (${pos.x.toStringAsFixed(2)}, ${pos.y.toStringAsFixed(2)}, ${pos.z.toStringAsFixed(2)})";
+    });
+    
+    debugPrint("📍 Final position: (${pos.x.toStringAsFixed(3)}, ${pos.y.toStringAsFixed(3)}, ${pos.z.toStringAsFixed(3)})");
   }
 
   void _clearAll() async {

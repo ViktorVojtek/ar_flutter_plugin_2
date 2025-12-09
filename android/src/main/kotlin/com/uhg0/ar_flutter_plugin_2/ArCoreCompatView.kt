@@ -199,14 +199,28 @@ class ArCoreCompatView(
                     } else {
                     val record = node?.let(::findNodeRecord)
                     if (node != null && record?.enablePan == true && record.anchorId != null && panStartWorldPos != null) {
-                        // Use ARCore hit testing to project touch position onto AR plane
-                        // This works correctly regardless of camera position/rotation
+                        // Debug: Log available planes in the scene
+                        if (debugGesturesEnabled) {
+                            val frame = sceneView.frame
+                            val session = sceneView.session
+                            if (frame != null && session != null) {
+                                val planes = session.getAllTrackables(Plane::class.java)
+                                val horizontalCount = planes.count { it.type == Plane.Type.HORIZONTAL_UPWARD_FACING || it.type == Plane.Type.HORIZONTAL_DOWNWARD_FACING }
+                                val verticalCount = planes.count { it.type == Plane.Type.VERTICAL }
+                                Log.d(TAG, "📊 Available planes: $horizontalCount horizontal, $verticalCount vertical (total: ${planes.size})")
+                            }
+                        }
+                        
+                        // Use ARCore hit testing to project touch position onto ANY detected plane
+                        // This allows objects to snap to walls (vertical) or floors (horizontal)
+                        // mimicking iOS behavior where objects automatically transition between surfaces
                         val hitResult = sceneView.hitTestAR(
                             xPx = currentTouchX,
                             yPx = currentTouchY,
                             planeTypes = setOf(
                                 Plane.Type.HORIZONTAL_UPWARD_FACING,
-                                Plane.Type.HORIZONTAL_DOWNWARD_FACING
+                                Plane.Type.HORIZONTAL_DOWNWARD_FACING,
+                                Plane.Type.VERTICAL  // Enable wall/vertical surface snapping
                             ),
                             point = true,
                             depthPoint = true,
@@ -219,16 +233,20 @@ class ArCoreCompatView(
                             val hitTranslation = FloatArray(3)
                             hitPose.getTranslation(hitTranslation, 0)
                             
-                            // Calculate delta from the pan start position
-                            val worldDeltaX = hitTranslation[0] - panStartWorldPos!!.x
-                            val worldDeltaZ = hitTranslation[2] - panStartWorldPos!!.z
+                            // Determine if we hit a vertical or horizontal plane
+                            val trackable = hitResult.trackable
+                            val isVerticalPlane = trackable is Plane && trackable.type == Plane.Type.VERTICAL
                             
-                            // Apply delta while keeping height locked
-                            val newWorldPos = Position(
-                                panStartWorldPos!!.x + worldDeltaX,
-                                panStartY,  // Keep height locked at start Y
-                                panStartWorldPos!!.z + worldDeltaZ
-                            )
+                            // For vertical planes: use full hit position (allows movement along wall)
+                            // For horizontal planes: can optionally lock Y height
+                            val newWorldPos = if (isVerticalPlane) {
+                                // Full 3D position for wall-mounted objects
+                                Position(hitTranslation[0], hitTranslation[1], hitTranslation[2])
+                            } else {
+                                // For horizontal surfaces, use hit X/Z but preserve some height behavior
+                                // Use hit Y position to allow transitioning between different height surfaces
+                                Position(hitTranslation[0], hitTranslation[1], hitTranslation[2])
+                            }
                             
                             // Check distance limit
                             val frame = sceneView.frame
@@ -244,8 +262,13 @@ class ArCoreCompatView(
                                 
                                 if (distance <= maxPanDistanceMeters) {
                                     record.node.worldPosition = newWorldPos
+                                    
+                                    // Update the current plane type for the node (used later for anchor creation)
+                                    record.currentPlaneType = if (isVerticalPlane) Plane.Type.VERTICAL else Plane.Type.HORIZONTAL_UPWARD_FACING
+                                    
                                     if (debugGesturesEnabled) {
-                                        Log.d(TAG, "🎯 Hit-test pan → World Pos: (%.3f, %.3f, %.3f) | Dist: %.2fm".format(
+                                        val planeTypeStr = if (isVerticalPlane) "VERTICAL (wall)" else "HORIZONTAL (floor/ceiling)"
+                                        Log.d(TAG, "🎯 Hit-test pan → $planeTypeStr | World Pos: (%.3f, %.3f, %.3f) | Dist: %.2fm".format(
                                             newWorldPos.x, newWorldPos.y, newWorldPos.z, distance
                                         ))
                                     }
@@ -274,8 +297,41 @@ class ArCoreCompatView(
                         if (session != null) {
                             try {
                                 val worldPos = node.worldPosition
-                                val pose = Pose.makeTranslation(worldPos.x, worldPos.y, worldPos.z)
-                                val newAnchor = session.createAnchor(pose)
+                                
+                                // Do a final hit test to get the proper anchor pose
+                                // This ensures proper orientation for vertical surfaces
+                                val hitResult = sceneView.hitTestAR(
+                                    xPx = currentTouchX,
+                                    yPx = currentTouchY,
+                                    planeTypes = setOf(
+                                        Plane.Type.HORIZONTAL_UPWARD_FACING,
+                                        Plane.Type.HORIZONTAL_DOWNWARD_FACING,
+                                        Plane.Type.VERTICAL
+                                    ),
+                                    point = true,
+                                    depthPoint = true,
+                                    pointOrientationModes = setOf(Point.OrientationMode.ESTIMATED_SURFACE_NORMAL)
+                                )
+                                
+                                val newAnchor = if (hitResult != null) {
+                                    // Use the hit result's anchor if available, or create from pose
+                                    // This preserves proper orientation for the surface
+                                    val trackable = hitResult.trackable
+                                    val isVerticalPlane = trackable is Plane && trackable.type == Plane.Type.VERTICAL
+                                    
+                                    if (isVerticalPlane) {
+                                        // For vertical planes, create anchor at hit pose to preserve wall orientation
+                                        hitResult.createAnchor()
+                                    } else {
+                                        // For horizontal planes, use simple translation
+                                        val pose = Pose.makeTranslation(worldPos.x, worldPos.y, worldPos.z)
+                                        session.createAnchor(pose)
+                                    }
+                                } else {
+                                    // Fallback: simple translation anchor
+                                    val pose = Pose.makeTranslation(worldPos.x, worldPos.y, worldPos.z)
+                                    session.createAnchor(pose)
+                                }
                                 
                                 // Update the anchor node
                                 val anchorRec = record.anchorId?.let { anchorRecords[it] }
@@ -287,8 +343,14 @@ class ArCoreCompatView(
                                     // Reset ModelNode to center of new anchor
                                     record.node.position = Position(0f, 0f, 0f)
                                     
-                                    Log.d(TAG, "✅ Created new anchor at (${worldPos.x}, ${worldPos.y}, ${worldPos.z})")
+                                    val planeTypeStr = record.currentPlaneType?.let {
+                                        if (it == Plane.Type.VERTICAL) "VERTICAL (wall)" else "HORIZONTAL"
+                                    } ?: "unknown"
+                                    Log.d(TAG, "✅ Created new anchor at (${worldPos.x}, ${worldPos.y}, ${worldPos.z}) on $planeTypeStr surface")
                                 }
+                                
+                                // Reset the tracked plane type
+                                record.currentPlaneType = null
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to create anchor: ${e.message}")
                             }
@@ -808,6 +870,12 @@ class ArCoreCompatView(
                 pauseSession()
                 result.success(null)
             }
+            "pause" -> {
+                // Explicit pause method - call this before dispose to prevent EGL crashes
+                Log.d(TAG, "⏸️ Received pause request from Flutter")
+                pauseSession()
+                result.success(true)
+            }
             "snapshot" -> takeSnapshot(result)
             "isDepthSupported" -> {
                 val session = sceneView.session
@@ -908,6 +976,12 @@ class ArCoreCompatView(
         debugGesturesEnabled = arguments?.get("debugGestures") as? Boolean ?: false
         maxPanDistanceMeters = (arguments?.get("maxPanDistance") as? Number)?.toFloat() ?: 5.0f
         
+        Log.i(TAG, "🛠️ configureSession called:")
+        Log.i(TAG, "   planeDetectionIndex = $planeDetectionIndex")
+        Log.i(TAG, "   showPlanes = $showPlanes")
+        Log.i(TAG, "   showFeaturePoints = $showFeaturePoints")
+        Log.i(TAG, "   debugGestures = $debugGesturesEnabled")
+        
         if (debugGesturesEnabled) {
             Log.i(TAG, "🔧 Gesture debug mode ENABLED")
             Log.i(TAG, "🔧 Max pan distance: ${maxPanDistanceMeters}m")
@@ -928,6 +1002,8 @@ class ArCoreCompatView(
                 3 -> Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                 else -> Config.PlaneFindingMode.DISABLED
             }
+            
+            Log.i(TAG, "✅ Session configured: planeFindingMode = ${config.planeFindingMode}")
         }
 
         sceneView.planeRenderer.isVisible = showPlanes
@@ -948,9 +1024,51 @@ class ArCoreCompatView(
         }
     }
 
-    private fun resumeSession() = Unit
+    private var isPaused = false
 
-    private fun pauseSession() = Unit
+    /**
+     * Pause the AR session gracefully.
+     * This stops camera capture and rendering without destroying resources.
+     * IMPORTANT: Call this before dispose() to prevent EGL context crashes.
+     */
+    private fun pauseSession() {
+        if (isDisposed || isPaused) return
+        isPaused = true
+        
+        Log.d(TAG, "⏸️ Pausing AR session gracefully")
+        try {
+            // Stop touch interactions first
+            sceneView.setOnTouchListener(null)
+            
+            // Pause the AR session (stops camera, tracking, rendering)
+            sceneView.session?.pause()
+            
+            Log.d(TAG, "✅ AR session paused successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "⚠️ Error pausing AR session: ${e.message}")
+        }
+    }
+
+    /**
+     * Resume the AR session after being paused.
+     * Note: This is a simple resume - touch listeners may need manual re-setup
+     * if pausing was done mid-session (not during dispose flow).
+     */
+    private fun resumeSession() {
+        if (isDisposed || !isPaused) return
+        isPaused = false
+        
+        Log.d(TAG, "▶️ Resuming AR session")
+        try {
+            // Resume the AR session
+            sceneView.session?.resume()
+            
+            Log.d(TAG, "✅ AR session resumed successfully")
+            // Note: Touch listener re-setup would be complex - typically pause is only called before dispose
+        } catch (e: Exception) {
+            Log.e(TAG, "⚠️ Error resuming AR session: ${e.message}")
+        }
+    }
 
     // ------------------------------------------------------------------------
     // Object channel
@@ -1736,7 +1854,8 @@ class ArCoreCompatView(
         val isTransformable: Boolean,
         val enablePan: Boolean,
         val enableRotation: Boolean,
-        val enableScale: Boolean  // Controls pinch/zoom gestures
+        val enableScale: Boolean,  // Controls pinch/zoom gestures
+        var currentPlaneType: Plane.Type? = null  // Tracks current surface type (horizontal/vertical) during pan
     )
 
     /**
