@@ -395,6 +395,106 @@ class ARSessionManager {
     }
   }
 
+  // ============================================================================
+  // PERMISSION DIALOG PROTECTION
+  // ============================================================================
+  // These methods help protect the AR session during permission dialogs on Android.
+  // When Android shows a permission dialog, the activity may lose focus and trigger
+  // lifecycle events that can destroy the AR session prematurely.
+  // ============================================================================
+
+  /// Notify the native layer that a permission dialog is about to be shown.
+  /// 
+  /// **IMPORTANT:** Call this BEFORE requesting any permissions (storage, location, etc.)
+  /// to prevent the AR session from being destroyed when the dialog appears.
+  /// 
+  /// Usage example:
+  /// ```dart
+  /// await arSessionManager.notifyPermissionDialogShowing();
+  /// final status = await Permission.storage.request();
+  /// await arSessionManager.notifyPermissionDialogDismissed();
+  /// ```
+  Future<bool> notifyPermissionDialogShowing() async {
+    try {
+      if (debug) {
+        print('🔔 Notifying AR session: permission dialog showing');
+      }
+      final result = await _channel.invokeMethod<bool>('notifyPermissionDialogShowing');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('⚠️ Error notifying permission dialog: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Notify the native layer that a permission dialog has been dismissed.
+  /// 
+  /// **IMPORTANT:** Call this AFTER the permission dialog is dismissed (granted or denied)
+  /// to restore normal AR session lifecycle behavior.
+  /// 
+  /// This will also attempt to resume the AR session if it was paused.
+  Future<bool> notifyPermissionDialogDismissed() async {
+    try {
+      if (debug) {
+        print('🔔 Notifying AR session: permission dialog dismissed');
+      }
+      final result = await _channel.invokeMethod<bool>('notifyPermissionDialogDismissed');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('⚠️ Error notifying permission dialog dismissed: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Force resume the AR session after it may have been incorrectly paused.
+  /// 
+  /// Use this as a recovery mechanism if the AR session appears to be frozen
+  /// or shows a black screen after permission dialogs or other interruptions.
+  /// 
+  /// Returns true if the resume was successful.
+  Future<bool> forceResumeSession() async {
+    try {
+      if (debug) {
+        print('🔄 Force resuming AR session');
+      }
+      final result = await _channel.invokeMethod<bool>('forceResumeSession');
+      return result ?? false;
+    } catch (e) {
+      if (debug) {
+        print('⚠️ Error force resuming AR session: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Execute an action that may trigger permission dialogs safely.
+  /// 
+  /// This is a convenience method that wraps the permission notification calls
+  /// around any async action that might trigger permission dialogs.
+  /// 
+  /// Usage example:
+  /// ```dart
+  /// await arSessionManager.withPermissionProtection(() async {
+  ///   final status = await Permission.storage.request();
+  ///   if (status.isGranted) {
+  ///     await saveScreenshot();
+  ///   }
+  /// });
+  /// ```
+  Future<T> withPermissionProtection<T>(Future<T> Function() action) async {
+    try {
+      await notifyPermissionDialogShowing();
+      final result = await action();
+      return result;
+    } finally {
+      await notifyPermissionDialogDismissed();
+    }
+  }
+
   /// Returns a future ImageProvider that contains a screenshot of the current AR Scene
   Future<ImageProvider> snapshot() async {
     final result = await _channel.invokeMethod<Uint8List>('snapshot');

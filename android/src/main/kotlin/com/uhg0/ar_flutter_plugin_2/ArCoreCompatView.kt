@@ -66,7 +66,9 @@ class ArCoreCompatView(
     messenger: BinaryMessenger,
     viewId: Int,
     private val activity: ComponentActivity?,
-    private val lifecycle: Lifecycle
+    private val lifecycle: Lifecycle,
+    // Optional: reuse a cached SceneView instead of creating new one
+    cachedSceneViewArg: ARSceneView? = null
 ) : PlatformView {
 
     companion object {
@@ -78,6 +80,12 @@ class ArCoreCompatView(
 
     private val container = FrameLayout(context)
     private val sceneView: ARSceneView
+    
+    // Track if we're reusing a cached SceneView
+    private val isReusingCachedView: Boolean
+    
+    // Lifecycle observer to detect background transitions and cache SceneView
+    private var lifecycleObserver: androidx.lifecycle.LifecycleEventObserver? = null
 
     private val sessionChannel = MethodChannel(messenger, "arsession_$viewId")
     private val objectChannel = MethodChannel(messenger, "arobjects_$viewId")
@@ -89,6 +97,9 @@ class ArCoreCompatView(
     private val seenPlanes = mutableSetOf<String>()
     private var environmentInitialized = false
     private var isDisposed = false
+    
+    // Track our creation sequence to detect stale dispose calls
+    private var creationSequence: Long = 0L
     
     // Manual pan gesture tracking (bypassing SceneView's failing hit test system)
     private var panStartY = 0f
@@ -119,44 +130,106 @@ class ArCoreCompatView(
     private var maxPanDistanceMeters = 5.0f   // Maximum distance from camera for pan gestures (default 5m)
 
     init {
-        sceneView = ARSceneView(
-            context = context,
-            sharedActivity = activity,
-            sharedLifecycle = lifecycle
-        ).apply {
-            layoutParams = FrameLayout.LayoutParams(
+        // Check if we're reusing a cached SceneView from background transition
+        if (cachedSceneViewArg != null) {
+            Log.d(TAG, "♻️ REUSING cached SceneView - preserving AR session!")
+            isReusingCachedView = true
+            sceneView = cachedSceneViewArg
+            
+            // Remove from old parent if any
+            (sceneView.parent as? android.view.ViewGroup)?.removeView(sceneView)
+            
+            // Reattach to our new container
+            sceneView.layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
-            this.lifecycle = lifecycle
-            planeRenderer.isEnabled = true
+            
+            // Update lifecycle reference
+            sceneView.lifecycle = lifecycle
+            
+            // Resume the session if paused
+            try {
+                sceneView.session?.resume()
+                Log.d(TAG, "▶️ Cached SceneView session resumed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming cached session", e)
+            }
+        } else {
+            isReusingCachedView = false
+            sceneView = ARSceneView(
+                context = context,
+                sharedActivity = activity,
+                sharedLifecycle = lifecycle
+            ).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+                this.lifecycle = lifecycle
+                planeRenderer.isEnabled = true
 
-            configureSession { session, config ->
-                // Enable depth mode for occlusion support
-                val depthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
-                config.depthMode = if (depthSupported) {
-                    Config.DepthMode.AUTOMATIC
-                } else {
-                    Config.DepthMode.DISABLED
-                }
-                
-                config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-                config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
-                config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-                
-                Log.i(TAG, "🔍 Depth API: ${if (depthSupported) "ENABLED - Occlusion supported" else "DISABLED - Device doesn't support depth"}")
-                
-                // When depth mode is enabled, SceneView automatically handles depth-based occlusion
-                // Virtual objects will appear behind real-world objects
-                if (depthSupported) {
-                    depthOcclusionEnabled = true
-                    Log.i(TAG, "✅ Depth occlusion ENABLED - Virtual objects will be occluded by real objects")
-                } else {
-                    depthOcclusionEnabled = false
-                    Log.i(TAG, "⚠️ Depth not supported on this device - occlusion unavailable")
+                configureSession { session, config ->
+                    // Enable depth mode for occlusion support
+                    val depthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                    config.depthMode = if (depthSupported) {
+                        Config.DepthMode.AUTOMATIC
+                    } else {
+                        Config.DepthMode.DISABLED
+                    }
+                    
+                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                    config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                    
+                    Log.i(TAG, "🔍 Depth API: ${if (depthSupported) "ENABLED - Occlusion supported" else "DISABLED - Device doesn't support depth"}")
+                    
+                    // When depth mode is enabled, SceneView automatically handles depth-based occlusion
+                    // Virtual objects will appear behind real-world objects
+                    if (depthSupported) {
+                        depthOcclusionEnabled = true
+                        Log.i(TAG, "✅ Depth occlusion ENABLED - Virtual objects will be occluded by real objects")
+                    } else {
+                        depthOcclusionEnabled = false
+                        Log.i(TAG, "⚠️ Depth not supported on this device - occlusion unavailable")
+                    }
                 }
             }
-
+        }
+        
+        // Install lifecycle observer to detect when app goes to background
+        // This is CRITICAL - Flutter doesn't call dispose() during background transitions
+        // Use the Flutter-provided lifecycle parameter directly
+        Log.d(TAG, "🔍 Installing lifecycle observer:")
+        Log.d(TAG, "   lifecycle (flutter param) = $lifecycle")
+        Log.d(TAG, "   activity = $activity")
+        Log.d(TAG, "   context = ${context.javaClass.name}")
+        
+        lifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            Log.d(TAG, "🔄 Lifecycle event: $event")
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                    // Try to get activity - first from parameter, then from context
+                    val activityToUse = activity ?: (context as? android.app.Activity)
+                    
+                    if (activityToUse != null && !isDisposed && !activityToUse.isFinishing) {
+                        Log.d(TAG, "📦 App going to background - CACHING SceneView to prevent session destruction")
+                        ArSessionCoordinator.cacheSceneView(sceneView, activityToUse)
+                    } else {
+                        Log.w(TAG, "⏭️ Cannot cache - activity unavailable (activity=$activity, context.activity=${context as? android.app.Activity}, isDisposed=$isDisposed)")
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    Log.d(TAG, "▶️ App resumed from background")
+                }
+                else -> {}
+            }
+        }
+        lifecycle.addObserver(lifecycleObserver!!)
+        Log.d(TAG, "👀 Lifecycle observer installed on Flutter lifecycle - will detect background transitions")
+        
+        // Setup callbacks for BOTH new and reused SceneViews
+        sceneView.apply {
             onSessionUpdated = { _, frame ->
                 if (!isDisposed) {
                     handleFrame(frame)
@@ -616,67 +689,9 @@ class ArCoreCompatView(
 
         container.addView(sceneView)
         
-        // Intercept ALL touch events to track real-time finger position
-        // This is needed because MoveGestureDetector doesn't provide current coordinates
-        // IMPORTANT: Do NOT consume events (return true) as this breaks SceneView's gesture system
-        sceneView.setOnTouchListener { view, event ->
-            // Prevent touch processing during disposal
-            if (isDisposed) return@setOnTouchListener false
-            
-            // Track pointer count for multi-touch detection
-            activePointerCount = event.pointerCount
-            
-            when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    // event.x and event.y are already relative to the view!
-                    currentTouchX = event.x
-                    currentTouchY = event.y
-                    if (debugGesturesEnabled) {
-                        Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
-                    }
-                }
-                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
-                    // Second finger down - if we're rotating, force scale reset
-                    if (isRotationActive && activePointerCount >= 2) {
-                        if (debugGesturesEnabled) {
-                            Log.w(TAG, "⚠️ Multi-touch detected during rotation! Pointers: $activePointerCount")
-                        }
-                        currentlyRotatingNode?.let { node ->
-                            rotationStartScale?.let { targetScale ->
-                                node.scale = targetScale
-                            }
-                        }
-                    }
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    currentTouchX = event.x
-                    currentTouchY = event.y
-                    
-                    // If rotation is active with 2+ fingers, reset scale on every move
-                    if (isRotationActive && activePointerCount >= 2) {
-                        currentlyRotatingNode?.let { node ->
-                            rotationStartScale?.let { targetScale ->
-                                val currentScale = node.scale
-                                val scaleChanged = abs(currentScale.x - targetScale.x) > 0.001f ||
-                                                  abs(currentScale.y - targetScale.y) > 0.001f ||
-                                                  abs(currentScale.z - targetScale.z) > 0.001f
-                                if (scaleChanged) {
-                                    node.scale = targetScale
-                                    if (debugGesturesEnabled) {
-                                        Log.w(TAG, "🚨 BLOCKED scale during rotation! Reset to $targetScale (was $currentScale)")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> {
-                    // Recalculate pointer count after release
-                    activePointerCount = maxOf(0, event.pointerCount - 1)
-                }
-            }
-            false // NEVER consume - let SceneView's gesture detectors work normally
-        }
+        // Setup touch listener for gesture coordinate tracking
+        // This is extracted to a method so it can be re-applied after session resume
+        setupTouchListener()
 
         sessionChannel.setMethodCallHandler(::handleSessionMethod)
         objectChannel.setMethodCallHandler(::handleObjectMethod)
@@ -753,15 +768,153 @@ class ArCoreCompatView(
             Log.e(TAG, "❌ Error during force sync dispose", t)
         }
     }
+    
+    /**
+     * Pause the session only - keep resources allocated.
+     * Used for soft dispose during background transitions.
+     */
+    fun pauseSessionOnly() {
+        Log.d(TAG, "⏸️ Pausing session only (keeping resources)")
+        runCatching {
+            sceneView.session?.pause()
+        }
+    }
+    
+    /**
+     * Resume the session after a soft dispose.
+     * Used when app comes back from background.
+     */
+    fun resumeSessionOnly() {
+        Log.d(TAG, "▶️ Resuming session")
+        runCatching {
+            sceneView.session?.resume()
+        }
+    }
+    
+    /**
+     * Set the creation sequence number for this view.
+     * Used to detect stale dispose calls from old views.
+     */
+    fun setCreationSequence(sequence: Long) {
+        creationSequence = sequence
+        Log.d(TAG, "📝 View creation sequence set to: $sequence")
+    }
+    
+    /**
+     * Check if this is a recoverable dispose (can cache SceneView for reuse).
+     * A dispose is recoverable if:
+     * - Activity is NOT finishing (user navigated away)
+     * - We're not already disposed
+     * - No new view is actively being created
+     */
+    private fun isRecoverableDispose(): Boolean {
+        val activityFinishing = activity?.isFinishing ?: false
+        val activityDestroyed = activity?.isDestroyed ?: false
+        
+        Log.d(TAG, "🔍 isRecoverableDispose check: finishing=$activityFinishing, destroyed=$activityDestroyed")
+        
+        // If activity is finishing or destroyed, this is NOT recoverable - full cleanup needed
+        if (activityFinishing || activityDestroyed) {
+            return false
+        }
+        
+        // Check if we're reusing a cached view - if so, we shouldn't re-cache
+        if (isReusingCachedView) {
+            Log.d(TAG, "🔍 Already using a cached view, can re-cache")
+        }
+        
+        // Otherwise, this is likely a background transition - recoverable!
+        return true
+    }
 
     override fun dispose() {
         if (isDisposed) return
+        
+        Log.d(TAG, "📞 dispose() called - starting decision logic")
+        
+        // Check if a new view is being created - if so, skip disposal entirely
+        // The new view will handle everything
+        val newViewBeingCreated = ArSessionCoordinator.isNewViewBeingCreated()
+        
+        // Also check if we're still the active view - if not, a new view has taken over
+        val isStillActiveView = ArSessionCoordinator.isActiveView(this)
+        
+        // Check if our creation sequence is stale (a newer view was created)
+        val currentSequence = ArSessionCoordinator.getCurrentCreationSequence()
+        val isStaleView = creationSequence > 0 && creationSequence < currentSequence
+        
+        if (newViewBeingCreated || !isStillActiveView || isStaleView) {
+            Log.d(TAG, "🚫 Skipping destructive dispose - newViewBeingCreated: $newViewBeingCreated, isStillActiveView: $isStillActiveView, isStaleView: $isStaleView (our seq: $creationSequence, current: $currentSequence)")
+            isDisposed = true  // Mark as disposed to prevent future calls
+            
+            // Just cleanup handlers but DON'T destroy SceneView or session
+            sessionChannel.setMethodCallHandler(null)
+            objectChannel.setMethodCallHandler(null)
+            anchorChannel.setMethodCallHandler(null)
+            runCatching { scope.cancel() }
+            sceneView.setOnTouchListener(null)
+            
+            // Unregister but don't destroy
+            ArSessionCoordinator.unregisterView(this)
+            Log.d(TAG, "✅ Non-destructive dispose complete (new view owns resources)")
+            return
+        }
+        
+        // Check if this is a recoverable dispose (can cache for reuse)
+        val isRecoverable = isRecoverableDispose()
+        
+        Log.d(TAG, "🧹 DISPOSE CALLED - isRecoverable: $isRecoverable, activity.isFinishing: ${activity?.isFinishing}")
+        
+        if (isRecoverable) {
+            // CRITICAL: Cache the SceneView instead of destroying it!
+            // This keeps the AR session alive during background/foreground transitions
+            Log.d(TAG, "📦 Recoverable dispose - CACHING SceneView for reuse")
+            
+            isDisposed = true  // Mark as disposed to prevent re-entry
+            
+            // Pause the session but keep it alive
+            try {
+                sceneView.session?.pause()
+                Log.d(TAG, "⏸️ AR session paused")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error pausing session", e)
+            }
+            
+            // Cache the SceneView for reuse - pass activity so it can be moved to hidden holder
+            activity?.let { 
+                ArSessionCoordinator.cacheSceneView(sceneView, it)
+            } ?: run {
+                // No activity, just remove from container (SceneView will be destroyed)
+                container.removeView(sceneView)
+                Log.w(TAG, "⚠️ No activity available for caching - SceneView will be destroyed")
+            }
+            
+            // Cleanup handlers but keep SceneView
+            sessionChannel.setMethodCallHandler(null)
+            objectChannel.setMethodCallHandler(null)
+            anchorChannel.setMethodCallHandler(null)
+            runCatching { scope.cancel() }
+            
+            // Unregister from coordinator
+            ArSessionCoordinator.unregisterView(this)
+            
+            Log.d(TAG, "✅ Recoverable dispose complete - SceneView cached for reuse")
+            return
+        }
+        
+        // Full dispose - this is a real navigation away
         isDisposed = true
         
-        Log.d(TAG, "🧹 Disposing ArCoreCompatView - starting cleanup")
+        Log.d(TAG, "🧹 Full dispose - starting cleanup")
         
         // Unregister from coordinator immediately
         ArSessionCoordinator.unregisterView(this)
+        
+        // Remove lifecycle observer
+        lifecycleObserver?.let { observer ->
+            runCatching { lifecycle.removeObserver(observer) }
+        }
+        lifecycleObserver = null
         
         try {
             // Cancel method handlers immediately to prevent new calls
@@ -962,6 +1115,22 @@ class ArCoreCompatView(
                 // TODO: Implement polling listener once parity requirements are clarified.
                 result.success(null)
             }
+            // Permission dialog methods - no longer needed (keeping for API compatibility)
+            "notifyPermissionDialogShowing" -> {
+                Log.d(TAG, "🔔 Flutter notified: permission dialog showing (no-op)")
+                result.success(true)
+            }
+            "notifyPermissionDialogDismissed" -> {
+                Log.d(TAG, "🔔 Flutter notified: permission dialog dismissed (no-op)")
+                // Attempt to resume session in case it was paused
+                resumeSession()
+                result.success(true)
+            }
+            "forceResumeSession" -> {
+                Log.d(TAG, "🔄 Force resume session requested from Flutter")
+                resumeSession()
+                result.success(true)
+            }
             else -> result.notImplemented()
         }
     }
@@ -1051,11 +1220,30 @@ class ArCoreCompatView(
 
     /**
      * Resume the AR session after being paused.
-     * Note: This is a simple resume - touch listeners may need manual re-setup
-     * if pausing was done mid-session (not during dispose flow).
+     * Restores camera, tracking, and touch interactions.
      */
     private fun resumeSession() {
-        if (isDisposed || !isPaused) return
+        if (isDisposed) {
+            Log.w(TAG, "⚠️ Cannot resume - view is disposed")
+            return
+        }
+        
+        if (!isPaused) {
+            Log.d(TAG, "ℹ️ Session not paused, checking if resume needed anyway...")
+            // Even if not paused by our code, try to ensure session is running
+            // This handles cases where SceneView may have internally paused
+            try {
+                val session = sceneView.session
+                if (session != null) {
+                    // Check if session needs resuming
+                    runCatching { session.resume() }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Session resume check failed: ${e.message}")
+            }
+            return
+        }
+        
         isPaused = false
         
         Log.d(TAG, "▶️ Resuming AR session")
@@ -1063,10 +1251,76 @@ class ArCoreCompatView(
             // Resume the AR session
             sceneView.session?.resume()
             
-            Log.d(TAG, "✅ AR session resumed successfully")
-            // Note: Touch listener re-setup would be complex - typically pause is only called before dispose
+            // Re-setup touch listener for gesture tracking
+            setupTouchListener()
+            
+            Log.d(TAG, "✅ AR session resumed successfully with touch listener")
         } catch (e: Exception) {
             Log.e(TAG, "⚠️ Error resuming AR session: ${e.message}")
+        }
+    }
+    
+    /**
+     * Setup touch listener for gesture coordinate tracking.
+     * This is called during init and after resume to restore functionality.
+     */
+    private fun setupTouchListener() {
+        sceneView.setOnTouchListener { view, event ->
+            // Prevent touch processing during disposal
+            if (isDisposed) return@setOnTouchListener false
+            
+            // Track pointer count for multi-touch detection
+            activePointerCount = event.pointerCount
+            
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    currentTouchX = event.x
+                    currentTouchY = event.y
+                    if (debugGesturesEnabled) {
+                        Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
+                    }
+                }
+                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                    // Second finger down - if we're rotating, force scale reset
+                    if (isRotationActive && activePointerCount >= 2) {
+                        if (debugGesturesEnabled) {
+                            Log.w(TAG, "⚠️ Multi-touch detected during rotation! Pointers: $activePointerCount")
+                        }
+                        currentlyRotatingNode?.let { node ->
+                            rotationStartScale?.let { targetScale ->
+                                node.scale = targetScale
+                            }
+                        }
+                    }
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    currentTouchX = event.x
+                    currentTouchY = event.y
+                    
+                    // If rotation is active with 2+ fingers, reset scale on every move
+                    if (isRotationActive && activePointerCount >= 2) {
+                        currentlyRotatingNode?.let { node ->
+                            rotationStartScale?.let { targetScale ->
+                                val currentScale = node.scale
+                                val scaleChanged = abs(currentScale.x - targetScale.x) > 0.001f ||
+                                                  abs(currentScale.y - targetScale.y) > 0.001f ||
+                                                  abs(currentScale.z - targetScale.z) > 0.001f
+                                if (scaleChanged) {
+                                    node.scale = targetScale
+                                    if (debugGesturesEnabled) {
+                                        Log.w(TAG, "🚨 BLOCKED scale during rotation! Reset to $targetScale (was $currentScale)")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> {
+                    // Recalculate pointer count after release
+                    activePointerCount = maxOf(0, event.pointerCount - 1)
+                }
+            }
+            false // NEVER consume - let SceneView's gesture detectors work normally
         }
     }
 

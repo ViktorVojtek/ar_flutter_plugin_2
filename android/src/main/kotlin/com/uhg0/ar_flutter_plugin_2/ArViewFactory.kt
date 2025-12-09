@@ -16,23 +16,201 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 /**
  * Global AR Session Coordinator - ensures only one AR session exists at a time.
  * This prevents race conditions when navigating between AR screens.
+ * 
+ * Also handles background/foreground transitions by implementing view caching:
+ * - When app goes to background, Flutter disposes the platform view
+ * - Instead of destroying the SceneView, we cache it
+ * - When app returns from background, we reuse the SAME SceneView
+ * - This prevents the black screen issue because SceneView never loses its Surface
  */
 object ArSessionCoordinator {
     private const val TAG = "ArSessionCoordinator"
+    
+    // How long to keep cached view alive after dispose
+    private const val CACHE_EXPIRY_MS = 10000L
     
     @Volatile
     private var activeView: ArCoreCompatView? = null
     
     @Volatile
+    private var pendingSoftDisposeView: ArCoreCompatView? = null
+    
+    @Volatile
     private var isDisposing = false
+    
+    @Volatile
+    private var isCreatingNewView = false
+    
+    @Volatile
+    private var isSoftDisposed = false
     
     @Volatile
     private var suppressCameraExceptions = false
     
+    // Track creation sequence to detect stale dispose calls
+    @Volatile
+    private var currentCreationSequence = 0L
+    
+    // CRITICAL: Cache the SceneView itself to survive Flutter platform view recreation
+    @Volatile
+    private var cachedSceneView: io.github.sceneview.ar.ARSceneView? = null
+    
+    @Volatile
+    private var cachedViewTimestamp = 0L
+    
+    // Hidden holder to keep SceneView attached to window (Surface stays alive)
+    private var hiddenHolder: android.widget.FrameLayout? = null
+    private var holderActivity: android.app.Activity? = null
+    
     private val lock = Object()
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     
     // Original exception handler
     private var originalHandler: Thread.UncaughtExceptionHandler? = null
+    
+    // Runnable for delayed cache expiry
+    private val cacheExpiryRunnable = Runnable {
+        synchronized(lock) {
+            if (cachedSceneView != null && 
+                System.currentTimeMillis() - cachedViewTimestamp > CACHE_EXPIRY_MS) {
+                Log.d(TAG, "⏰ Cached SceneView expired - destroying")
+                destroyCachedSceneView()
+            }
+        }
+    }
+    
+    /**
+     * Get or create a hidden holder attached to the activity's window.
+     * This keeps the SceneView's Surface alive even when the Flutter PlatformView is disposed.
+     */
+    private fun getHiddenHolder(activity: android.app.Activity): android.widget.FrameLayout {
+        synchronized(lock) {
+            // If we have a holder for a different activity, remove it
+            if (holderActivity != null && holderActivity !== activity) {
+                hiddenHolder?.let { holder ->
+                    (holder.parent as? android.view.ViewGroup)?.removeView(holder)
+                }
+                hiddenHolder = null
+            }
+            
+            // Create holder if needed
+            if (hiddenHolder == null) {
+                val holder = android.widget.FrameLayout(activity).apply {
+                    layoutParams = android.widget.FrameLayout.LayoutParams(1, 1)  // Tiny but not 0 (Surface needs size)
+                    visibility = android.view.View.INVISIBLE  // Invisible but still renders
+                    // Position off-screen
+                    translationX = -1000f
+                    translationY = -1000f
+                }
+                
+                // Add to activity's content view
+                val contentView = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+                contentView.addView(holder)
+                
+                hiddenHolder = holder
+                holderActivity = activity
+                Log.d(TAG, "🏠 Created hidden holder for SceneView caching")
+            }
+            
+            return hiddenHolder!!
+        }
+    }
+    
+    /**
+     * Cache a SceneView for reuse after background transition.
+     * Moves SceneView to a hidden holder to keep its Surface alive.
+     */
+    fun cacheSceneView(sceneView: io.github.sceneview.ar.ARSceneView, activity: android.app.Activity) {
+        synchronized(lock) {
+            // First destroy any existing cached view
+            destroyCachedSceneView()
+            
+            // Get the hidden holder
+            val holder = getHiddenHolder(activity)
+            
+            // Remove from current parent
+            (sceneView.parent as? android.view.ViewGroup)?.removeView(sceneView)
+            
+            // Add to hidden holder - this keeps the Surface alive!
+            sceneView.layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            holder.addView(sceneView)
+            
+            cachedSceneView = sceneView
+            cachedViewTimestamp = System.currentTimeMillis()
+            
+            Log.d(TAG, "📦 SceneView moved to hidden holder and cached for reuse")
+            
+            // Schedule cache expiry
+            mainHandler.removeCallbacks(cacheExpiryRunnable)
+            mainHandler.postDelayed(cacheExpiryRunnable, CACHE_EXPIRY_MS)
+        }
+    }
+    
+    /**
+     * Try to get a cached SceneView for reuse.
+     * Returns null if no valid cached view exists.
+     */
+    fun getCachedSceneView(): io.github.sceneview.ar.ARSceneView? {
+        synchronized(lock) {
+            val cached = cachedSceneView
+            if (cached != null) {
+                // Cancel expiry timer
+                mainHandler.removeCallbacks(cacheExpiryRunnable)
+                
+                // Clear cache reference (it's being adopted)
+                cachedSceneView = null
+                cachedViewTimestamp = 0L
+                
+                Log.d(TAG, "♻️ Reusing cached SceneView!")
+                return cached
+            }
+            return null
+        }
+    }
+    
+    /**
+     * Destroy any cached SceneView.
+     */
+    private fun destroyCachedSceneView() {
+        val cached = cachedSceneView
+        if (cached != null) {
+            Log.d(TAG, "🗑️ Destroying cached SceneView")
+            try {
+                // Remove from hidden holder first
+                (cached.parent as? android.view.ViewGroup)?.removeView(cached)
+                cached.destroy()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error destroying cached SceneView", e)
+            }
+            cachedSceneView = null
+            cachedViewTimestamp = 0L
+        }
+    }
+    
+    /**
+     * Check if we have a cached SceneView available for reuse.
+     */
+    fun hasCachedSceneView(): Boolean {
+        synchronized(lock) {
+            return cachedSceneView != null
+        }
+    }
+    
+    // Runnable for delayed full disposal after soft dispose
+    private val delayedFullDisposeRunnable = Runnable {
+        synchronized(lock) {
+            val viewToDispose = pendingSoftDisposeView
+            if (viewToDispose != null && isSoftDisposed) {
+                Log.d(TAG, "⏰ Delayed dispose timeout - performing full cleanup")
+                performFullDispose(viewToDispose)
+                pendingSoftDisposeView = null
+                isSoftDisposed = false
+            }
+        }
+    }
     
     /**
      * Install a global exception handler that catches camera-related exceptions
@@ -75,11 +253,20 @@ object ArSessionCoordinator {
     
     /**
      * Called before creating a new AR view.
-     * Ensures any existing view is fully disposed before allowing new creation.
+     * First checks if there's a soft-disposed session that can be restored.
+     * Otherwise ensures any existing view is fully disposed before allowing new creation.
+     * 
+     * Returns: true if should create new view, false if restored soft-disposed session
      */
     fun prepareForNewView(): Boolean {
         synchronized(lock) {
             Log.d(TAG, "🔄 Preparing for new AR view...")
+            
+            // First, check if we have a soft-disposed session we can restore
+            if (hasSoftDisposedSession()) {
+                Log.d(TAG, "♻️ Found soft-disposed session - cleaning up first")
+                cancelSoftDisposedSession()
+            }
             
             val existing = activeView
             if (existing != null) {
@@ -91,15 +278,16 @@ object ArSessionCoordinator {
                     // Force dispose the existing view synchronously
                     existing.forceDisposeSync()
                     
-                    // Longer delay to let camera resources fully release and coroutines complete
-                    Thread.sleep(500)
+                    // Longer delay to let camera resources fully release
+                    // Camera release can take 500-1000ms on some devices
+                    Log.d(TAG, "⏳ Waiting for AR session to fully release...")
+                    Thread.sleep(800)
                     
                 } catch (e: Exception) {
                     Log.e(TAG, "Error disposing existing view", e)
                 } finally {
                     activeView = null
                     isDisposing = false
-                    // Keep suppressing exceptions for a bit longer as background coroutines may still be running
                 }
                 
                 Log.d(TAG, "✅ Previous view disposed")
@@ -112,11 +300,174 @@ object ArSessionCoordinator {
     }
     
     /**
-     * Called after new view is fully initialized to stop suppressing exceptions
+     * Called after new view is fully initialized to stop suppressing exceptions.
+     * We keep isCreatingNewView true for a bit longer to protect against late dispose calls.
      */
     fun viewInitialized() {
         suppressCameraExceptions = false
         Log.d(TAG, "✅ View initialized, exception suppression disabled")
+        
+        // Delay clearing the creating flag to protect against late dispose calls
+        // This is critical because Flutter may call dispose() on the OLD view
+        // after the new view has already started
+        mainHandler.postDelayed({
+            isCreatingNewView = false
+            Log.d(TAG, "✅ New view creation protection window closed")
+        }, 2000)  // Keep protection for 2 seconds
+    }
+    
+    /**
+     * Check if a new view is currently being created.
+     * Used by old views to skip destructive disposal.
+     */
+    fun isNewViewBeingCreated(): Boolean {
+        return isCreatingNewView
+    }
+    
+    /**
+     * Mark that a new view is being created.
+     * This prevents old views from doing destructive cleanup.
+     * Returns the creation sequence number for this view.
+     */
+    fun markCreatingNewView(): Long {
+        synchronized(lock) {
+            isCreatingNewView = true
+            suppressCameraExceptions = true
+            currentCreationSequence++
+            Log.d(TAG, "🚧 Marked: new view creation in progress (sequence: $currentCreationSequence)")
+            return currentCreationSequence
+        }
+    }
+    
+    /**
+     * Get the current creation sequence number.
+     * Views created with an older sequence should not do destructive cleanup.
+     */
+    fun getCurrentCreationSequence(): Long {
+        return currentCreationSequence
+    }
+    
+    /**
+     * Perform soft dispose - pause the session but keep resources.
+     * Used when app goes to background (Flutter disposes platform view).
+     * Resources will be fully cleaned up after CACHE_EXPIRY_MS
+     * unless a new view requests to reuse them.
+     * 
+     * NOTE: This is now secondary to SceneView caching, but kept for compatibility.
+     */
+    fun performSoftDispose(view: ArCoreCompatView) {
+        synchronized(lock) {
+            Log.d(TAG, "🔄 Soft dispose requested - pausing session but keeping resources")
+            
+            // Cancel any pending delayed dispose
+            mainHandler.removeCallbacks(delayedFullDisposeRunnable)
+            
+            // Store the view for potential reuse
+            pendingSoftDisposeView = view
+            isSoftDisposed = true
+            
+            // Pause the session (keeps camera/resources allocated)
+            try {
+                view.pauseSessionOnly()
+                Log.d(TAG, "⏸️ Session paused - waiting for potential resume")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error pausing session during soft dispose", e)
+            }
+            
+            // Schedule delayed full disposal
+            mainHandler.postDelayed(delayedFullDisposeRunnable, CACHE_EXPIRY_MS)
+            
+            // Clear active view reference
+            if (activeView === view) {
+                activeView = null
+            }
+        }
+    }
+    
+    /**
+     * Check if there's a soft-disposed session that can be reused.
+     */
+    fun hasSoftDisposedSession(): Boolean {
+        synchronized(lock) {
+            return isSoftDisposed && pendingSoftDisposeView != null
+        }
+    }
+    
+    /**
+     * Cancel any soft-disposed session and do full disposal.
+     * Called when creating a new view to ensure only one session exists.
+     */
+    fun cancelSoftDisposedSession() {
+        synchronized(lock) {
+            if (!isSoftDisposed || pendingSoftDisposeView == null) {
+                return
+            }
+            
+            Log.d(TAG, "🗑️ Canceling soft-disposed session before creating new view")
+            
+            // Cancel the delayed full dispose
+            mainHandler.removeCallbacks(delayedFullDisposeRunnable)
+            
+            val view = pendingSoftDisposeView
+            pendingSoftDisposeView = null
+            isSoftDisposed = false
+            
+            // Perform full dispose on the old view
+            view?.let { performFullDispose(it) }
+        }
+    }
+    
+    /**
+     * Try to restore a soft-disposed session for reuse.
+     * Returns the view if successful, null otherwise.
+     */
+    fun tryRestoreSoftDisposedSession(): ArCoreCompatView? {
+        synchronized(lock) {
+            if (!isSoftDisposed || pendingSoftDisposeView == null) {
+                return null
+            }
+            
+            Log.d(TAG, "♻️ Restoring soft-disposed session!")
+            
+            // Cancel the delayed full dispose
+            mainHandler.removeCallbacks(delayedFullDisposeRunnable)
+            
+            val view = pendingSoftDisposeView
+            pendingSoftDisposeView = null
+            isSoftDisposed = false
+            
+            // Resume the session
+            try {
+                view?.resumeSessionOnly()
+                Log.d(TAG, "▶️ Session resumed successfully!")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming session", e)
+                // If resume fails, we can't reuse - do full dispose
+                view?.let { performFullDispose(it) }
+                return null
+            }
+            
+            return view
+        }
+    }
+    
+    /**
+     * Perform full dispose - completely destroy all resources.
+     */
+    private fun performFullDispose(view: ArCoreCompatView) {
+        Log.d(TAG, "🗑️ Performing full dispose of AR resources")
+        suppressCameraExceptions = true
+        
+        try {
+            view.forceDisposeSync()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during full dispose", e)
+        } finally {
+            // Delay turning off exception suppression
+            mainHandler.postDelayed({
+                suppressCameraExceptions = false
+            }, 1000)
+        }
     }
     
     /**
@@ -126,6 +477,16 @@ object ArSessionCoordinator {
         synchronized(lock) {
             Log.d(TAG, "📝 Registering new AR view")
             activeView = view
+        }
+    }
+    
+    /**
+     * Check if the given view is the currently active view.
+     * Used to determine if a view should do destructive cleanup.
+     */
+    fun isActiveView(view: ArCoreCompatView): Boolean {
+        synchronized(lock) {
+            return activeView === view
         }
     }
     
@@ -155,23 +516,91 @@ class ArViewFactory(
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
         Log.d(TAG, "🏭 Creating new AR view with id: $viewId")
         
-        // CRITICAL: Ensure any existing AR view is disposed before creating new one
-        ArSessionCoordinator.prepareForNewView()
+        // Mark that we're creating a new view - this prevents old views from doing destructive cleanup
+        // Store the sequence number to assign to the new view
+        val creationSequence = ArSessionCoordinator.markCreatingNewView()
         
+        // CRITICAL: Check if we have a cached SceneView from a background transition
+        // If so, we reuse it instead of creating a new one (preserving the AR session!)
+        val cachedSceneView = ArSessionCoordinator.getCachedSceneView()
+        
+        if (cachedSceneView != null) {
+            Log.d(TAG, "♻️ Found cached SceneView - reusing to preserve AR session!")
+        } else {
+            // No cached view - need to do normal cleanup
+            // Check if there's a soft-disposed session - if so, fully dispose it first
+            // This prevents having two AR sessions at once
+            ArSessionCoordinator.cancelSoftDisposedSession()
+            
+            // CRITICAL: Ensure any existing AR view is disposed before creating new one
+            // This blocks until the old view is fully cleaned up
+            ArSessionCoordinator.prepareForNewView()
+            
+            // Extra delay to ensure camera resources are fully released
+            // This is necessary because camera release is async and may still be in progress
+            try {
+                Log.d(TAG, "⏳ Waiting for camera resources to fully release...")
+                Thread.sleep(300)
+            } catch (e: InterruptedException) {
+                // Ignore
+            }
+        }
+        
+        // Flutter passes context, we need to extract the ComponentActivity from it
+        // The context might be wrapped, so we need to unwrap it
         val componentActivity = when {
-            activity is ComponentActivity -> activity as ComponentActivity
-            context is ComponentActivity -> context
-            else -> null
+            context is ComponentActivity -> {
+                Log.d(TAG, "✅ Got ComponentActivity directly from context: ${context.javaClass.name}")
+                context
+            }
+            activity is ComponentActivity -> {
+                Log.d(TAG, "✅ Got ComponentActivity from activity field: ${activity.javaClass.name}")
+                activity as ComponentActivity
+            }
+            context is android.content.ContextWrapper -> {
+                // Flutter wraps the activity, need to unwrap it
+                var unwrapped: android.content.Context? = (context as android.content.ContextWrapper).baseContext
+                Log.d(TAG, "🔍 Context is ContextWrapper, unwrapping... baseContext=${unwrapped?.javaClass?.name}")
+                while (unwrapped is android.content.ContextWrapper && unwrapped !is ComponentActivity) {
+                    unwrapped = unwrapped.baseContext
+                    Log.d(TAG, "   🔍 Unwrapping further... now=${unwrapped?.javaClass?.name}")
+                }
+                if (unwrapped is ComponentActivity) {
+                    Log.d(TAG, "✅ Got ComponentActivity from unwrapped context: ${unwrapped.javaClass.name}")
+                    unwrapped
+                } else {
+                    Log.w(TAG, "⚠️ Unwrapped context is not ComponentActivity: ${unwrapped?.javaClass?.name}")
+                    null
+                }
+            }
+            else -> {
+                Log.w(TAG, "⚠️ Could not get ComponentActivity - context=${context.javaClass.name}, activity=${activity?.javaClass?.name}")
+                null
+            }
         }
 
         if (componentActivity == null) {
-            Log.w(TAG, "Using ARSceneView without ComponentActivity host; lifecycle features may be limited.")
+            Log.e(TAG, "❌ CRITICAL: Using ARSceneView without ComponentActivity! Background caching will NOT work!")
         }
 
-        val view = ArCoreCompatView(context, messenger, viewId, componentActivity, lifecycle)
+        // Create view, passing cached SceneView if available
+        val view = ArCoreCompatView(
+            context = context, 
+            messenger = messenger, 
+            viewId = viewId, 
+            activity = componentActivity, 
+            lifecycle = lifecycle,
+            cachedSceneViewArg = cachedSceneView
+        )
+        
+        // Set the creation sequence so the view knows its position in the sequence
+        view.setCreationSequence(creationSequence)
         
         // Register the new view with the coordinator
         ArSessionCoordinator.registerView(view)
+        
+        // Clear the creating flag (view initialized will be called separately)
+        ArSessionCoordinator.viewInitialized()
         
         Log.d(TAG, "✅ AR view created and registered")
         return view
