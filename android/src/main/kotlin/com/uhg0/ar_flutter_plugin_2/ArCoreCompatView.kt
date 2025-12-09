@@ -113,6 +113,10 @@ class ArCoreCompatView(
     // Depth occlusion state tracking (SceneView handles this automatically when depth is enabled)
     // We just track the state for the Flutter API
     private var depthOcclusionEnabled = true  // Enabled by default when depth mode is AUTOMATIC
+    
+    // Configurable gesture settings (set at init time only)
+    private var debugGesturesEnabled = false  // Enable verbose gesture logging for development
+    private var maxPanDistanceMeters = 5.0f   // Maximum distance from camera for pan gestures (default 5m)
 
     init {
         sceneView = ARSceneView(
@@ -181,7 +185,9 @@ class ArCoreCompatView(
                             panStartTouchX = currentTouchX
                             panStartTouchY = currentTouchY
                             // Touch coordinates are tracked globally by container's touch listener
-                            Log.d(TAG, "🔥 Pan started - Y=$panStartY, Touch: ($currentTouchX, $currentTouchY)")
+                            if (debugGesturesEnabled) {
+                                Log.d(TAG, "🔥 Pan started - Y=$panStartY, Touch: ($currentTouchX, $currentTouchY)")
+                            }
                             handleGestureEvent("onPanStart", node)
                             true
                         } else false
@@ -236,17 +242,23 @@ class ArCoreCompatView(
                                 val dz = newWorldPos.z - cameraTrans[2]
                                 val distance = sqrt(dx * dx + dy * dy + dz * dz)
                                 
-                                if (distance <= 5.0f) {
+                                if (distance <= maxPanDistanceMeters) {
                                     record.node.worldPosition = newWorldPos
-                                    Log.d(TAG, "🎯 Hit-test pan → World Pos: (%.3f, %.3f, %.3f) | Dist: %.2fm".format(
-                                        newWorldPos.x, newWorldPos.y, newWorldPos.z, distance
-                                    ))
+                                    if (debugGesturesEnabled) {
+                                        Log.d(TAG, "🎯 Hit-test pan → World Pos: (%.3f, %.3f, %.3f) | Dist: %.2fm".format(
+                                            newWorldPos.x, newWorldPos.y, newWorldPos.z, distance
+                                        ))
+                                    }
                                 } else {
-                                    Log.d(TAG, "⚠️ Position too far: ${distance}m (max 5m) - ignoring")
+                                    if (debugGesturesEnabled) {
+                                        Log.d(TAG, "⚠️ Position too far: ${distance}m (max ${maxPanDistanceMeters}m) - ignoring")
+                                    }
                                 }
                             }
                         } else {
-                            Log.d(TAG, "⚠️ No hit result - pan ignored")
+                            if (debugGesturesEnabled) {
+                                Log.d(TAG, "⚠️ No hit result - pan ignored")
+                            }
                         }
                         
                         handleGestureEvent("onPanChange", node)
@@ -557,12 +569,16 @@ class ArCoreCompatView(
                     // event.x and event.y are already relative to the view!
                     currentTouchX = event.x
                     currentTouchY = event.y
-                    Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
+                    if (debugGesturesEnabled) {
+                        Log.d(TAG, "🖐️ Touch DOWN: ($currentTouchX, $currentTouchY)")
+                    }
                 }
                 android.view.MotionEvent.ACTION_POINTER_DOWN -> {
                     // Second finger down - if we're rotating, force scale reset
                     if (isRotationActive && activePointerCount >= 2) {
-                        Log.w(TAG, "⚠️ Multi-touch detected during rotation! Pointers: $activePointerCount")
+                        if (debugGesturesEnabled) {
+                            Log.w(TAG, "⚠️ Multi-touch detected during rotation! Pointers: $activePointerCount")
+                        }
                         currentlyRotatingNode?.let { node ->
                             rotationStartScale?.let { targetScale ->
                                 node.scale = targetScale
@@ -584,7 +600,9 @@ class ArCoreCompatView(
                                                   abs(currentScale.z - targetScale.z) > 0.001f
                                 if (scaleChanged) {
                                     node.scale = targetScale
-                                    Log.w(TAG, "🚨 BLOCKED scale during rotation! Reset to $targetScale (was $currentScale)")
+                                    if (debugGesturesEnabled) {
+                                        Log.w(TAG, "🚨 BLOCKED scale during rotation! Reset to $targetScale (was $currentScale)")
+                                    }
                                 }
                             }
                         }
@@ -885,6 +903,15 @@ class ArCoreCompatView(
         val planeDetectionIndex = (arguments?.get("planeDetectionConfig") as? Number)?.toInt()
         val showFeaturePoints = arguments?.get("showFeaturePoints") as? Boolean ?: false
         val showAnimatedGuide = arguments?.get("showAnimatedGuide") as? Boolean ?: false
+        
+        // Parse gesture configuration (set once at init)
+        debugGesturesEnabled = arguments?.get("debugGestures") as? Boolean ?: false
+        maxPanDistanceMeters = (arguments?.get("maxPanDistance") as? Number)?.toFloat() ?: 5.0f
+        
+        if (debugGesturesEnabled) {
+            Log.i(TAG, "🔧 Gesture debug mode ENABLED")
+            Log.i(TAG, "🔧 Max pan distance: ${maxPanDistanceMeters}m")
+        }
 
         sceneView.configureSession { session, config ->
             config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
@@ -1842,7 +1869,9 @@ class ArCoreCompatView(
             val normX = (touchX - principalPoint[0]) / focalLength[0]
             val normY = (touchY - principalPoint[1]) / focalLength[1]
             
-            Log.d(TAG, "📐 normX=${"%.3f".format(normX)}, normY=${"%.3f".format(normY)} | touch=($touchX, $touchY)")
+            if (debugGesturesEnabled) {
+                Log.d(TAG, "📐 normX=${"%.3f".format(normX)}, normY=${"%.3f".format(normY)} | touch=($touchX, $touchY)")
+            }
             
             // Get camera transformation matrix (column-major order)
             val cameraMatrix = FloatArray(16)
@@ -1864,9 +1893,11 @@ class ArCoreCompatView(
             val forwardY = -cameraMatrix[9]
             val forwardZ = -cameraMatrix[10]
             
-            Log.d(TAG, "🎥 right=(${"%.2f".format(rightX)}, ${"%.2f".format(rightY)}, ${"%.2f".format(rightZ)})")
-            Log.d(TAG, "🎥 up=(${"%.2f".format(upX)}, ${"%.2f".format(upY)}, ${"%.2f".format(upZ)})")
-            Log.d(TAG, "🎥 forward=(${"%.2f".format(forwardX)}, ${"%.2f".format(forwardY)}, ${"%.2f".format(forwardZ)})")
+            if (debugGesturesEnabled) {
+                Log.d(TAG, "🎥 right=(${"%.2f".format(rightX)}, ${"%.2f".format(rightY)}, ${"%.2f".format(rightZ)})")
+                Log.d(TAG, "🎥 up=(${"%.2f".format(upX)}, ${"%.2f".format(upY)}, ${"%.2f".format(upZ)})")
+                Log.d(TAG, "🎥 forward=(${"%.2f".format(forwardX)}, ${"%.2f".format(forwardY)}, ${"%.2f".format(forwardZ)})")
+            }
             
             // Project camera right vector onto horizontal plane (Y=0)
             val groundRightX = rightX

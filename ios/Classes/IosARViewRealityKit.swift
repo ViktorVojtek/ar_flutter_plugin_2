@@ -51,6 +51,10 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
     // Depth occlusion state
     var depthOcclusionEnabled = true
     
+    // Configurable gesture settings (set at init time only)
+    var debugGesturesEnabled = false  // Enable verbose gesture logging for development
+    var maxPanDistanceMeters: Float = 5.0  // Maximum distance from camera for pan gestures (default 5m)
+    
     // Configuration
     var configuration: ARWorldTrackingConfiguration!
     
@@ -334,6 +338,19 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         
         if let configHandleRotation = arguments["handleRotation"] as? Bool, configHandleRotation {
             setupRotationGesture()
+        }
+        
+        // Parse gesture configuration (set once at init)
+        if let configDebugGestures = arguments["debugGestures"] as? Bool {
+            debugGesturesEnabled = configDebugGestures
+        }
+        if let configMaxPanDistance = arguments["maxPanDistance"] as? Double {
+            maxPanDistanceMeters = Float(configMaxPanDistance)
+        }
+        
+        if debugGesturesEnabled {
+            print("🔧 Gesture debug mode ENABLED")
+            print("🔧 Max pan distance: \(maxPanDistanceMeters)m")
         }
         
         // Add coaching overlay if requested

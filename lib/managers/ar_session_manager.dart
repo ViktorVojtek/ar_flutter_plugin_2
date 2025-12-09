@@ -293,6 +293,8 @@ class ARSessionManager {
   /// Function to initialize the platform-specific AR view. Can be used to initially set or update session settings.
   /// [customPlaneTexturePath] refers to flutter assets from the app that is calling this function, NOT to assets within this plugin. Make sure
   /// the assets are correctly registered in the pubspec.yaml of the parent app (e.g. the ./example app in this plugin's repo)
+  /// [debugGestures] enables verbose gesture logging for development (default: false for production)
+  /// [maxPanDistance] sets the maximum distance in meters that objects can be panned from camera (default: 5.0m)
   onInitialize({
     bool showAnimatedGuide = true,
     bool showFeaturePoints = false,
@@ -302,6 +304,8 @@ class ARSessionManager {
     bool handleTaps = true,
     bool handlePans = false, // nodes are not draggable by default
     bool handleRotation = false, // nodes can not be rotated by default
+    bool debugGestures = false, // enable verbose gesture logging for development
+    double maxPanDistance = 5.0, // maximum pan distance from camera in meters
   }) {
     print("🎯 ARSessionManager.onInitialize called");
     print("📤 Calling _channel.invokeMethod('init', ...)");
@@ -315,6 +319,8 @@ class ARSessionManager {
       'handleTaps': handleTaps,
       'handlePans': handlePans,
       'handleRotation': handleRotation,
+      'debugGestures': debugGestures,
+      'maxPanDistance': maxPanDistance,
     });
     print("📤 ARSessionManager init method call completed");
   }

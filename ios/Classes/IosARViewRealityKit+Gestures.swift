@@ -65,7 +65,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                 self.sessionManagerChannel.invokeMethod("onTap", arguments: tapData)
             }
             
-            print("👆 Tap at: \(position)")
+            if debugGesturesEnabled {
+                print("👆 Tap at: \(position)")
+            }
         }
     }
     
@@ -93,7 +95,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                     self.objectManagerChannel.invokeMethod("onPanStart", arguments: panData)
                 }
                 
-                print("🖐️ Pan started on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🖐️ Pan started on: \(entity.name)")
+                }
             }
             
         case .changed:
@@ -113,8 +117,23 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                 let deltaX = Float(translation.x) * panScale
                 let deltaY = Float(translation.y) * panScale
                 
+                // Save original position for distance check
+                let originalPosition = entity.position
+                
                 entity.position += right * deltaX
                 entity.position += up * (-deltaY)
+                
+                // Check distance from camera - clamp if too far
+                let cameraPosition = SIMD3<Float>(cameraTransform.columns.3.x, cameraTransform.columns.3.y, cameraTransform.columns.3.z)
+                let distanceFromCamera = simd_distance(entity.position, cameraPosition)
+                
+                if distanceFromCamera > maxPanDistanceMeters {
+                    // Revert to original position - object too far
+                    entity.position = originalPosition
+                    if debugGesturesEnabled {
+                        print("⚠️ Pan limited: distance \(distanceFromCamera)m exceeds max \(maxPanDistanceMeters)m")
+                    }
+                }
                 
                 // Reset translation
                 recognizer.setTranslation(.zero, in: arView)
@@ -152,7 +171,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                     self.objectManagerChannel.invokeMethod("onPanEnd", arguments: panData)
                 }
                 
-                print("🖐️ Pan ended on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🖐️ Pan ended on: \(entity.name)")
+                }
             }
             selectedEntity = nil
             
@@ -179,7 +200,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                     self.objectManagerChannel.invokeMethod("onRotationStart", arguments: rotationData)
                 }
                 
-                print("🔄 Rotation started on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🔄 Rotation started on: \(entity.name)")
+                }
             }
             
         case .changed:
@@ -214,7 +237,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                     self.objectManagerChannel.invokeMethod("onRotationEnd", arguments: rotationData)
                 }
                 
-                print("🔄 Rotation ended on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🔄 Rotation ended on: \(entity.name)")
+                }
             }
             selectedEntity = nil
             
@@ -230,7 +255,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         case .began:
             if let entity = arView.entity(at: location) {
                 selectedEntity = entity
-                print("🤏 Pinch started on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🤏 Pinch started on: \(entity.name)")
+                }
             }
             
         case .changed:
@@ -245,7 +272,9 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
             
         case .ended, .cancelled:
             if let entity = selectedEntity {
-                print("🤏 Pinch ended on: \(entity.name)")
+                if debugGesturesEnabled {
+                    print("🤏 Pinch ended on: \(entity.name)")
+                }
             }
             selectedEntity = nil
             
