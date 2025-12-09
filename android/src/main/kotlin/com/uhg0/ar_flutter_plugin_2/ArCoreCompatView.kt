@@ -1180,8 +1180,13 @@ class ArCoreCompatView(
             rotationStartWorldY = null
         }
         
-        runCatching {
-            record.node.destroy()
+        // Defer destruction to ensure any in-flight gesture events complete
+        sceneView?.post {
+            runCatching {
+                record.node.destroy()
+            }.onFailure { e ->
+                Log.w(TAG, "⚠️ Exception during node destroy (may be expected if gesture was active): ${e.message}")
+            }
         }
         return true
     }
@@ -1204,16 +1209,22 @@ class ArCoreCompatView(
             Log.d(TAG, "🔄 Cleared gesture state for removed node")
         }
         
-        try {
-            // Destroy the node (SceneView handles resource cleanup)
-            record.node.destroy()
-            
-            Log.d(TAG, "✅ Node removed successfully: $nodeId")
-            return true
-        } catch (t: Throwable) {
-            Log.e(TAG, "❌ Error removing node: $nodeId", t)
-            return false
+        // Defer destruction to ensure any in-flight gesture events complete
+        sceneView?.post {
+            try {
+                // Destroy the node (SceneView handles resource cleanup)
+                record.node.destroy()
+                Log.d(TAG, "✅ Node destroyed: $nodeId")
+            } catch (t: Throwable) {
+                Log.w(TAG, "⚠️ Exception during node destroy (may be expected if gesture was active): ${t.message}")
+            }
+        } ?: run {
+            // Fallback if sceneView is null - destroy directly
+            runCatching { record.node.destroy() }
         }
+        
+        Log.d(TAG, "✅ Node removed from records: $nodeId")
+        return true
     }
 
     private fun getMemoryInfo(): Map<String, Any> {
