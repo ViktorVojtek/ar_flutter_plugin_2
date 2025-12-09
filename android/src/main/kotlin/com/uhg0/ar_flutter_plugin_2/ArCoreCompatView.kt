@@ -1417,9 +1417,27 @@ class ArCoreCompatView(
             if (isDisposed) return@post
             
             runCatching {
-                // Load environment synchronously on main thread to avoid threading issues
-                val environment = loader.createHDREnvironment("environments/evening_meadow_2k.hdr")
-                environment?.let { sceneView.environment = it }
+                // Load HDR environment with reduced intensity for softer, more natural lighting
+                // The old Sceneform implementation used AMBIENT_INTENSITY which was softer.
+                // We use a neutral HDR environment (pdp-model-viewer) instead of evening_meadow
+                // which had a blue/cool color cast from outdoor evening lighting.
+                val environment = loader.createHDREnvironment(
+                    assetFileLocation = "pdp-model-viewer.hdr",  // Neutral lighting, no blue tint
+                    createSkybox = false  // Don't create skybox for AR (we want camera feed)
+                )
+                
+                environment?.let { env ->
+                    sceneView.environment = env
+                    
+                    // Reduce indirect light intensity for softer, more natural lighting
+                    // Default is quite bright which causes the bloomy/artificial look
+                    // A value around 10000-20000 provides softer ambient lighting similar to Sceneform
+                    sceneView.indirectLight?.let { light ->
+                        light.intensity = 15000f  // Reduced from default ~100000
+                    }
+                    
+                    Log.d(TAG, "✅ HDR environment loaded with neutral lighting (15000 lux)")
+                }
                 environmentInitialized = true
             }.onFailure { error ->
                 Log.w(TAG, "Unable to load default HDR environment: ${error.message}")
