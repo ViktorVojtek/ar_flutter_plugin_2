@@ -90,12 +90,64 @@ class AndroidARView implements PlatformARView {
     // Pass parameters to the platform side.
     final Map<String, dynamic> creationParams = <String, dynamic>{};
 
-    return AndroidView(
+    // Wrap AndroidView in AutomaticKeepAliveClientMixin to prevent recreation during backgrounding
+    return _PersistentAndroidView(
       viewType: viewType,
-      layoutDirection: TextDirection.ltr,
       creationParams: creationParams,
-      creationParamsCodec: const StandardMessageCodec(),
       onPlatformViewCreated: onPlatformViewCreated,
+    );
+  }
+}
+
+/// Wrapper that keeps the AndroidView alive during app lifecycle changes
+class _PersistentAndroidView extends StatefulWidget {
+  final String viewType;
+  final Map<String, dynamic> creationParams;
+  final Function(int) onPlatformViewCreated;
+
+  const _PersistentAndroidView({
+    required this.viewType,
+    required this.creationParams,
+    required this.onPlatformViewCreated,
+  });
+
+  @override
+  State<_PersistentAndroidView> createState() => _PersistentAndroidViewState();
+}
+
+class _PersistentAndroidViewState extends State<_PersistentAndroidView>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true; // Keep widget alive during lifecycle changes
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    
+    return PlatformViewLink(
+      viewType: widget.viewType,
+      surfaceFactory: (context, controller) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+        );
+      },
+      onCreatePlatformView: (params) {
+        return PlatformViewsService.initSurfaceAndroidView(
+          id: params.id,
+          viewType: widget.viewType,
+          layoutDirection: TextDirection.ltr,
+          creationParams: widget.creationParams,
+          creationParamsCodec: const StandardMessageCodec(),
+          onFocus: () {
+            params.onFocusChanged(true);
+          },
+        )
+          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..addOnPlatformViewCreatedListener(widget.onPlatformViewCreated)
+          ..create();
+      },
     );
   }
 }

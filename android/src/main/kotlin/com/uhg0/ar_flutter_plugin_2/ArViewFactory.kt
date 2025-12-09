@@ -23,11 +23,93 @@ import kotlinx.coroutines.CoroutineExceptionHandler
  * - When app returns from background, we reuse the SAME SceneView
  * - This prevents the black screen issue because SceneView never loses its Surface
  */
+/**
+ * Data classes for session state serialization during backgrounding
+ */
+data class SessionConfigData(
+    val planeFindingMode: Int,
+    val depthMode: Int,
+    val lightEstimationMode: Int
+)
+
+data class AnchorStateData(
+    val id: String,
+    val translation: FloatArray,  // [x, y, z]
+    val quaternion: FloatArray    // [x, y, z, w]
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as AnchorStateData
+        if (id != other.id) return false
+        if (!translation.contentEquals(other.translation)) return false
+        if (!quaternion.contentEquals(other.quaternion)) return false
+        return true
+    }
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + translation.contentHashCode()
+        result = 31 * result + quaternion.contentHashCode()
+        return result
+    }
+}
+
+data class NodeStateData(
+    val id: String,
+    val uri: String,
+    val transform: FloatArray,  // [16] full transform matrix
+    val anchorId: String?,
+    val isTransformable: Boolean,
+    val enablePan: Boolean,
+    val enableRotation: Boolean,
+    val enableScale: Boolean
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as NodeStateData
+        if (id != other.id) return false
+        if (uri != other.uri) return false
+        if (!transform.contentEquals(other.transform)) return false
+        if (anchorId != other.anchorId) return false
+        if (isTransformable != other.isTransformable) return false
+        if (enablePan != other.enablePan) return false
+        if (enableRotation != other.enableRotation) return false
+        if (enableScale != other.enableScale) return false
+        return true
+    }
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + uri.hashCode()
+        result = 31 * result + transform.contentHashCode()
+        result = 31 * result + (anchorId?.hashCode() ?: 0)
+        result = 31 * result + isTransformable.hashCode()
+        result = 31 * result + enablePan.hashCode()
+        result = 31 * result + enableRotation.hashCode()
+        result = 31 * result + enableScale.hashCode()
+        return result
+    }
+}
+
+data class SessionStateCache(
+    val config: SessionConfigData,
+    val anchors: List<AnchorStateData>,
+    val nodes: List<NodeStateData>
+)
+
 object ArSessionCoordinator {
     private const val TAG = "ArSessionCoordinator"
     
     // How long to keep cached view alive after dispose
     private const val CACHE_EXPIRY_MS = 10000L
+    
+    // LRU cache for loaded model instances (reduces restoration time)
+    private const val MODEL_CACHE_SIZE = 10
+    private val modelCache = androidx.collection.LruCache<String, io.github.sceneview.model.ModelInstance>(MODEL_CACHE_SIZE)
+    
+    // Session state cache for restoration after backgrounding
+    @Volatile
+    private var sessionStateCache: SessionStateCache? = null
     
     @Volatile
     private var activeView: ArCoreCompatView? = null
@@ -114,6 +196,52 @@ object ArSessionCoordinator {
             
             return hiddenHolder!!
         }
+    }
+    
+    /**
+     * Save session state to cache for restoration after backgrounding.
+     */
+    fun saveSessionState(state: SessionStateCache) {
+        synchronized(lock) {
+            sessionStateCache = state
+            Log.d(TAG, "📸 Cached session state: ${state.anchors.size} anchors, ${state.nodes.size} nodes")
+        }
+    }
+    
+    /**
+     * Get cached session state for restoration.
+     */
+    fun getSessionStateCache(): SessionStateCache? {
+        synchronized(lock) {
+            return sessionStateCache
+        }
+    }
+    
+    /**
+     * Clear cached session state (after successful restoration or failure).
+     */
+    fun clearSessionStateCache() {
+        synchronized(lock) {
+            sessionStateCache = null
+            Log.d(TAG, "🗑️ Cleared session state cache")
+        }
+    }
+    
+    /**
+     * Get a cached model instance if available.
+     */
+    fun getCachedModel(uri: String): io.github.sceneview.model.ModelInstance? {
+        return modelCache.get(uri)?.also {
+            Log.d(TAG, "♻️ Retrieved cached model: $uri")
+        }
+    }
+    
+    /**
+     * Cache a loaded model instance for reuse.
+     */
+    fun cacheModel(uri: String, model: io.github.sceneview.model.ModelInstance) {
+        modelCache.put(uri, model)
+        Log.d(TAG, "📦 Cached model: $uri (cache size: ${modelCache.size()})")
     }
     
     /**

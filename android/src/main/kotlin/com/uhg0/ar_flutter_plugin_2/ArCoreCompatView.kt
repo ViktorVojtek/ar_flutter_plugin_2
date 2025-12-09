@@ -206,21 +206,21 @@ class ArCoreCompatView(
         Log.d(TAG, "   context = ${context.javaClass.name}")
         
         lifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            Log.d(TAG, "🔄 Lifecycle event: $event")
+            Log.d(TAG, "🔄 Lifecycle event: $event (anchorRecords=${anchorRecords.size}, nodeRecords=${nodeRecords.size})")
             when (event) {
                 androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
-                    // Try to get activity - first from parameter, then from context
-                    val activityToUse = activity ?: (context as? android.app.Activity)
-                    
-                    if (activityToUse != null && !isDisposed && !activityToUse.isFinishing) {
-                        Log.d(TAG, "📦 App going to background - CACHING SceneView to prevent session destruction")
-                        ArSessionCoordinator.cacheSceneView(sceneView, activityToUse)
-                    } else {
-                        Log.w(TAG, "⏭️ Cannot cache - activity unavailable (activity=$activity, context.activity=${context as? android.app.Activity}, isDisposed=$isDisposed)")
-                    }
+                    Log.d(TAG, "⏸️ App going to background - session will be paused by dispose()")
                 }
                 androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
-                    Log.d(TAG, "▶️ App resumed from background")
+                    Log.d(TAG, "▶️ App resumed from background - resuming session")
+                    
+                    // Resume the AR session if it was paused
+                    try {
+                        sceneView.session?.resume()
+                        Log.d(TAG, "✅ AR session resumed - camera should restart")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error resuming session", e)
+                    }
                 }
                 else -> {}
             }
@@ -866,41 +866,28 @@ class ArCoreCompatView(
         Log.d(TAG, "🧹 DISPOSE CALLED - isRecoverable: $isRecoverable, activity.isFinishing: ${activity?.isFinishing}")
         
         if (isRecoverable) {
-            // CRITICAL: Cache the SceneView instead of destroying it!
-            // This keeps the AR session alive during background/foreground transitions
-            Log.d(TAG, "📦 Recoverable dispose - CACHING SceneView for reuse")
+            // CRITICAL: This is just a background transition - DON'T destroy anything!
+            // Just pause the session and mark as disposed
+            Log.d(TAG, "📦 Recoverable dispose - pausing session but keeping everything alive")
             
             isDisposed = true  // Mark as disposed to prevent re-entry
             
             // Pause the session but keep it alive
             try {
                 sceneView.session?.pause()
-                Log.d(TAG, "⏸️ AR session paused")
+                Log.d(TAG, "⏸️ AR session paused (will resume on foreground)")
             } catch (e: Exception) {
                 Log.e(TAG, "Error pausing session", e)
             }
             
-            // Cache the SceneView for reuse - pass activity so it can be moved to hidden holder
-            activity?.let { 
-                ArSessionCoordinator.cacheSceneView(sceneView, it)
-            } ?: run {
-                // No activity, just remove from container (SceneView will be destroyed)
-                container.removeView(sceneView)
-                Log.w(TAG, "⚠️ No activity available for caching - SceneView will be destroyed")
-            }
+            // DON'T cleanup anything else - keep the SceneView, nodes, anchors, everything!
+            // When app returns to foreground, session will resume automatically via lifecycle
             
-            // Cleanup handlers but keep SceneView
-            sessionChannel.setMethodCallHandler(null)
-            objectChannel.setMethodCallHandler(null)
-            anchorChannel.setMethodCallHandler(null)
-            runCatching { scope.cancel() }
-            
-            // Unregister from coordinator
-            ArSessionCoordinator.unregisterView(this)
-            
-            Log.d(TAG, "✅ Recoverable dispose complete - SceneView cached for reuse")
+            Log.d(TAG, "✅ Recoverable dispose complete - session paused, resources preserved")
             return
         }
+        
+        // NOT recoverable - remove the state saving code since we're doing full cleanup anyway
         
         // Full dispose - this is a real navigation away
         isDisposed = true
@@ -1526,6 +1513,7 @@ class ArCoreCompatView(
                     id = nodeId,
                     node = modelNode,
                     anchorId = anchorRecord?.id,
+                    uri = uri,  // Store URI for session restoration
                     isTransformable = isTransformable,
                     enablePan = enablePan,
                     enableRotation = enableRotation,
@@ -2105,6 +2093,7 @@ class ArCoreCompatView(
         val id: String,
         val node: ModelNode,
         val anchorId: String?,
+        val uri: String,  // Model URI for restoration after session recreation
         val isTransformable: Boolean,
         val enablePan: Boolean,
         val enableRotation: Boolean,
@@ -2139,6 +2128,166 @@ class ArCoreCompatView(
         FloatArray(3) { index ->
             (values[index] as Number).toFloat()
         }
+
+    /**
+     * Restore AR session state after backgrounding.
+     * Recreates anchors, reloads models, and restores transforms.
+     */
+    private suspend fun restoreSessionState(state: SessionStateCache) {
+        Log.d(TAG, "🔄 Starting session restoration: ${state.anchors.size} anchors, ${state.nodes.size} nodes")
+        
+        // Step 1: Restore session configuration
+        withContext(Dispatchers.Main) {
+            val session = sceneView.session
+            val config = session?.config
+            
+            if (config != null) {
+                try {
+                    // Restore plane finding mode
+                    config.planeFindingMode = com.google.ar.core.Config.PlaneFindingMode.values()[state.config.planeFindingMode]
+                    
+                    // Restore depth mode
+                    config.depthMode = com.google.ar.core.Config.DepthMode.values()[state.config.depthMode]
+                    
+                    // Restore light estimation mode
+                    config.lightEstimationMode = com.google.ar.core.Config.LightEstimationMode.values()[state.config.lightEstimationMode]
+                    
+                    session.configure(config)
+                    Log.d(TAG, "✅ Session config restored")
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Could not restore session config", e)
+                }
+            }
+        }
+        
+        // Step 2: Recreate anchors at saved poses
+        val restoredAnchors = mutableMapOf<String, AnchorRecord>()
+        
+        for (anchorState in state.anchors) {
+            try {
+                withContext(Dispatchers.Main) {
+                    val session = sceneView.session ?: throw IllegalStateException("Session not available")
+                    
+                    // Create pose from saved translation and quaternion
+                    val pose = com.google.ar.core.Pose(
+                        anchorState.translation,  // [x, y, z]
+                        anchorState.quaternion    // [x, y, z, w]
+                    )
+                    
+                    // Create anchor at the saved pose
+                    val anchor = session.createAnchor(pose)
+                    
+                    // Create AnchorNode
+                    val anchorNode = AnchorNode(sceneView.engine, anchor)
+                    sceneView.addChildNode(anchorNode)
+                    
+                    // Store in records
+                    val anchorRecord = AnchorRecord(
+                        id = anchorState.id,
+                        anchor = anchor,
+                        node = anchorNode
+                    )
+                    restoredAnchors[anchorState.id] = anchorRecord
+                    anchorRecords[anchorState.id] = anchorRecord
+                    
+                    Log.d(TAG, "✅ Restored anchor: ${anchorState.id}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to restore anchor ${anchorState.id}", e)
+                // Continue with other anchors even if one fails
+            }
+        }
+        
+        // Step 3: Reload models and restore nodes
+        for (nodeState in state.nodes) {
+            try {
+                withContext(Dispatchers.Main) {
+                    // Try to get cached model first (fast path)
+                    var modelInstance = ArSessionCoordinator.getCachedModel(nodeState.uri)
+                    
+                    if (modelInstance == null) {
+                        // Load model from URI (slow path)
+                        Log.d(TAG, "📥 Loading model from URI: ${nodeState.uri}")
+                        modelInstance = sceneView.modelLoader.loadModelInstance(nodeState.uri)
+                            ?: throw IllegalArgumentException("Unable to load model: ${nodeState.uri}")
+                        
+                        // Cache for future use
+                        ArSessionCoordinator.cacheModel(nodeState.uri, modelInstance)
+                    } else {
+                        Log.d(TAG, "♻️ Using cached model: ${nodeState.uri}")
+                    }
+                    
+                    // Create ModelNode
+                    val modelNode = ModelNode(modelInstance).apply {
+                        name = nodeState.id
+                        
+                        // Parse transform from saved matrix
+                        val (position, rotation, scale) = parseTransform(nodeState.transform, null)
+                        
+                        // Find anchor if this node was anchored
+                        val anchorRecord = nodeState.anchorId?.let { restoredAnchors[it] }
+                        
+                        if (anchorRecord != null) {
+                            // Anchored node - position relative to anchor
+                            this.position = Position(0f, 0f, 0f)
+                            this.quaternion = rotation
+                            this.scale = scale
+                            
+                            // Configure gestures on ModelNode
+                            isEditable = nodeState.enablePan || nodeState.enableRotation || nodeState.enableScale
+                            isPositionEditable = false  // Delegate to parent
+                            isRotationEditable = nodeState.enableRotation
+                            isScaleEditable = false  // Always disabled (nuclear fix)
+                            isSmoothTransformEnabled = false
+                            
+                            // Add to anchor
+                            anchorRecord.node.addChildNode(this)
+                            
+                            // Configure anchor gestures
+                            anchorRecord.node.apply {
+                                isEditable = true
+                                isPositionEditable = false  // Manual pan
+                                isRotationEditable = false  // Delegated to child
+                            }
+                        } else {
+                            // Standalone node
+                            this.position = position
+                            this.quaternion = rotation
+                            this.scale = scale
+                            
+                            isEditable = nodeState.isTransformable || nodeState.enablePan || nodeState.enableRotation || nodeState.enableScale
+                            isPositionEditable = nodeState.enablePan
+                            isRotationEditable = nodeState.enableRotation
+                            isScaleEditable = false  // Always disabled
+                            
+                            // Add to scene
+                            sceneView.addChildNode(this)
+                        }
+                    }
+                    
+                    // Store in records
+                    val nodeRecord = NodeRecord(
+                        id = nodeState.id,
+                        node = modelNode,
+                        anchorId = nodeState.anchorId,
+                        uri = nodeState.uri,
+                        isTransformable = nodeState.isTransformable,
+                        enablePan = nodeState.enablePan,
+                        enableRotation = nodeState.enableRotation,
+                        enableScale = nodeState.enableScale
+                    )
+                    nodeRecords[nodeState.id] = nodeRecord
+                    
+                    Log.d(TAG, "✅ Restored node: ${nodeState.id} (anchored: ${nodeState.anchorId != null})")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to restore node ${nodeState.id}", e)
+                // Continue with other nodes even if one fails
+            }
+        }
+        
+        Log.d(TAG, "🎉 Session restoration complete: ${anchorRecords.size}/${state.anchors.size} anchors, ${nodeRecords.size}/${state.nodes.size} nodes")
+    }
 
     private fun parseTransform(
         matrix: FloatArray,
