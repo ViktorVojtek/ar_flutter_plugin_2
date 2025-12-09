@@ -1171,6 +1171,15 @@ class ArCoreCompatView(
 
     private fun removeNode(nodeId: String): Boolean {
         val record = nodeRecords.remove(nodeId) ?: return false
+        
+        // Clear any active gesture state if this node was being manipulated
+        if (currentlyRotatingNode === record.node) {
+            currentlyRotatingNode = null
+            isRotationActive = false
+            rotationStartScale = null
+            rotationStartWorldY = null
+        }
+        
         runCatching {
             record.node.destroy()
         }
@@ -1184,6 +1193,15 @@ class ArCoreCompatView(
         if (record == null) {
             Log.w(TAG, "⚠️ Node not found: $nodeId")
             return false
+        }
+        
+        // Clear any active gesture state if this node was being manipulated
+        if (currentlyRotatingNode === record.node) {
+            currentlyRotatingNode = null
+            isRotationActive = false
+            rotationStartScale = null
+            rotationStartWorldY = null
+            Log.d(TAG, "🔄 Cleared gesture state for removed node")
         }
         
         try {

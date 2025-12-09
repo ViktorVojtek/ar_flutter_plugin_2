@@ -204,15 +204,17 @@ class ARObjectManager {
           }
           break;
         case 'onSelectionChanged':
-          print('[ARObjectManager] 🔄 RECEIVED onSelectionChanged with arguments: ${call.arguments}');
+          if (debug) {
+            print('[ARObjectManager] 🔄 RECEIVED onSelectionChanged with arguments: ${call.arguments}');
+          }
           if (onSelectionChanged != null) {
             final selectedNodeId = call.arguments as String?;
-            print('[ARObjectManager] 🔄 Calling onSelectionChanged handler with: $selectedNodeId');
+            if (debug) {
+              print('[ARObjectManager] 🔄 Calling onSelectionChanged handler with: $selectedNodeId');
+            }
             onSelectionChanged!(selectedNodeId);
-            print('[ARObjectManager] 🔄 onSelectionChanged handler completed');
-          } else {
-            print('[ARObjectManager] ❌ WARNING: onSelectionChanged callback received but no handler set!');
           }
+          // No handler is expected behavior - selection tracking is optional
           break;
         default:
           if (debug) {

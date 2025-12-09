@@ -593,6 +593,12 @@ extension IosARViewRealityKit {
     func removeNode(nodeName: String) {
         print("🗑️ Removing entity: \(nodeName)")
         
+        // Clear selection if this entity was selected
+        if let entity = entityCollection[nodeName], selectedEntity === entity {
+            selectedEntity = nil
+            print("🔄 Cleared selection for removed entity")
+        }
+        
         // Remove from scene
         if let anchorEntity = anchorEntityCollection[nodeName] {
             arView.scene.removeAnchor(anchorEntity)
