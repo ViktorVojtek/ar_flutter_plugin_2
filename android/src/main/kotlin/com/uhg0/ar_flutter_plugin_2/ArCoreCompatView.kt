@@ -38,6 +38,7 @@ import io.github.sceneview.math.quaternion
 import io.github.sceneview.math.toColumnsFloatArray
 import io.github.sceneview.node.ModelNode
 import io.github.sceneview.node.Node
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -79,13 +80,13 @@ class ArCoreCompatView(
     
     // CRITICAL FIX: Add exception handler to coroutine scope to prevent crashes
     // from background coroutines that access disposed camera/session resources
-    private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        val message = throwable.message?.lowercase() ?: ""
+    private val coroutineExceptionHandler = CoroutineExceptionHandler { _: kotlin.coroutines.CoroutineContext, throwable: Throwable ->
+        val errorMessage = throwable.message?.lowercase() ?: ""
         val stackTrace = throwable.stackTraceToString()
         
         // Check if this is an expected camera/session exception
         val isCameraException = throwable is IllegalStateException && 
-            (message.contains("session") || message.contains("camera") || message.contains("closed"))
+            (errorMessage.contains("session") || errorMessage.contains("camera") || errorMessage.contains("closed"))
         val isCameraStackTrace = stackTrace.contains("CameraCaptureSession") ||
             stackTrace.contains("stopRepeating") || stackTrace.contains("Camera")
         
