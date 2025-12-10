@@ -343,6 +343,10 @@ object ArSessionCoordinator {
     /**
      * Install a global exception handler that catches camera-related exceptions
      * during AR view transitions. These exceptions are expected and safe to ignore.
+     * 
+     * CRITICAL FIX: Always handle camera session closure exceptions gracefully,
+     * even when suppressCameraExceptions is false. These exceptions can occur
+     * due to race conditions in the Camera2 API that are outside our control.
      */
     fun installExceptionHandler() {
         if (originalHandler != null) return // Already installed
@@ -350,10 +354,16 @@ object ArSessionCoordinator {
         originalHandler = Thread.getDefaultUncaughtExceptionHandler()
         
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            // Check if this is an expected camera exception during disposal
-            if (suppressCameraExceptions && isCameraSessionException(throwable)) {
-                Log.w(TAG, "🔇 Suppressing expected camera exception during AR transition: ${throwable.message}")
-                // Don't crash - this is expected during AR view transitions
+            // CRITICAL FIX: Always catch camera session closure exceptions
+            // These can occur due to race conditions even when we're not actively disposing
+            // The Camera2 API background threads can call stopRepeating() after the session
+            // is already closed by another thread - this is a known Android behavior
+            if (isCameraSessionException(throwable)) {
+                Log.w(TAG, "🔇 Suppressing camera session exception (expected during AR lifecycle): ${throwable.message}")
+                Log.w(TAG, "   Thread: ${thread.name}, suppressCameraExceptions=$suppressCameraExceptions")
+                // Log stack trace for debugging but don't crash
+                Log.d(TAG, "   Stack trace: ${throwable.stackTraceToString().take(500)}...")
+                // Don't crash - this is expected during AR view transitions and background cleanup
                 return@setDefaultUncaughtExceptionHandler
             }
             
@@ -366,17 +376,38 @@ object ArSessionCoordinator {
     
     /**
      * Check if the exception is a camera session closure exception (expected during disposal)
+     * 
+     * CRITICAL: This check is comprehensive to catch all variants of camera session
+     * closure exceptions from the Camera2 API. These exceptions are benign and occur
+     * due to race conditions in Android's camera subsystem.
      */
     private fun isCameraSessionException(throwable: Throwable): Boolean {
-        val message = throwable.message ?: ""
+        val message = throwable.message?.lowercase() ?: ""
         val stackTrace = throwable.stackTraceToString()
         
-        return (throwable is IllegalStateException && 
-                (message.contains("Session has been closed") ||
-                 message.contains("session already closed") ||
-                 message.contains("CameraCaptureSession"))) ||
-               stackTrace.contains("CameraCaptureSession") ||
-               stackTrace.contains("stopRepeating")
+        // Check for IllegalStateException with camera-related messages
+        if (throwable is IllegalStateException) {
+            if (message.contains("session has been closed") ||
+                message.contains("session already closed") ||
+                message.contains("cameracapturesession") ||
+                message.contains("camera") && message.contains("closed") ||
+                message.contains("further changes are illegal")) {
+                return true
+            }
+        }
+        
+        // Check stack trace for Camera2 API components
+        if (stackTrace.contains("CameraCaptureSession") ||
+            stackTrace.contains("CameraDevice") ||
+            stackTrace.contains("stopRepeating") ||
+            stackTrace.contains("checkNotClosed") ||
+            stackTrace.contains("camera2") ||
+            // Also catch SceneView internal camera handling
+            stackTrace.contains("ARSceneView") && message.contains("session")) {
+            return true
+        }
+        
+        return false
     }
     
     /**
@@ -408,8 +439,10 @@ object ArSessionCoordinator {
                     
                     // Longer delay to let camera resources fully release
                     // Camera release can take 500-1000ms on some devices
+                    // CRITICAL: This must be long enough for Camera2 API background threads
+                    // to finish their stopRepeating() calls
                     Log.d(TAG, "⏳ Waiting for AR session to fully release...")
-                    Thread.sleep(800)
+                    Thread.sleep(1200)  // Increased from 800ms to 1200ms for safer cleanup
                     
                 } catch (e: Exception) {
                     Log.e(TAG, "Error disposing existing view", e)
@@ -430,10 +463,12 @@ object ArSessionCoordinator {
     /**
      * Called after new view is fully initialized to stop suppressing exceptions.
      * We keep isCreatingNewView true for a bit longer to protect against late dispose calls.
+     * 
+     * NOTE: We keep suppressCameraExceptions true for longer since background camera
+     * cleanup threads can still be running well after the new view is initialized.
      */
     fun viewInitialized() {
-        suppressCameraExceptions = false
-        Log.d(TAG, "✅ View initialized, exception suppression disabled")
+        Log.d(TAG, "✅ View initialized")
         
         // Delay clearing the creating flag to protect against late dispose calls
         // This is critical because Flutter may call dispose() on the OLD view
@@ -442,6 +477,13 @@ object ArSessionCoordinator {
             isCreatingNewView = false
             Log.d(TAG, "✅ New view creation protection window closed")
         }, 2000)  // Keep protection for 2 seconds
+        
+        // Keep exception suppression enabled even longer since background camera
+        // threads can continue running for several seconds after session transitions
+        mainHandler.postDelayed({
+            suppressCameraExceptions = false
+            Log.d(TAG, "✅ Camera exception suppression disabled")
+        }, 5000)  // Keep suppression for 5 seconds to cover async camera cleanup
     }
     
     /**

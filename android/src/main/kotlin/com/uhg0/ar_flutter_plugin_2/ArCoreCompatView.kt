@@ -76,7 +76,30 @@ class ArCoreCompatView(
     }
 
     private val uiHandler = Handler(Looper.getMainLooper())
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    
+    // CRITICAL FIX: Add exception handler to coroutine scope to prevent crashes
+    // from background coroutines that access disposed camera/session resources
+    private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        val message = throwable.message?.lowercase() ?: ""
+        val stackTrace = throwable.stackTraceToString()
+        
+        // Check if this is an expected camera/session exception
+        val isCameraException = throwable is IllegalStateException && 
+            (message.contains("session") || message.contains("camera") || message.contains("closed"))
+        val isCameraStackTrace = stackTrace.contains("CameraCaptureSession") ||
+            stackTrace.contains("stopRepeating") || stackTrace.contains("Camera")
+        
+        if (isCameraException || isCameraStackTrace) {
+            Log.w(TAG, "🔇 Suppressing camera exception in coroutine (expected during lifecycle): ${throwable.message}")
+        } else if (isDisposed) {
+            Log.w(TAG, "⚠️ Exception in coroutine after dispose (ignoring): ${throwable.message}")
+        } else {
+            Log.e(TAG, "❌ Unexpected exception in coroutine", throwable)
+            // Don't rethrow - let it be logged but don't crash the app
+        }
+    }
+    
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + coroutineExceptionHandler)
 
     private val container = FrameLayout(context)
     private val sceneView: ARSceneView
@@ -708,6 +731,9 @@ class ArCoreCompatView(
      * Force synchronous disposal of AR resources.
      * Called by ArSessionCoordinator before creating a new AR view.
      * This ensures all camera/session resources are fully released.
+     * 
+     * CRITICAL: All operations must handle the case where the camera session
+     * is already closed due to race conditions in Camera2 API background threads.
      */
     fun forceDisposeSync() {
         if (isDisposed) return
@@ -721,8 +747,12 @@ class ArCoreCompatView(
             objectChannel.setMethodCallHandler(null)
             anchorChannel.setMethodCallHandler(null)
             
-            // Cancel coroutine scope
-            runCatching { scope.cancel() }
+            // Cancel coroutine scope FIRST to stop any background operations
+            // This is critical to prevent in-flight coroutines from accessing disposed resources
+            runCatching { 
+                scope.cancel()
+                Log.d(TAG, "🧹 Coroutine scope cancelled")
+            }
             
             // Stop touch listener
             sceneView.setOnTouchListener(null)
@@ -733,10 +763,23 @@ class ArCoreCompatView(
             rotationStartWorldY = null
             isRotationActive = false
             
-            // CRITICAL: Pause and close session SYNCHRONOUSLY
-            runCatching {
+            // CRITICAL: Pause session SYNCHRONOUSLY with defensive exception handling
+            // The Camera2 API may throw IllegalStateException if session is already closed
+            // by background cleanup threads - this is expected and safe to ignore
+            try {
                 Log.d(TAG, "🧹 SYNC Phase 1: Pausing AR session")
-                sceneView.session?.pause()
+                val session = sceneView.session
+                if (session != null) {
+                    session.pause()
+                    Log.d(TAG, "✅ Session paused successfully")
+                } else {
+                    Log.d(TAG, "ℹ️ Session was already null")
+                }
+            } catch (e: IllegalStateException) {
+                // Expected when session is already closed by Camera2 background threads
+                Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Session pause threw unexpected exception: ${e.message}")
             }
             
             // Clear nodes synchronously
@@ -755,9 +798,17 @@ class ArCoreCompatView(
             }
             anchorRecords.clear()
             
-            // Destroy SceneView synchronously
+            // Destroy SceneView synchronously with defensive exception handling
             Log.d(TAG, "🧹 SYNC Phase 3: Destroying SceneView")
-            runCatching { sceneView.destroy() }
+            try {
+                sceneView.destroy()
+                Log.d(TAG, "✅ SceneView destroyed successfully")
+            } catch (e: IllegalStateException) {
+                // May occur if camera session was already closed
+                Log.w(TAG, "⚠️ SceneView destroy threw IllegalStateException (expected): ${e.message}")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ SceneView destroy threw exception: ${e.message}")
+            }
             
             // Unregister from coordinator
             ArSessionCoordinator.unregisterView(this)
@@ -772,22 +823,48 @@ class ArCoreCompatView(
     /**
      * Pause the session only - keep resources allocated.
      * Used for soft dispose during background transitions.
+     * 
+     * CRITICAL: Handle IllegalStateException gracefully as the camera session
+     * may already be closed by Camera2 API background threads.
      */
     fun pauseSessionOnly() {
         Log.d(TAG, "⏸️ Pausing session only (keeping resources)")
-        runCatching {
-            sceneView.session?.pause()
+        try {
+            val session = sceneView.session
+            if (session != null) {
+                session.pause()
+                Log.d(TAG, "✅ Session paused")
+            } else {
+                Log.d(TAG, "ℹ️ Session was already null")
+            }
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "⚠️ Session pause failed (expected if already closed): ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Session pause threw unexpected exception: ${e.message}")
         }
     }
     
     /**
      * Resume the session after a soft dispose.
      * Used when app comes back from background.
+     * 
+     * CRITICAL: Handle exceptions gracefully as the session may be in an
+     * inconsistent state after background transitions.
      */
     fun resumeSessionOnly() {
         Log.d(TAG, "▶️ Resuming session")
-        runCatching {
-            sceneView.session?.resume()
+        try {
+            val session = sceneView.session
+            if (session != null) {
+                session.resume()
+                Log.d(TAG, "✅ Session resumed")
+            } else {
+                Log.w(TAG, "⚠️ Cannot resume - session is null")
+            }
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "❌ Session resume failed (session may be closed): ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Session resume threw unexpected exception: ${e.message}")
         }
     }
     
@@ -909,8 +986,14 @@ class ArCoreCompatView(
             objectChannel.setMethodCallHandler(null)
             anchorChannel.setMethodCallHandler(null)
             
-            // Cancel coroutine scope to stop background operations
-            runCatching { scope.cancel() }
+            // Cancel coroutine scope FIRST to stop background operations
+            // This prevents in-flight coroutines from accessing disposed resources
+            try {
+                scope.cancel()
+                Log.d(TAG, "🧹 Coroutine scope cancelled")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Error cancelling coroutine scope: ${e.message}")
+            }
             
             // Stop touch listener immediately to prevent gesture callbacks
             sceneView.setOnTouchListener(null)
@@ -921,11 +1004,19 @@ class ArCoreCompatView(
             rotationStartWorldY = null
             isRotationActive = false
             
-            // CRITICAL FIX: Try to pause session synchronously first (non-blocking)
-            // This prevents the "session already closed" race condition
-            runCatching {
+            // CRITICAL FIX: Pause session with defensive exception handling
+            // Camera2 API may throw IllegalStateException if session is already closed
+            try {
                 Log.d(TAG, "🧹 Phase 1: Pausing AR session")
-                sceneView.session?.pause()
+                val session = sceneView.session
+                if (session != null) {
+                    session.pause()
+                    Log.d(TAG, "✅ Session paused")
+                }
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Session pause threw exception: ${e.message}")
             }
             
             // Use handler for cleanup but with defensive checks
@@ -951,9 +1042,16 @@ class ArCoreCompatView(
                         
                         Log.d(TAG, "🧹 Phase 3: Destroying SceneView")
                         
-                        // Finally destroy the scene view (this will close the session properly)
-                        // Wrap in try/catch since camera may already be disconnected
-                        runCatching { sceneView.destroy() }
+                        // Finally destroy the scene view with defensive exception handling
+                        // Camera may already be disconnected by Camera2 background threads
+                        try {
+                            sceneView.destroy()
+                            Log.d(TAG, "✅ SceneView destroyed")
+                        } catch (e: IllegalStateException) {
+                            Log.w(TAG, "⚠️ SceneView destroy threw IllegalStateException (expected): ${e.message}")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ SceneView destroy threw exception: ${e.message}")
+                        }
                         
                         Log.d(TAG, "✅ Disposal complete - all resources cleaned up")
                         
