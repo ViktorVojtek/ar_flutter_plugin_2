@@ -528,6 +528,14 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
             }
             // Note: removeNode does not return a result (legacy behavior)
             
+        case "removeNodeDeep":
+            if let nodeId = arguments?["nodeId"] as? String {
+                let success = removeNodeDeep(nodeId: nodeId)
+                result(success)
+            } else {
+                result(false)
+            }
+            
         default:
             result(FlutterMethodNotImplemented)
         }

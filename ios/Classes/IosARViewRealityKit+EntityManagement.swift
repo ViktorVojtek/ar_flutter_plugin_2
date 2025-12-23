@@ -692,6 +692,42 @@ extension IosARViewRealityKit {
         print("✅ Entity removed: \(nodeName)")
     }
     
+    /// Deep removal with resource cleanup
+    func removeNodeDeep(nodeId: String) -> Bool {
+        print("🗑️ Deep removing entity: \(nodeId)")
+        
+        // Clear selection if this entity was selected
+        if let entity = entityCollection[nodeId], selectedEntity === entity {
+            selectedEntity = nil
+            print("🔄 Cleared selection for deep removed entity")
+        }
+        
+        // Check if entity exists
+        guard let entity = entityCollection[nodeId],
+              let anchorEntity = anchorEntityCollection[nodeId] else {
+            print("⚠️ Entity not found for deep removal: \(nodeId)")
+            return false
+        }
+        
+        // Cancel any pending async loads for this entity
+        if let cancellable = cancellableCollection[nodeId] {
+            cancellable.cancel()
+            cancellableCollection.removeValue(forKey: nodeId)
+            print("🔄 Cancelled pending load for: \(nodeId)")
+        }
+        
+        // Remove entity from scene (this also removes children)
+        entity.removeFromParent()
+        arView.scene.removeAnchor(anchorEntity)
+        
+        // Remove from collections
+        entityCollection.removeValue(forKey: nodeId)
+        anchorEntityCollection.removeValue(forKey: nodeId)
+        
+        print("✅ Entity deeply removed: \(nodeId)")
+        return true
+    }
+    
     /// Update entity transform
     func updateEntityTransform(nodeName: String, transform: Transform) {
         guard let entity = entityCollection[nodeName] else {
