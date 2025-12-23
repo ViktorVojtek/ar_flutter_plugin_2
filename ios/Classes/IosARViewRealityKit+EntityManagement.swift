@@ -673,6 +673,8 @@ extension IosARViewRealityKit {
     /// Remove entity from scene
     func removeNode(nodeName: String) {
         print("🗑️ Removing entity: \(nodeName)")
+        print("🔍 Current entityCollection keys: \(Array(entityCollection.keys))")
+        print("🔍 Current anchorEntityCollection keys: \(Array(anchorEntityCollection.keys))")
         
         // Clear selection if this entity was selected
         if let entity = entityCollection[nodeName], selectedEntity === entity {
@@ -680,14 +682,45 @@ extension IosARViewRealityKit {
             print("🔄 Cleared selection for removed entity")
         }
         
-        // Remove from scene
-        if let anchorEntity = anchorEntityCollection[nodeName] {
-            arView.scene.removeAnchor(anchorEntity)
+        // Get the entity first
+        guard let entity = entityCollection[nodeName] else {
+            print("⚠️ Entity not found in collection: \(nodeName)")
+            return
         }
         
-        // Remove from collections
+        // Find and remove the anchor entity (may be keyed by nodeId OR anchorName)
+        // First try nodeId (for addNode without anchor)
+        if let anchorEntity = anchorEntityCollection[nodeName] {
+            arView.scene.removeAnchor(anchorEntity)
+            anchorEntityCollection.removeValue(forKey: nodeName)
+            print("✅ Removed anchor by nodeId: \(nodeName)")
+        } else {
+            // For addNodeWithAnchor, find anchor by traversing up the hierarchy
+            var currentEntity: Entity? = entity.parent
+            while let parent = currentEntity {
+                if let anchorEntity = parent as? AnchorEntity {
+                    // Remove just this entity from the anchor
+                    entity.removeFromParent()
+                    
+                    // If anchor has no more children, remove it too
+                    if anchorEntity.children.isEmpty {
+                        arView.scene.removeAnchor(anchorEntity)
+                        // Find and remove from anchorEntityCollection
+                        if let anchorKey = anchorEntityCollection.first(where: { $0.value === anchorEntity })?.key {
+                            anchorEntityCollection.removeValue(forKey: anchorKey)
+                            anchorCollection.removeValue(forKey: anchorKey)
+                            print("✅ Removed empty anchor: \(anchorKey)")
+                        }
+                    }
+                    print("✅ Removed entity from anchor hierarchy")
+                    break
+                }
+                currentEntity = parent.parent
+            }
+        }
+        
+        // Remove from entity collection
         entityCollection.removeValue(forKey: nodeName)
-        anchorEntityCollection.removeValue(forKey: nodeName)
         
         print("✅ Entity removed: \(nodeName)")
     }
@@ -695,6 +728,8 @@ extension IosARViewRealityKit {
     /// Deep removal with resource cleanup
     func removeNodeDeep(nodeId: String) -> Bool {
         print("🗑️ Deep removing entity: \(nodeId)")
+        print("🔍 Current entityCollection keys: \(Array(entityCollection.keys))")
+        print("🔍 Current anchorEntityCollection keys: \(Array(anchorEntityCollection.keys))")
         
         // Clear selection if this entity was selected
         if let entity = entityCollection[nodeId], selectedEntity === entity {
@@ -703,22 +738,27 @@ extension IosARViewRealityKit {
         }
         
         // Check if entity exists
-        guard let entity = entityCollection[nodeId],
-              let anchorEntity = anchorEntityCollection[nodeId] else {
+        guard let entity = entityCollection[nodeId] else {
             print("⚠️ Entity not found for deep removal: \(nodeId)")
             return false
         }
         
-        // Note: We can't cancel individual async loads from the Set<AnyCancellable>
-        // They will complete but won't find the entity in collections
-        
-        // Remove entity from scene (this also removes children)
+        // Remove from parent (handles both anchor and non-anchor cases)
         entity.removeFromParent()
-        arView.scene.removeAnchor(anchorEntity)
+        
+        // Try to find and remove the anchor
+        // First try nodeId (for addNode without anchor)
+        if let anchorEntity = anchorEntityCollection[nodeId] {
+            arView.scene.removeAnchor(anchorEntity)
+            anchorEntityCollection.removeValue(forKey: nodeId)
+            anchorCollection.removeValue(forKey: nodeId)
+            print("✅ Removed anchor by nodeId: \(nodeId)")
+        }
+        // For addNodeWithAnchor case, we already removed from parent above
+        // The anchor will remain if it has other children
         
         // Remove from collections
         entityCollection.removeValue(forKey: nodeId)
-        anchorEntityCollection.removeValue(forKey: nodeId)
         
         print("✅ Entity deeply removed: \(nodeId)")
         return true

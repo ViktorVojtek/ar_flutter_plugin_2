@@ -523,16 +523,24 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
             }
             
         case "removeNode":
+            print("📥 removeNode called with arguments: \(String(describing: arguments))")
             if let nodeName = arguments?["name"] as? String {
+                print("📥 removeNode nodeName: \(nodeName)")
                 removeNode(nodeName: nodeName)
+                result(nil)
+            } else {
+                print("⚠️ removeNode missing 'name' argument")
+                result(nil)
             }
-            // Note: removeNode does not return a result (legacy behavior)
             
         case "removeNodeDeep":
+            print("📥 removeNodeDeep called with arguments: \(String(describing: arguments))")
             if let nodeId = arguments?["nodeId"] as? String {
+                print("📥 removeNodeDeep nodeId: \(nodeId)")
                 let success = removeNodeDeep(nodeId: nodeId)
                 result(success)
             } else {
+                print("⚠️ removeNodeDeep missing 'nodeId' argument")
                 result(false)
             }
             
