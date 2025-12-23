@@ -84,18 +84,36 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         if let entity = arView.entity(at: location) {
             let rootEntity = findManagedEntity(from: entity)
             
+            // Update selection state
+            selectedEntity = rootEntity
+            
             // Notify Flutter about entity tap
             DispatchQueue.main.async {
                 self.objectManagerChannel.invokeMethod("onNodeTap", arguments: [rootEntity.name])
+                // Also send selection changed event (like Android does)
+                self.objectManagerChannel.invokeMethod("onSelectionChanged", arguments: rootEntity.name)
             }
             
             if debugGesturesEnabled {
-                print("👆 Tapped entity: \(rootEntity.name)")
+                print("👆 Tapped entity: \(rootEntity.name) - selected")
             }
             return
         }
         
-        // No entity hit - check for plane/point (for placement or deselection)
+        // No entity hit - deselect current entity and check for plane/point (for placement)
+        let wasSelected = selectedEntity != nil
+        if wasSelected {
+            selectedEntity = nil
+            // Notify Flutter about deselection
+            DispatchQueue.main.async {
+                self.objectManagerChannel.invokeMethod("onSelectionChanged", arguments: nil)
+            }
+            if debugGesturesEnabled {
+                print("👆 Tapped empty space - deselected")
+            }
+        }
+        
+        // Check for plane/point hit (for placement)
         if let result = arView.raycast(from: location, allowing: .estimatedPlane, alignment: .any).first {
             // Convert to anchor transform
             let transform = result.worldTransform
@@ -115,6 +133,11 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
             
             if debugGesturesEnabled {
                 print("👆 Tap at plane/point: \(position)")
+            }
+        } else if wasSelected {
+            // No plane hit but we did deselect - send empty space tap event
+            DispatchQueue.main.async {
+                self.objectManagerChannel.invokeMethod("onEmptySpaceTap", arguments: nil)
             }
         }
     }

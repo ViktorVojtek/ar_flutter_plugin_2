@@ -544,6 +544,11 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
                 result(false)
             }
             
+        case "deselectAllNodes":
+            selectedEntity = nil
+            objectManagerChannel.invokeMethod("onSelectionChanged", arguments: nil)
+            result(true)
+            
         default:
             result(FlutterMethodNotImplemented)
         }
