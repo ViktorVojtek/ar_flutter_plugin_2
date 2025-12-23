@@ -106,30 +106,47 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
             let translation = recognizer.translation(in: arView)
             let velocity = recognizer.velocity(in: arView)
             
-            // Convert 2D pan to 3D movement
-            // Move entity in camera's XY plane
+            // Convert 2D pan to 3D movement on the horizontal (XZ) plane
             if let camera = arView.session.currentFrame?.camera {
                 let cameraTransform = camera.transform
-                let right = SIMD3<Float>(cameraTransform.columns.0.x, cameraTransform.columns.0.y, cameraTransform.columns.0.z)
-                let up = SIMD3<Float>(cameraTransform.columns.1.x, cameraTransform.columns.1.y, cameraTransform.columns.1.z)
                 
-                let panScale: Float = 0.001
+                // Get camera's forward direction projected onto horizontal plane
+                // Column 2 is backward, so we negate it to get forward
+                var cameraForward = SIMD3<Float>(-cameraTransform.columns.2.x, 0, -cameraTransform.columns.2.z)
+                if simd_length(cameraForward) > 0.001 {
+                    cameraForward = simd_normalize(cameraForward)
+                } else {
+                    cameraForward = SIMD3<Float>(0, 0, -1)
+                }
+                
+                // Compute right vector as cross product of forward and world-up
+                // This ensures right is truly perpendicular to forward on the horizontal plane
+                let worldUp = SIMD3<Float>(0, 1, 0)
+                let cameraRight = simd_normalize(simd_cross(cameraForward, worldUp))
+                
+                let panScale: Float = 0.004
                 let deltaX = Float(translation.x) * panScale
                 let deltaY = Float(translation.y) * panScale
                 
                 // Save original position for distance check
-                let originalPosition = entity.position
+                let originalPosition = entity.position(relativeTo: nil)
                 
-                entity.position += right * deltaX
-                entity.position += up * (-deltaY)
+                // Calculate world-space movement:
+                // - Swipe right on screen (positive deltaX) = move right in world
+                // - Swipe up on screen (negative deltaY) = move forward in world
+                let worldMovement = cameraRight * deltaX - cameraForward * deltaY
+                
+                // Apply movement in world space
+                entity.setPosition(originalPosition + worldMovement, relativeTo: nil)
                 
                 // Check distance from camera - clamp if too far
                 let cameraPosition = SIMD3<Float>(cameraTransform.columns.3.x, cameraTransform.columns.3.y, cameraTransform.columns.3.z)
-                let distanceFromCamera = simd_distance(entity.position, cameraPosition)
+                let newPosition = entity.position(relativeTo: nil)
+                let distanceFromCamera = simd_distance(newPosition, cameraPosition)
                 
                 if distanceFromCamera > maxPanDistanceMeters {
                     // Revert to original position - object too far
-                    entity.position = originalPosition
+                    entity.setPosition(originalPosition, relativeTo: nil)
                     if debugGesturesEnabled {
                         print("⚠️ Pan limited: distance \(distanceFromCamera)m exceeds max \(maxPanDistanceMeters)m")
                     }
@@ -208,9 +225,18 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         case .changed:
             guard let entity = selectedEntity else { return }
             
-            // Apply rotation around Y axis (vertical)
-            let rotation = Float(recognizer.rotation)
-            entity.orientation *= simd_quatf(angle: rotation, axis: [0, 1, 0])
+            // Apply rotation around Y axis (vertical/up axis in world space)
+            // UIRotationGestureRecognizer: positive = counter-clockwise
+            // RealityKit Y-axis rotation: positive = counter-clockwise when looking down
+            // We negate to make clockwise finger rotation = clockwise object rotation
+            let rotation = -Float(recognizer.rotation)
+            
+            // Create rotation quaternion around world Y-axis
+            let rotationQuat = simd_quatf(angle: rotation, axis: [0, 1, 0])
+            
+            // Apply rotation in world space by getting world orientation, rotating, and setting back
+            let worldOrientation = entity.orientation(relativeTo: nil)
+            entity.setOrientation(rotationQuat * worldOrientation, relativeTo: nil)
             
             // Reset rotation
             recognizer.rotation = 0

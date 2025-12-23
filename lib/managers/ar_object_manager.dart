@@ -88,19 +88,33 @@ class ARObjectManager {
           break;
         case 'onPanStart':
           if (onPanStart != null) {
-            final tappedNode = call.arguments as String?;
-            if (tappedNode != null) {
-              // Notify callback
-              onPanStart!(tappedNode);
+            // Handle both String (SceneKit) and Map (RealityKit) argument types
+            final args = call.arguments;
+            String? nodeName;
+            if (args is String) {
+              nodeName = args;
+            } else if (args is Map) {
+              final argsMap = Map<String, dynamic>.from(args);
+              nodeName = argsMap["entityName"] as String? ?? argsMap["name"] as String?;
+            }
+            if (nodeName != null) {
+              onPanStart!(nodeName);
             }
           }
           break;
         case 'onPanChange':
           if (onPanChange != null) {
-            final tappedNode = call.arguments as String?;
-            if (tappedNode != null) {
-              // Notify callback
-              onPanChange!(tappedNode);
+            // Handle both String (SceneKit) and Map (RealityKit) argument types
+            final args = call.arguments;
+            String? nodeName;
+            if (args is String) {
+              nodeName = args;
+            } else if (args is Map) {
+              final argsMap = Map<String, dynamic>.from(args);
+              nodeName = argsMap["entityName"] as String? ?? argsMap["name"] as String?;
+            }
+            if (nodeName != null) {
+              onPanChange!(nodeName);
             }
           }
           break;
@@ -110,30 +124,48 @@ class ARObjectManager {
             final args = call.arguments;
             if (args != null && args is Map) {
               final Map<String, dynamic> argsMap = Map<String, dynamic>.from(args);
-              if (argsMap["name"] != null) {
-                final tappedNodeName = argsMap["name"] as String;
-                final transform =
-                    MatrixConverter().fromJson(argsMap['transform'] as List);
-
-                // Notify callback
-                onPanEnd!(tappedNodeName, transform);
+              // Support both "name" (SceneKit) and "entityName" (RealityKit) keys
+              final nodeName = argsMap["name"] as String? ?? argsMap["entityName"] as String?;
+              if (nodeName != null) {
+                // RealityKit sends position data instead of transform matrix
+                // Create identity matrix for now - the actual position is already applied on iOS side
+                final transform = argsMap['transform'] != null 
+                    ? MatrixConverter().fromJson(argsMap['transform'] as List)
+                    : Matrix4.identity();
+                onPanEnd!(nodeName, transform);
               }
             }
           }
           break;
         case 'onRotationStart':
           if (onRotationStart != null) {
-            final tappedNode = call.arguments as String?;
-            if (tappedNode != null) {
-              onRotationStart!(tappedNode);
+            // Handle both String (SceneKit) and Map (RealityKit) argument types
+            final args = call.arguments;
+            String? nodeName;
+            if (args is String) {
+              nodeName = args;
+            } else if (args is Map) {
+              final argsMap = Map<String, dynamic>.from(args);
+              nodeName = argsMap["entityName"] as String? ?? argsMap["name"] as String?;
+            }
+            if (nodeName != null) {
+              onRotationStart!(nodeName);
             }
           }
           break;
         case 'onRotationChange':
           if (onRotationChange != null) {
-            final tappedNode = call.arguments as String?;
-            if (tappedNode != null) {
-              onRotationChange!(tappedNode);
+            // Handle both String (SceneKit) and Map (RealityKit) argument types
+            final args = call.arguments;
+            String? nodeName;
+            if (args is String) {
+              nodeName = args;
+            } else if (args is Map) {
+              final argsMap = Map<String, dynamic>.from(args);
+              nodeName = argsMap["entityName"] as String? ?? argsMap["name"] as String?;
+            }
+            if (nodeName != null) {
+              onRotationChange!(nodeName);
             }
           }
           break;
@@ -143,13 +175,15 @@ class ARObjectManager {
             final args = call.arguments;
             if (args != null && args is Map) {
               final Map<String, dynamic> argsMap = Map<String, dynamic>.from(args);
-              if (argsMap["name"] != null) {
-                final tappedNodeName = argsMap["name"] as String;
-                final transform =
-                    MatrixConverter().fromJson(argsMap['transform'] as List);
-
-                // Notify callback
-                onRotationEnd!(tappedNodeName, transform);
+              // Support both "name" (SceneKit) and "entityName" (RealityKit) keys
+              final nodeName = argsMap["name"] as String? ?? argsMap["entityName"] as String?;
+              if (nodeName != null) {
+                // RealityKit sends rotation data instead of transform matrix
+                // Create identity matrix for now - the actual rotation is already applied on iOS side
+                final transform = argsMap['transform'] != null 
+                    ? MatrixConverter().fromJson(argsMap['transform'] as List)
+                    : Matrix4.identity();
+                onRotationEnd!(nodeName, transform);
               }
             }
           }

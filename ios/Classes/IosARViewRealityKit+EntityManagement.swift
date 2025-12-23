@@ -199,22 +199,23 @@ extension IosARViewRealityKit {
     private func loadUsdzEntityAsync(from url: URL, completion: @escaping (Result<Entity, Error>) -> Void) {
         print("🔵 [USDZ] Loading asynchronously from: \(url.lastPathComponent)")
         
-        var cancellable: AnyCancellable?
-        cancellable = Entity.loadAsync(contentsOf: url)
+        // Store cancellable in collection to keep subscription alive
+        Entity.loadAsync(contentsOf: url)
+            .receive(on: DispatchQueue.main)
             .sink(
-                receiveCompletion: { result in
-                    cancellable?.cancel()
+                receiveCompletion: { [weak self] result in
                     if case .failure(let error) = result {
                         print("❌ [USDZ] Load failed: \(error.localizedDescription)")
                         completion(.failure(error))
                     }
                 },
-                receiveValue: { entity in
+                receiveValue: { [weak self] entity in
                     print("✅ [USDZ] Load successful")
                     entity.generateCollisionShapes(recursive: true)
                     completion(.success(entity))
                 }
             )
+            .store(in: &cancellableCollection)
     }
     
     /// Load USDZ entity (RealityKit native) - DEPRECATED
@@ -253,42 +254,87 @@ extension IosARViewRealityKit {
     private func loadGltfEntityAsync(from url: URL, completion: @escaping (Result<Entity, Error>) -> Void) {
         print("🔵 [GLB] Starting async conversion for: \(url.lastPathComponent)")
         
-        // Run conversion on background queue
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let localURL: URL
-                
-                // Download if remote
-                if url.scheme == "http" || url.scheme == "https" {
-                    print("🔵 [GLB] Downloading from remote URL...")
-                    let data = try Data(contentsOf: url)
-                    print("✅ [GLB] Downloaded \(data.count) bytes")
-                    
-                    let tempDir = FileManager.default.temporaryDirectory
-                    let destURL = tempDir.appendingPathComponent(url.lastPathComponent)
-                    try? FileManager.default.removeItem(at: destURL)
-                    try data.write(to: destURL)
-                    localURL = destURL
-                } else {
-                    localURL = url
+        // Download if remote using URLSession for non-blocking download
+        if url.scheme == "http" || url.scheme == "https" {
+            print("🔵 [GLB] Downloading from remote URL using URLSession...")
+            
+            let downloadTask = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+                guard let self = self else {
+                    completion(.failure(NSError(domain: "IosARView", code: 500, userInfo: [NSLocalizedDescriptionKey: "View deallocated"])))
+                    return
                 }
                 
-                print("🔵 [GLB] Creating GLTFSceneSource...")
-                let sceneSource = try GLTFSceneSource(url: localURL, options: nil)
+                if let error = error {
+                    print("❌ [GLB] Download failed: \(error.localizedDescription)")
+                    completion(.failure(error))
+                    return
+                }
                 
-                print("🔵 [GLB] Loading SceneKit scene...")
-                let scnScene = try sceneSource.scene()
+                guard let data = data else {
+                    completion(.failure(NSError(domain: "IosARView", code: 500, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                    return
+                }
                 
-                print("🔵 [GLB] Exporting to USDZ...")
-                let usdzURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).usdz")
-                try scnScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil)
+                print("✅ [GLB] Downloaded \(data.count) bytes")
                 
-                print("🔵 [GLB] Loading USDZ into RealityKit...")
+                // Process on background queue
+                DispatchQueue.global(qos: .userInitiated).async {
+                    self.processGltfData(data: data, originalURL: url, completion: completion)
+                }
+            }
+            downloadTask.resume()
+        } else {
+            // Local file - process directly on background queue
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else {
+                    completion(.failure(NSError(domain: "IosARView", code: 500, userInfo: [NSLocalizedDescriptionKey: "View deallocated"])))
+                    return
+                }
+                
+                do {
+                    let data = try Data(contentsOf: url)
+                    self.processGltfData(data: data, originalURL: url, completion: completion)
+                } catch {
+                    print("❌ [GLB] Failed to read local file: \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+    
+    /// Process GLTF/GLB data - called from background queue
+    private func processGltfData(data: Data, originalURL: URL, completion: @escaping (Result<Entity, Error>) -> Void) {
+        do {
+            // Save to temp file
+            let tempDir = FileManager.default.temporaryDirectory
+            let destURL = tempDir.appendingPathComponent(originalURL.lastPathComponent)
+            try? FileManager.default.removeItem(at: destURL)
+            try data.write(to: destURL)
+            
+            print("🔵 [GLB] Creating GLTFSceneSource...")
+            let sceneSource = try GLTFSceneSource(url: destURL, options: nil)
+            
+            print("🔵 [GLB] Loading SceneKit scene...")
+            let scnScene = try sceneSource.scene()
+            
+            print("🔵 [GLB] Exporting to USDZ...")
+            let usdzURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).usdz")
+            try scnScene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil)
+            
+            print("🔵 [GLB] Loading USDZ into RealityKit (dispatching to main thread)...")
+            
+            // Dispatch to main thread for RealityKit loading (cancellableCollection access must be on main thread)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else {
+                    completion(.failure(NSError(domain: "IosARView", code: 500, userInfo: [NSLocalizedDescriptionKey: "View deallocated"])))
+                    return
+                }
+                
                 self.loadUsdzEntityAsync(from: usdzURL) { result in
-                    // Cleanup
-                    try? FileManager.default.removeItem(at: usdzURL)
-                    if localURL != url {
-                        try? FileManager.default.removeItem(at: localURL)
+                    // Cleanup (on background queue)
+                    DispatchQueue.global(qos: .background).async {
+                        try? FileManager.default.removeItem(at: usdzURL)
+                        try? FileManager.default.removeItem(at: destURL)
                     }
                     
                     switch result {
@@ -300,11 +346,11 @@ extension IosARViewRealityKit {
                         completion(.failure(error))
                     }
                 }
-                
-            } catch {
-                print("❌ [GLB] Conversion failed: \(error.localizedDescription)")
-                completion(.failure(error))
             }
+            
+        } catch {
+            print("❌ [GLB] Conversion failed: \(error.localizedDescription)")
+            completion(.failure(error))
         }
     }
     
