@@ -78,13 +78,20 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         case .began:
             // Find entity at touch location
             if let entity = arView.entity(at: location) {
-                selectedEntity = entity
+                // CRITICAL: Find the root entity (the one with AnchorComponent)
+                // This ensures we move the entire model, not just a child mesh
+                var rootEntity = entity
+                while let parent = rootEntity.parent, !(parent is Scene) {
+                    rootEntity = parent as! Entity
+                }
+                
+                selectedEntity = rootEntity
                 
                 let translation = recognizer.translation(in: arView)
                 let velocity = recognizer.velocity(in: arView)
                 
                 let panData: [String: Any] = [
-                    "entityName": entity.name,
+                    "entityName": rootEntity.name,
                     "translationX": translation.x,
                     "translationY": translation.y,
                     "velocityX": velocity.x,
@@ -96,7 +103,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                 }
                 
                 if debugGesturesEnabled {
-                    print("🖐️ Pan started on: \(entity.name)")
+                    print("🖐️ Pan started on: \(rootEntity.name) (root entity)")
                 }
             }
             
@@ -205,10 +212,16 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             if let entity = arView.entity(at: location) {
-                selectedEntity = entity
+                // CRITICAL: Find the root entity to rotate the entire model
+                var rootEntity = entity
+                while let parent = rootEntity.parent, !(parent is Scene) {
+                    rootEntity = parent as! Entity
+                }
+                
+                selectedEntity = rootEntity
                 
                 let rotationData: [String: Any] = [
-                    "entityName": entity.name,
+                    "entityName": rootEntity.name,
                     "rotation": recognizer.rotation,
                     "velocity": recognizer.velocity
                 ]
@@ -218,7 +231,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                 }
                 
                 if debugGesturesEnabled {
-                    print("🔄 Rotation started on: \(entity.name)")
+                    print("🔄 Rotation started on: \(rootEntity.name) (root entity)")
                 }
             }
             
@@ -280,9 +293,15 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             if let entity = arView.entity(at: location) {
-                selectedEntity = entity
+                // CRITICAL: Find the root entity to scale the entire model
+                var rootEntity = entity
+                while let parent = rootEntity.parent, !(parent is Scene) {
+                    rootEntity = parent as! Entity
+                }
+                
+                selectedEntity = rootEntity
                 if debugGesturesEnabled {
-                    print("🤏 Pinch started on: \(entity.name)")
+                    print("🤏 Pinch started on: \(rootEntity.name) (root entity)")
                 }
             }
             
