@@ -709,12 +709,8 @@ extension IosARViewRealityKit {
             return false
         }
         
-        // Cancel any pending async loads for this entity
-        if let cancellable = cancellableCollection[nodeId] {
-            cancellable.cancel()
-            cancellableCollection.removeValue(forKey: nodeId)
-            print("🔄 Cancelled pending load for: \(nodeId)")
-        }
+        // Note: We can't cancel individual async loads from the Set<AnyCancellable>
+        // They will complete but won't find the entity in collections
         
         // Remove entity from scene (this also removes children)
         entity.removeFromParent()
