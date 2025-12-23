@@ -754,6 +754,116 @@ class ARSessionManager {
     }
   }
 
+  // =================================================================
+  // People Occlusion (iOS only - works WITHOUT LiDAR)
+  // =================================================================
+
+  /// Check if people occlusion is supported on this device
+  /// 
+  /// People occlusion uses machine learning to segment people from the scene
+  /// and render them in front of AR objects. This creates a more realistic
+  /// experience where people can walk in front of virtual objects.
+  /// 
+  /// **Requirements:**
+  /// - iOS 13.0+
+  /// - A12 chip or later (iPhone XS/XR or newer)
+  /// - Does NOT require LiDAR (works on more devices than depth occlusion)
+  /// 
+  /// Returns true if people occlusion is supported, false otherwise.
+  Future<bool> isPeopleOcclusionSupported() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isPeopleOcclusionSupported');
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error checking people occlusion support: $e');
+      return false;
+    }
+  }
+
+  /// Enable or disable people occlusion
+  /// 
+  /// When enabled, real people will appear in front of AR objects using
+  /// machine learning-based person segmentation. This is different from
+  /// depth occlusion (which requires LiDAR) - people occlusion works on
+  /// any device with an A12 chip or later.
+  /// 
+  /// [enable] - Set to true to enable, false to disable
+  /// Returns true if the operation succeeded
+  /// 
+  /// **Note:** You can enable both people occlusion AND depth occlusion
+  /// for best results on LiDAR devices.
+  /// 
+  /// Example:
+  /// ```dart
+  /// // Check if supported first
+  /// if (await sessionManager.isPeopleOcclusionSupported()) {
+  ///   // Enable people occlusion
+  ///   bool success = await sessionManager.enablePeopleOcclusion(true);
+  ///   if (success) {
+  ///     print("People will now appear in front of AR objects!");
+  ///   }
+  /// }
+  /// ```
+  Future<bool> enablePeopleOcclusion(bool enable) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('enablePeopleOcclusion', {
+        'enable': enable,
+      });
+      if (debug) {
+        print('👤 People occlusion ${enable ? "ENABLED" : "DISABLED"}: ${result == true ? "✅" : "❌"}');
+      }
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error toggling people occlusion: $e');
+      return false;
+    }
+  }
+
+  /// Check if people occlusion is currently enabled
+  /// Returns true if people occlusion is active, false otherwise
+  Future<bool> isPeopleOcclusionEnabled() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isPeopleOcclusionEnabled');
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error checking people occlusion status: $e');
+      return false;
+    }
+  }
+
+  /// Show or hide the LiDAR mesh debug visualization
+  /// 
+  /// When enabled, you can see the reconstructed 3D mesh that the LiDAR
+  /// is building. This helps debug occlusion issues by showing exactly
+  /// what geometry the device thinks exists in the scene.
+  /// 
+  /// [show] - Set to true to show the debug mesh, false to hide it
+  /// Returns true if the operation succeeded
+  /// 
+  /// **Use cases:**
+  /// - Debug why occlusion isn't working in certain areas
+  /// - See how well the LiDAR is reconstructing your environment
+  /// - Identify areas with mesh artifacts
+  /// 
+  /// Example:
+  /// ```dart
+  /// // Show the mesh to debug
+  /// await sessionManager.showDebugMesh(true);
+  /// // Hide when done debugging
+  /// await sessionManager.showDebugMesh(false);
+  /// ```
+  Future<bool> showDebugMesh(bool show) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('showDebugMesh', {
+        'show': show,
+      });
+      return result ?? false;
+    } catch (e) {
+      if (debug) print('Error showing debug mesh: $e');
+      return false;
+    }
+  }
+
   /// Acquire the current depth image from ARCore
   /// 
   /// Returns a map containing:

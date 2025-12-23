@@ -9,11 +9,15 @@ extension IosARViewRealityKit {
     
     // MARK: - Depth API Methods
     
-    /// Check if depth API is supported on this device
+    /// Check if depth occlusion is supported on this device
+    /// Prefers scene reconstruction (LiDAR mesh) for best quality occlusion
     func isDepthSupported(result: FlutterResult) {
         if #available(iOS 14.0, *) {
-            let supported = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
-            print("📏 Depth API support check: \(supported)")
+            // Prefer scene reconstruction (requires LiDAR) for best occlusion
+            let meshSupported = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+            let depthSupported = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+            let supported = meshSupported || depthSupported
+            print("📏 Depth API support check - Mesh: \(meshSupported), SceneDepth: \(depthSupported)")
             result(supported)
         } else {
             print("📏 Depth API requires iOS 14.0+")
@@ -23,23 +27,48 @@ extension IosARViewRealityKit {
     
     /// Enable or disable depth occlusion
     /// RealityKit makes this MUCH simpler than SceneKit!
+    /// Uses Scene Reconstruction for automatic mesh-based occlusion on LiDAR devices
     func enableDepthOcclusion(enable: Bool, result: FlutterResult) {
         if #available(iOS 14.0, *) {
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            // Check for scene reconstruction support (requires LiDAR)
+            // Prefer meshWithClassification for better accuracy and fewer artifacts
+            let supportsClassification = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
+            let supportsMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+            
+            if supportsClassification || supportsMesh {
                 if enable {
-                    // ✅ Enable automatic depth occlusion (RealityKit magic!)
-                    arView.environment.sceneUnderstanding.options = [.occlusion, .receivesLighting]
+                    // Use meshWithClassification if available (more accurate, fewer artifacts)
+                    if supportsClassification {
+                        configuration.sceneReconstruction = .meshWithClassification
+                        print("✅ Using mesh WITH classification for better accuracy")
+                    } else {
+                        configuration.sceneReconstruction = .mesh
+                        print("✅ Using basic mesh reconstruction")
+                    }
                     
-                    // Also enable in configuration
-                    configuration.frameSemantics.insert(ARWorldTrackingConfiguration.FrameSemantics.sceneDepth)
+                    // Enable automatic occlusion in RealityKit scene understanding
+                    arView.environment.sceneUnderstanding.options.insert(.occlusion)
+                    arView.environment.sceneUnderstanding.options.insert(.receivesLighting)
+                    
+                    // Also enable scene depth for additional accuracy
+                    if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                        configuration.frameSemantics.insert(.sceneDepth)
+                    }
+                    
                     arView.session.run(configuration, options: [])
                     
-                    print("✅ Depth occlusion ENABLED (automatic)")
+                    print("✅ Depth occlusion ENABLED (LiDAR mesh-based reconstruction)")
                 } else {
-                    // Disable occlusion
-                    arView.environment.sceneUnderstanding.options = [.receivesLighting]
+                    // Disable scene reconstruction
+                    configuration.sceneReconstruction = []
                     
-                    configuration.frameSemantics.remove(ARWorldTrackingConfiguration.FrameSemantics.sceneDepth)
+                    // Only remove occlusion if people occlusion is also disabled
+                    if !ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) || 
+                       !configuration.frameSemantics.contains(.personSegmentationWithDepth) {
+                        arView.environment.sceneUnderstanding.options.remove(.occlusion)
+                    }
+                    
+                    configuration.frameSemantics.remove(.sceneDepth)
                     arView.session.run(configuration, options: [])
                     
                     print("❌ Depth occlusion DISABLED")
@@ -47,12 +76,114 @@ extension IosARViewRealityKit {
                 
                 depthOcclusionEnabled = enable
                 result(true)
+            } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                // Fallback: Device has depth sensor but no scene reconstruction (unlikely)
+                print("⚠️ Scene reconstruction not supported, using basic depth")
+                if enable {
+                    configuration.frameSemantics.insert(.sceneDepth)
+                    arView.environment.sceneUnderstanding.options.insert(.occlusion)
+                    arView.session.run(configuration, options: [])
+                } else {
+                    configuration.frameSemantics.remove(.sceneDepth)
+                    arView.environment.sceneUnderstanding.options.remove(.occlusion)
+                    arView.session.run(configuration, options: [])
+                }
+                depthOcclusionEnabled = enable
+                result(true)
             } else {
-                print("⚠️ Depth occlusion not supported on this device")
+                print("⚠️ Depth occlusion not supported on this device (requires LiDAR)")
                 result(false)
             }
         } else {
             print("⚠️ Depth occlusion requires iOS 14.0+")
+            result(false)
+        }
+    }
+    
+    /// Show or hide the debug mesh visualization
+    /// This helps you see exactly what the LiDAR is reconstructing
+    func showDebugMesh(show: Bool, result: FlutterResult) {
+        if #available(iOS 13.4, *) {
+            if show {
+                // Show the reconstructed mesh for debugging
+                arView.debugOptions.insert(.showSceneUnderstanding)
+                print("🔍 Debug mesh visualization ENABLED - you can see the LiDAR mesh")
+            } else {
+                arView.debugOptions.remove(.showSceneUnderstanding)
+                print("🔍 Debug mesh visualization DISABLED")
+            }
+            result(true)
+        } else {
+            print("⚠️ Debug mesh requires iOS 13.4+")
+            result(false)
+        }
+    }
+    
+    // MARK: - People Occlusion Methods
+    
+    /// Check if people occlusion is supported on this device
+    /// Requires A12 chip or later (iPhone XS/XR or newer)
+    func isPeopleOcclusionSupported(result: FlutterResult) {
+        if #available(iOS 13.0, *) {
+            let supported = ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth)
+            print("👤 People occlusion support check: \(supported)")
+            result(supported)
+        } else {
+            print("👤 People occlusion requires iOS 13.0+")
+            result(false)
+        }
+    }
+    
+    /// Enable or disable people occlusion
+    /// This uses machine learning to segment people and render them in front of AR objects
+    /// Works on devices WITHOUT LiDAR (A12 chip or later)
+    func enablePeopleOcclusion(enable: Bool, result: FlutterResult) {
+        if #available(iOS 13.0, *) {
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+                if enable {
+                    // Enable person segmentation with depth
+                    configuration.frameSemantics.insert(.personSegmentationWithDepth)
+                    arView.session.run(configuration, options: [])
+                    
+                    // Enable occlusion in RealityKit (requires iOS 13.4+)
+                    if #available(iOS 13.4, *) {
+                        arView.environment.sceneUnderstanding.options.insert(.occlusion)
+                    }
+                    
+                    print("✅ People occlusion ENABLED (machine learning segmentation)")
+                } else {
+                    // Disable person segmentation
+                    configuration.frameSemantics.remove(.personSegmentationWithDepth)
+                    
+                    // Only remove occlusion option if depth occlusion is also disabled
+                    if !depthOcclusionEnabled {
+                        if #available(iOS 13.4, *) {
+                            arView.environment.sceneUnderstanding.options.remove(.occlusion)
+                        }
+                    }
+                    
+                    arView.session.run(configuration, options: [])
+                    
+                    print("❌ People occlusion DISABLED")
+                }
+                
+                result(true)
+            } else {
+                print("⚠️ People occlusion not supported on this device (requires A12 chip or later)")
+                result(false)
+            }
+        } else {
+            print("⚠️ People occlusion requires iOS 13.0+")
+            result(false)
+        }
+    }
+    
+    /// Check if people occlusion is currently enabled
+    func isPeopleOcclusionEnabled(result: FlutterResult) {
+        if #available(iOS 13.0, *) {
+            let enabled = configuration.frameSemantics.contains(.personSegmentationWithDepth)
+            result(enabled)
+        } else {
             result(false)
         }
     }

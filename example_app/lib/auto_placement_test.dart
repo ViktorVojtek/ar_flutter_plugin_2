@@ -413,6 +413,9 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       await arObjectManager!.onInitialize();
       print("✅ Object manager initialized");
       
+      // Enable occlusion for realistic AR
+      await _enableOcclusionIfSupported();
+      
       // Set up node selection handler
       arObjectManager!.onNodeTap = _onNodeTapped;
       print("🎯 Node tap handler set up");
@@ -677,6 +680,39 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       setState(() {
         _statusText = "❌ Error removing objects: $e";
       });
+    }
+  }
+
+  /// Enable occlusion for realistic AR (iOS only - people and depth occlusion)
+  Future<void> _enableOcclusionIfSupported() async {
+    try {
+      if (arSessionManager == null) return;
+      
+      // Check and enable people occlusion (works on A12+ devices without LiDAR)
+      bool peopleSupported = await arSessionManager!.isPeopleOcclusionSupported();
+      print("👤 People occlusion supported: $peopleSupported");
+      if (peopleSupported) {
+        bool success = await arSessionManager!.enablePeopleOcclusion(true);
+        if (success) {
+          print("👤 People occlusion ENABLED - people will appear in front of AR objects!");
+        }
+      }
+      
+      // Check and enable depth/LiDAR occlusion (best quality, requires LiDAR)
+      bool depthSupported = await arSessionManager!.isDepthSupported();
+      print("🔍 Depth/LiDAR occlusion supported: $depthSupported");
+      if (depthSupported) {
+        bool success = await arSessionManager!.enableDepthOcclusion(true);
+        if (success) {
+          print("🔍 Depth occlusion ENABLED - all real objects will appear in front of AR objects!");
+        }
+      }
+      
+      if (!peopleSupported && !depthSupported) {
+        print("⚠️ Occlusion not supported on this device");
+      }
+    } catch (e) {
+      print("❌ Error enabling occlusion: $e");
     }
   }
 

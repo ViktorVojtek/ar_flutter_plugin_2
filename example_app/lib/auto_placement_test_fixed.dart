@@ -161,6 +161,11 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
 
       await arObjectManager!.onInitialize();
 
+      // Enable occlusion for realistic AR (iOS only)
+      // Enable occlusion for realistic AR (iOS only)
+      // Set enableDepth: true to test LiDAR mesh occlusion (may have artifacts)
+      await _enableOcclusionIfSupported(enableDepth: true);
+
       // Set up gesture handlers for pan and rotation
       arObjectManager!.onPanStart = (String nodeName) {
         print("🔥 Pan started on node: $nodeName");
@@ -396,6 +401,62 @@ class _AutoPlacementTestScreenState extends State<AutoPlacementTestScreen> {
       setState(() {
         _statusText = "Error removing objects: $e";
       });
+    }
+  }
+
+  /// Enable occlusion for realistic AR (iOS only - people and depth occlusion)
+  /// Note: Depth occlusion is disabled by default as it can cause artifacts
+  /// with LiDAR mesh reconstruction. People occlusion is more reliable.
+  Future<void> _enableOcclusionIfSupported({bool enableDepth = false}) async {
+    print("🔮 _enableOcclusionIfSupported() called (enableDepth: $enableDepth)");
+    print("🔮 arSessionManager is null: ${arSessionManager == null}");
+    
+    try {
+      if (arSessionManager == null) {
+        print("🔮 arSessionManager is null, returning early");
+        return;
+      }
+      
+      // People occlusion is reliable and works well - enable by default
+      print("🔮 Checking people occlusion support...");
+      bool peopleSupported = await arSessionManager!.isPeopleOcclusionSupported();
+      print("👤 People occlusion supported: $peopleSupported");
+      if (peopleSupported) {
+        bool success = await arSessionManager!.enablePeopleOcclusion(true);
+        print("👤 People occlusion enable result: $success");
+        if (success) {
+          print("👤 People occlusion ENABLED!");
+        }
+      }
+      
+      // Depth/LiDAR occlusion can cause artifacts - only enable if requested
+      if (enableDepth) {
+        print("🔮 Checking depth occlusion support...");
+        bool depthSupported = await arSessionManager!.isDepthSupported();
+        print("🔍 Depth/LiDAR occlusion supported: $depthSupported");
+        if (depthSupported) {
+          bool success = await arSessionManager!.enableDepthOcclusion(true);
+          print("🔍 Depth occlusion enable result: $success");
+          if (success) {
+            print("🔍 Depth occlusion ENABLED!");
+            
+            // Debug mesh visualization - uncomment to see LiDAR mesh
+            // bool meshShown = await arSessionManager!.showDebugMesh(true);
+            // if (meshShown) {
+            //   print("🔍 Debug mesh visualization ENABLED - you can see the LiDAR mesh!");
+            // }
+          }
+        }
+      } else {
+        print("🔮 Skipping depth occlusion (can cause artifacts with LiDAR mesh)");
+      }
+      
+      if (!peopleSupported) {
+        print("⚠️ People occlusion not supported on this device");
+      }
+    } catch (e, stackTrace) {
+      print("❌ Error enabling occlusion: $e");
+      print("❌ Stack trace: $stackTrace");
     }
   }
 

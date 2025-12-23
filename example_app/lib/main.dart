@@ -427,6 +427,9 @@ class _ObjectGesturesState extends State<ObjectGestures> {
     // Enable height-locked panning by default for better user experience
     _enableHeightLockedPanningByDefault();
     
+    // Enable occlusion for more realistic AR (iOS only)
+    _enableOcclusionIfSupported();
+    
     // Add other callbacks as needed...
   }
 
@@ -678,6 +681,63 @@ class _ObjectGesturesState extends State<ObjectGestures> {
       }
     } catch (e) {
       print("❌ Error enabling height-locked panning by default: $e");
+    }
+  }
+
+  /// Enable occlusion for more realistic AR (iOS only - people and depth occlusion)
+  Future<void> _enableOcclusionIfSupported() async {
+    print("🔮 _enableOcclusionIfSupported() called");
+    print("🔮 arSessionManager is null: ${arSessionManager == null}");
+    
+    try {
+      if (arSessionManager == null) {
+        print("🔮 arSessionManager is null, returning early");
+        return;
+      }
+      
+      print("🔮 Checking people occlusion support...");
+      // Check and enable people occlusion (works on A12+ devices without LiDAR)
+      bool peopleSupported = await arSessionManager!.isPeopleOcclusionSupported();
+      print("👤 People occlusion supported: $peopleSupported");
+      if (peopleSupported) {
+        bool success = await arSessionManager!.enablePeopleOcclusion(true);
+        print("👤 People occlusion enable result: $success");
+        if (success) {
+          print("👤 People occlusion ENABLED - people will appear in front of AR objects!");
+        }
+      } else {
+        print("👤 People occlusion not supported on this device");
+      }
+      
+      print("🔮 Checking depth occlusion support...");
+      // Check and enable depth/LiDAR occlusion (best quality, requires LiDAR)
+      bool depthSupported = await arSessionManager!.isDepthSupported();
+      print("🔍 Depth/LiDAR occlusion supported: $depthSupported");
+      if (depthSupported) {
+        bool success = await arSessionManager!.enableDepthOcclusion(true);
+        print("🔍 Depth occlusion enable result: $success");
+        if (success) {
+          print("🔍 Depth occlusion ENABLED - all real objects will appear in front of AR objects!");
+        }
+      } else {
+        print("🔍 Depth/LiDAR occlusion not supported on this device");
+      }
+      
+      // Show user feedback
+      if (peopleSupported || depthSupported) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(depthSupported 
+              ? "🔍 Full occlusion enabled - real objects hide AR!" 
+              : "👤 People occlusion enabled!"),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 3),
+          )
+        );
+      }
+    } catch (e, stackTrace) {
+      print("❌ Error enabling occlusion: $e");
+      print("❌ Stack trace: $stackTrace");
     }
   }
 

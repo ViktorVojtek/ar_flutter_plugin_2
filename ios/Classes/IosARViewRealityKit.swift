@@ -265,7 +265,33 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         case "acquireDepthImage":
             acquireDepthImage(result: result)
             
+        // MARK: - People Occlusion Methods
+        case "isPeopleOcclusionSupported":
+            print("📞 isPeopleOcclusionSupported called from Flutter")
+            isPeopleOcclusionSupported(result: result)
+            
+        case "enablePeopleOcclusion":
+            print("📞 enablePeopleOcclusion called from Flutter")
+            if let enable = arguments?["enable"] as? Bool {
+                enablePeopleOcclusion(enable: enable, result: result)
+            } else {
+                result(FlutterError(code: "INVALID_ARGUMENT", message: "enable parameter required", details: nil))
+            }
+            
+        case "isPeopleOcclusionEnabled":
+            print("📞 isPeopleOcclusionEnabled called from Flutter")
+            isPeopleOcclusionEnabled(result: result)
+            
+        case "showDebugMesh":
+            print("📞 showDebugMesh called from Flutter")
+            if let show = arguments?["show"] as? Bool {
+                showDebugMesh(show: show, result: result)
+            } else {
+                result(FlutterError(code: "INVALID_ARGUMENT", message: "show parameter required", details: nil))
+            }
+            
         default:
+            print("⚠️ Unknown method called: \(call.method)")
             result(FlutterMethodNotImplemented)
         }
     }
