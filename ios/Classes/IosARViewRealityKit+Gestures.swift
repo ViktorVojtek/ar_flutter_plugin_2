@@ -8,6 +8,39 @@ import RealityKit
 @available(iOS 13.0, *)
 extension IosARViewRealityKit: UIGestureRecognizerDelegate {
     
+    // MARK: - Helper Methods
+    
+    /// Find the root entity that we manage (has a name in entityCollection)
+    private func findManagedEntity(from entity: Entity) -> Entity {
+        // First check if this entity itself is managed
+        if entityCollection[entity.name] != nil {
+            return entity
+        }
+        
+        // Traverse up to find a managed entity
+        var current: Entity? = entity
+        while let parent = current?.parent, !(parent is Scene), !(parent is AnchorEntity) {
+            if let parentEntity = parent as? Entity {
+                if entityCollection[parentEntity.name] != nil {
+                    return parentEntity
+                }
+                current = parentEntity
+            } else {
+                break
+            }
+        }
+        
+        // Traverse down to find a managed entity (in case we hit a wrapper)
+        var managed = entity
+        entity.children.forEach { child in
+            if let childEntity = child as? Entity, entityCollection[childEntity.name] != nil {
+                managed = childEntity
+            }
+        }
+        
+        return managed
+    }
+    
     // MARK: - Gesture Setup
     
     func setupTapGesture() {
@@ -47,13 +80,28 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
     @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
         let location = recognizer.location(in: arView)
         
-        // Perform raycast to find AR plane
+        // First, check if user tapped on an entity (for selection)
+        if let entity = arView.entity(at: location) {
+            let rootEntity = findManagedEntity(from: entity)
+            
+            // Notify Flutter about entity tap
+            DispatchQueue.main.async {
+                self.objectManagerChannel.invokeMethod("onNodeTap", arguments: [rootEntity.name])
+            }
+            
+            if debugGesturesEnabled {
+                print("👆 Tapped entity: \(rootEntity.name)")
+            }
+            return
+        }
+        
+        // No entity hit - check for plane/point (for placement or deselection)
         if let result = arView.raycast(from: location, allowing: .estimatedPlane, alignment: .any).first {
             // Convert to anchor transform
             let transform = result.worldTransform
             let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
             
-            // Notify Flutter
+            // Notify Flutter about plane/point tap
             let tapData: [String: Any] = [
                 "x": position.x,
                 "y": position.y,
@@ -66,7 +114,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
             }
             
             if debugGesturesEnabled {
-                print("👆 Tap at: \(position)")
+                print("👆 Tap at plane/point: \(position)")
             }
         }
     }
@@ -78,13 +126,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         case .began:
             // Find entity at touch location
             if let entity = arView.entity(at: location) {
-                // CRITICAL: Find the root entity (the one with AnchorComponent)
-                // This ensures we move the entire model, not just a child mesh
-                var rootEntity = entity
-                while let parent = rootEntity.parent, !(parent is Scene) {
-                    rootEntity = parent as! Entity
-                }
-                
+                let rootEntity = findManagedEntity(from: entity)
                 selectedEntity = rootEntity
                 
                 let translation = recognizer.translation(in: arView)
@@ -110,6 +152,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         case .changed:
             guard let entity = selectedEntity else { return }
             
+            // Get translation and velocity BEFORE we reset it
             let translation = recognizer.translation(in: arView)
             let velocity = recognizer.velocity(in: arView)
             
@@ -159,10 +202,11 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
                     }
                 }
                 
-                // Reset translation
+                // Reset translation AFTER we've used it
                 recognizer.setTranslation(.zero, in: arView)
             }
             
+            // Send notification to Flutter with the translation we just processed
             let panData: [String: Any] = [
                 "entityName": entity.name,
                 "translationX": translation.x,
@@ -212,12 +256,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             if let entity = arView.entity(at: location) {
-                // CRITICAL: Find the root entity to rotate the entire model
-                var rootEntity = entity
-                while let parent = rootEntity.parent, !(parent is Scene) {
-                    rootEntity = parent as! Entity
-                }
-                
+                let rootEntity = findManagedEntity(from: entity)
                 selectedEntity = rootEntity
                 
                 let rotationData: [String: Any] = [
@@ -293,12 +332,7 @@ extension IosARViewRealityKit: UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             if let entity = arView.entity(at: location) {
-                // CRITICAL: Find the root entity to scale the entire model
-                var rootEntity = entity
-                while let parent = rootEntity.parent, !(parent is Scene) {
-                    rootEntity = parent as! Entity
-                }
-                
+                let rootEntity = findManagedEntity(from: entity)
                 selectedEntity = rootEntity
                 if debugGesturesEnabled {
                     print("🤏 Pinch started on: \(rootEntity.name) (root entity)")

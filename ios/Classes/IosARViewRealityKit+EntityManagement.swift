@@ -500,8 +500,39 @@ extension IosARViewRealityKit {
             entity.transform = transform
         }
         
+        // CRITICAL: Adjust Y position so object sits ON the floor, not half-buried
+        adjustEntityToFloor(entity)
+        
         // Set name
         entity.name = nodeId
+    }
+    
+    /// Adjust entity Y position so its bottom sits on the anchor (floor)
+    /// This prevents objects from being half-buried in the floor
+    private func adjustEntityToFloor(_ entity: Entity) {
+        // Calculate the bounding box in the entity's parent space (anchor space)
+        // This gives us the actual position of the bottom relative to the anchor
+        guard let parent = entity.parent else {
+            print("⚠️ Cannot adjust floor - entity has no parent")
+            return
+        }
+        
+        let bounds = entity.visualBounds(relativeTo: parent)
+        
+        // Get the minimum Y value (bottom of the model in anchor space)
+        let minY = bounds.min.y
+        
+        print("📏 Entity bounds in anchor space - min: \(bounds.min), max: \(bounds.max)")
+        
+        // If the bottom is below the anchor origin, lift the entity up
+        if minY < 0 {
+            let offset = -minY // How much to lift to bring bottom to Y=0
+            entity.position.y += offset
+            
+            print("📏 Adjusted entity to floor - lifted by \(offset)m (bounds min.y was \(minY), new position.y: \(entity.position.y))")
+        } else {
+            print("📏 Entity already above floor - no adjustment needed (bounds min.y: \(minY))")
+        }
     }
     
     /// Parse transform matrix from Flutter
@@ -562,6 +593,10 @@ extension IosARViewRealityKit {
             }
             
             let transform = parseAnchorTransform(matrix: transformMatrix)
+            
+            // Debug: Log the anchor position
+            let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+            print("🔵 [ANCHOR] Anchor position: x=\(position.x), y=\(position.y), z=\(position.z)")
             
             // Create AR anchor
             let arAnchor = ARAnchor(name: anchorName, transform: transform)
