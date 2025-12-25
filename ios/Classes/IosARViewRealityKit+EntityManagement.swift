@@ -11,6 +11,89 @@ import GLTFSceneKit
 @available(iOS 13.0, *)
 extension IosARViewRealityKit {
     
+    // MARK: - Material Configuration
+    
+    /// Configure entity materials for proper transparency and PBR rendering
+    /// This addresses the GLB→USDZ conversion issues where transparency may be lost
+    /// and ensures materials are properly configured for RealityKit's rendering pipeline
+    func configureEntityMaterials(_ entity: Entity) {
+        // Visit all entities recursively to configure their materials
+        entity.visit { childEntity in
+            guard var modelComponent = childEntity.components[ModelComponent.self] else {
+                return
+            }
+            
+            var materialsModified = false
+            var newMaterials: [Material] = []
+            
+            for material in modelComponent.materials {
+                // For iOS 15+, we can directly modify PhysicallyBasedMaterial
+                if #available(iOS 15.0, *) {
+                    if var pbrMaterial = material as? PhysicallyBasedMaterial {
+                        // Check if this material has any transparency
+                        // The baseColor's alpha or opacity texture indicates transparency
+                        let hasTransparency = pbrMaterial.baseColor.tint.alpha < 1.0 ||
+                                            pbrMaterial.opacityThreshold != nil
+                        
+                        if hasTransparency {
+                            // Enable proper alpha blending for semi-transparent textures
+                            pbrMaterial.blending = .transparent(opacity: .init(floatLiteral: Float(pbrMaterial.baseColor.tint.alpha)))
+                            print("🔧 Material configured for transparency: alpha=\(pbrMaterial.baseColor.tint.alpha)")
+                        }
+                        
+                        // Ensure proper PBR settings
+                        // RealityKit handles this automatically but we ensure consistency
+                        newMaterials.append(pbrMaterial)
+                        materialsModified = true
+                    } else {
+                        // Keep non-PBR materials as-is
+                        newMaterials.append(material)
+                    }
+                } else {
+                    // iOS 13-14: Limited material modification support
+                    // Materials are still rendered but we can't modify them as easily
+                    newMaterials.append(material)
+                }
+            }
+            
+            if materialsModified {
+                modelComponent.materials = newMaterials
+                childEntity.components[ModelComponent.self] = modelComponent
+            }
+        }
+    }
+    
+    /// Configure SceneKit scene materials before USDZ export
+    /// This helps preserve transparency during the GLB→SceneKit→USDZ conversion
+    func configureSceneKitMaterialsForExport(_ scene: SCNScene) {
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let geometry = node.geometry else { return }
+            
+            for material in geometry.materials {
+                // Ensure transparency is properly configured
+                material.isDoubleSided = true  // Important for semi-transparent faces
+                material.writesToDepthBuffer = true
+                material.readsFromDepthBuffer = true
+                
+                // Configure blending for transparency
+                material.blendMode = .alpha
+                
+                // Ensure PBR lighting model for best quality
+                material.lightingModel = .physicallyBased
+                
+                // If material has transparency, configure it
+                if let diffuse = material.diffuse.contents {
+                    // Check if texture has alpha channel and configure accordingly
+                    if material.transparency < 1.0 || material.diffuse.contents is UIImage {
+                        material.transparencyMode = .dualLayer
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Entity Loading
+    
     /// Add a new entity (node) to the AR scene
     /// Supports GLTF, GLB, USDZ, and other Model I/O formats
     func addNode(dict_node: Dictionary<String, Any>, result: @escaping FlutterResult) {
@@ -212,6 +295,8 @@ extension IosARViewRealityKit {
                 receiveValue: { [weak self] entity in
                     print("✅ [USDZ] Load successful")
                     entity.generateCollisionShapes(recursive: true)
+                    // Configure materials for proper transparency and PBR rendering
+                    self?.configureEntityMaterials(entity)
                     completion(.success(entity))
                 }
             )
@@ -316,6 +401,10 @@ extension IosARViewRealityKit {
             
             print("🔵 [GLB] Loading SceneKit scene...")
             let scnScene = try sceneSource.scene()
+            
+            // IMPORTANT: Configure materials BEFORE USDZ export to preserve transparency
+            print("🔵 [GLB] Configuring materials for transparency preservation...")
+            configureSceneKitMaterialsForExport(scnScene)
             
             print("🔵 [GLB] Exporting to USDZ...")
             let usdzURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).usdz")
@@ -432,6 +521,10 @@ extension IosARViewRealityKit {
                 NSLocalizedDescriptionKey: "Failed to load GLB as SceneKit scene: \(error.localizedDescription)"
             ])
         }
+        
+        // IMPORTANT: Configure materials BEFORE USDZ export to preserve transparency
+        print("🔵 [2.5/4] Configuring materials for transparency preservation...")
+        configureSceneKitMaterialsForExport(scnScene)
         
         print("🔵 [3/4] Exporting SceneKit scene to USDZ...")
         
@@ -772,5 +865,19 @@ extension IosARViewRealityKit {
         }
         
         entity.transform = transform
+    }
+}
+
+// MARK: - Entity Helper Extension
+
+@available(iOS 13.0, *)
+extension Entity {
+    /// Recursively visit all entities in the hierarchy
+    /// - Parameter closure: Called for each entity (including self)
+    func visit(_ closure: (Entity) -> Void) {
+        closure(self)
+        for child in children {
+            child.visit(closure)
+        }
     }
 }
