@@ -31,14 +31,16 @@ extension IosARViewRealityKit {
                 if #available(iOS 15.0, *) {
                     if var pbrMaterial = material as? PhysicallyBasedMaterial {
                         // Check if this material has any transparency
-                        // The baseColor's alpha or opacity texture indicates transparency
-                        let hasTransparency = pbrMaterial.baseColor.tint.alpha < 1.0 ||
-                                            pbrMaterial.opacityThreshold != nil
+                        // Extract alpha from the tint color
+                        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 1.0
+                        pbrMaterial.baseColor.tint.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+                        
+                        let hasTransparency = alpha < 1.0 || pbrMaterial.opacityThreshold != nil
                         
                         if hasTransparency {
                             // Enable proper alpha blending for semi-transparent textures
-                            pbrMaterial.blending = .transparent(opacity: .init(floatLiteral: Float(pbrMaterial.baseColor.tint.alpha)))
-                            print("🔧 Material configured for transparency: alpha=\(pbrMaterial.baseColor.tint.alpha)")
+                            pbrMaterial.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+                            print("🔧 Material configured for transparency: alpha=\(alpha)")
                         }
                         
                         // Ensure proper PBR settings
