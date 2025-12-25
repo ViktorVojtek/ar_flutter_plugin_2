@@ -30,21 +30,31 @@ extension IosARViewRealityKit {
                 // For iOS 15+, we can directly modify PhysicallyBasedMaterial
                 if #available(iOS 15.0, *) {
                     if var pbrMaterial = material as? PhysicallyBasedMaterial {
-                        // Check if this material has any transparency
                         // Extract alpha from the tint color
                         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 1.0
                         pbrMaterial.baseColor.tint.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
                         
-                        let hasTransparency = alpha < 1.0 || pbrMaterial.opacityThreshold != nil
+                        // Check multiple indicators of transparency:
+                        // 1. Alpha in base color tint
+                        // 2. Opacity threshold set
+                        // 3. Any texture (which might have alpha channel)
+                        let hasTransparency = alpha < 0.99 || 
+                                            pbrMaterial.opacityThreshold != nil ||
+                                            pbrMaterial.baseColor.texture != nil
                         
                         if hasTransparency {
-                            // Enable proper alpha blending for semi-transparent textures
-                            pbrMaterial.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
-                            print("🔧 Material configured for transparency: alpha=\(alpha)")
+                            // Enable transparent blending
+                            // Use the alpha from tint, defaulting to 1.0 if texture-based transparency
+                            let opacityValue = alpha < 0.99 ? Float(alpha) : 1.0
+                            pbrMaterial.blending = .transparent(opacity: .init(floatLiteral: opacityValue))
+                            
+                            // For textures with alpha, we need to ensure the texture's alpha is used
+                            // This is done by setting faceCulling to none for double-sided rendering
+                            pbrMaterial.faceCulling = .none
+                            
+                            print("🔧 Material configured for transparency: tintAlpha=\(alpha), hasTexture=\(pbrMaterial.baseColor.texture != nil)")
                         }
                         
-                        // Ensure proper PBR settings
-                        // RealityKit handles this automatically but we ensure consistency
                         newMaterials.append(pbrMaterial)
                         materialsModified = true
                     } else {
@@ -72,23 +82,38 @@ extension IosARViewRealityKit {
             guard let geometry = node.geometry else { return }
             
             for material in geometry.materials {
-                // Ensure transparency is properly configured
-                material.isDoubleSided = true  // Important for semi-transparent faces
+                // CRITICAL: Enable double-sided rendering for semi-transparent materials
+                material.isDoubleSided = true
+                
+                // Ensure depth buffer handling for proper transparency sorting
                 material.writesToDepthBuffer = true
                 material.readsFromDepthBuffer = true
                 
-                // Configure blending for transparency
+                // Use alpha blending mode
                 material.blendMode = .alpha
                 
                 // Ensure PBR lighting model for best quality
                 material.lightingModel = .physicallyBased
                 
-                // If material has transparency, configure it
-                if let diffuse = material.diffuse.contents {
-                    // Check if texture has alpha channel and configure accordingly
-                    if material.transparency < 1.0 || material.diffuse.contents is UIImage {
+                // CRITICAL: Configure transparency mode for textures with alpha
+                // dualLayer provides better results for semi-transparent textures
+                material.transparencyMode = .dualLayer
+                
+                // If diffuse has a texture, assume it might have alpha channel
+                if material.diffuse.contents is UIImage || 
+                   material.diffuse.contents is String ||
+                   material.diffuse.contents != nil {
+                    // Enable transparency if any texture is present
+                    // The texture might have an alpha channel
+                    if material.transparency >= 0.99 {
+                        // Keep full opacity but enable alpha from texture
                         material.transparencyMode = .dualLayer
                     }
+                }
+                
+                // Also check for explicit transparency
+                if material.transparency < 0.99 {
+                    material.transparencyMode = .dualLayer
                 }
             }
         }

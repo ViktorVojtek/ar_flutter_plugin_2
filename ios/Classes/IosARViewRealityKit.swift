@@ -51,9 +51,6 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
     // Depth occlusion state
     var depthOcclusionEnabled = true
     
-    // HDR environment initialization state
-    var environmentInitialized = false
-    
     // Configurable gesture settings (set at init time only)
     var debugGesturesEnabled = false  // Enable verbose gesture logging for development
     var maxPanDistanceMeters: Float = 5.0  // Maximum distance from camera for pan gestures (default 5m)
@@ -118,7 +115,7 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         arView.environment.background = .cameraFeed()
         
         // RealityKit automatically manages lighting based on ARKit light estimation
-        // No need to explicitly enable it like in SceneKit
+        // Let ARKit handle lighting automatically - it adapts to real-world conditions
         
         // Set session delegate
         arView.session.delegate = self
@@ -127,29 +124,7 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         let configuration = ARWorldTrackingConfiguration()
         arView.session.run(configuration)
         
-        // Initialize custom HDR environment for better lighting (matching Android's Filament)
-        initializeHDREnvironment()
-        
-        print("✅ ARView configured with camera feed")
-    }
-    
-    /// Initialize HDR environment for realistic lighting
-    /// This matches Android's Filament HDR lighting implementation
-    private func initializeHDREnvironment() {
-        guard !environmentInitialized else { return }
-        environmentInitialized = true
-        
-        // RealityKit's lighting uses the IBL (Image-Based Lighting) system
-        // We configure the environment for optimal rendering
-        
-        // Set lighting intensity to match Android's 15000 lux setting
-        // RealityKit uses intensityExponent (log scale) rather than direct intensity
-        // intensityExponent of ~4.2 ≈ 15000 lux (10^4.2 ≈ 15849)
-        if #available(iOS 14.0, *) {
-            arView.environment.lighting.intensityExponent = 4.2
-        }
-        
-        print("✅ HDR environment configured with intensity matching Android (15000 lux equivalent)")
+        print("✅ ARView configured with camera feed and automatic lighting")
     }
     
     private func setupCoachingOverlay() {
