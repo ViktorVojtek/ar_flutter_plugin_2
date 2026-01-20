@@ -122,6 +122,11 @@ class ArCoreCompatView(
     private var environmentInitialized = false
     private var isDisposed = false
     
+    // CRITICAL FIX: Track when the native session/engine has been destroyed
+    // This prevents SIGSEGV crashes when calling session.pause() on a destroyed session
+    @Volatile
+    private var sessionDestroyed = false
+    
     // Track our creation sequence to detect stale dispose calls
     private var creationSequence: Long = 0L
     
@@ -767,20 +772,34 @@ class ArCoreCompatView(
             // CRITICAL: Pause session SYNCHRONOUSLY with defensive exception handling
             // The Camera2 API may throw IllegalStateException if session is already closed
             // by background cleanup threads - this is expected and safe to ignore
-            try {
-                Log.d(TAG, "🧹 SYNC Phase 1: Pausing AR session")
-                val session = sceneView.session
-                if (session != null) {
-                    session.pause()
-                    Log.d(TAG, "✅ Session paused successfully")
-                } else {
-                    Log.d(TAG, "ℹ️ Session was already null")
+            // CRITICAL FIX: Check engine validity to prevent SIGSEGV on destroyed session
+            if (!sessionDestroyed) {
+                try {
+                    Log.d(TAG, "🧹 SYNC Phase 1: Pausing AR session")
+                    val session = sceneView.session
+                    if (session != null) {
+                        // Check engine validity first
+                        val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                        if (isEngineValid) {
+                            session.pause()
+                            Log.d(TAG, "✅ Session paused successfully")
+                        } else {
+                            Log.w(TAG, "⚠️ Engine already destroyed, skipping session pause")
+                            sessionDestroyed = true
+                        }
+                    } else {
+                        Log.d(TAG, "ℹ️ Session was already null")
+                    }
+                } catch (e: IllegalStateException) {
+                    // Expected when session is already closed by Camera2 background threads
+                    Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
+                    sessionDestroyed = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Session pause threw unexpected exception: ${e.message}")
+                    sessionDestroyed = true
                 }
-            } catch (e: IllegalStateException) {
-                // Expected when session is already closed by Camera2 background threads
-                Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
-            } catch (e: Exception) {
-                Log.w(TAG, "⚠️ Session pause threw unexpected exception: ${e.message}")
+            } else {
+                Log.w(TAG, "🧹 SYNC Phase 1: Skipping session pause (already destroyed)")
             }
             
             // Clear nodes synchronously
@@ -830,9 +849,24 @@ class ArCoreCompatView(
      */
     fun pauseSessionOnly() {
         Log.d(TAG, "⏸️ Pausing session only (keeping resources)")
+        
+        // CRITICAL FIX: Check session validity before pausing
+        if (sessionDestroyed) {
+            Log.w(TAG, "⚠️ Session already destroyed, skipping pause")
+            return
+        }
+        
         try {
             val session = sceneView.session
             if (session != null) {
+                // Check engine validity
+                val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                if (!isEngineValid) {
+                    Log.w(TAG, "⚠️ Engine destroyed, skipping session pause")
+                    sessionDestroyed = true
+                    return
+                }
+                
                 session.pause()
                 Log.d(TAG, "✅ Session paused")
             } else {
@@ -840,8 +874,10 @@ class ArCoreCompatView(
             }
         } catch (e: IllegalStateException) {
             Log.w(TAG, "⚠️ Session pause failed (expected if already closed): ${e.message}")
+            sessionDestroyed = true
         } catch (e: Exception) {
             Log.w(TAG, "⚠️ Session pause threw unexpected exception: ${e.message}")
+            sessionDestroyed = true
         }
     }
     
@@ -950,13 +986,9 @@ class ArCoreCompatView(
             
             isDisposed = true  // Mark as disposed to prevent re-entry
             
-            // Pause the session but keep it alive
-            try {
-                sceneView.session?.pause()
-                Log.d(TAG, "⏸️ AR session paused (will resume on foreground)")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error pausing session", e)
-            }
+            // CRITICAL FIX: Safely pause session with validity checks to prevent SIGSEGV
+            // The session may have been destroyed by Filament/SceneView cleanup (e.g., after corrupted model load)
+            safelyPauseSession("recoverable dispose")
             
             // DON'T cleanup anything else - keep the SceneView, nodes, anchors, everything!
             // When app returns to foreground, session will resume automatically via lifecycle
@@ -1007,17 +1039,30 @@ class ArCoreCompatView(
             
             // CRITICAL FIX: Pause session with defensive exception handling
             // Camera2 API may throw IllegalStateException if session is already closed
-            try {
-                Log.d(TAG, "🧹 Phase 1: Pausing AR session")
-                val session = sceneView.session
-                if (session != null) {
-                    session.pause()
-                    Log.d(TAG, "✅ Session paused")
+            // Also check engine validity to prevent SIGSEGV on destroyed session
+            if (!sessionDestroyed) {
+                try {
+                    Log.d(TAG, "🧹 Phase 1: Pausing AR session")
+                    val session = sceneView.session
+                    if (session != null) {
+                        val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                        if (isEngineValid) {
+                            session.pause()
+                            Log.d(TAG, "✅ Session paused")
+                        } else {
+                            Log.w(TAG, "⚠️ Engine already destroyed, skipping session pause")
+                            sessionDestroyed = true
+                        }
+                    }
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
+                    sessionDestroyed = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Session pause threw exception: ${e.message}")
+                    sessionDestroyed = true
                 }
-            } catch (e: IllegalStateException) {
-                Log.w(TAG, "⚠️ Session pause threw IllegalStateException (expected): ${e.message}")
-            } catch (e: Exception) {
-                Log.w(TAG, "⚠️ Session pause threw exception: ${e.message}")
+            } else {
+                Log.d(TAG, "🧹 Phase 1: Skipping session pause (already destroyed)")
             }
             
             // Use handler for cleanup but with defensive checks
@@ -1295,12 +1340,62 @@ class ArCoreCompatView(
             // Stop touch interactions first
             sceneView.setOnTouchListener(null)
             
-            // Pause the AR session (stops camera, tracking, rendering)
-            sceneView.session?.pause()
-            
-            Log.d(TAG, "✅ AR session paused successfully")
+            // CRITICAL FIX: Use safe pause with validity checks
+            safelyPauseSession("pauseSession")
         } catch (e: Exception) {
             Log.e(TAG, "⚠️ Error pausing AR session: ${e.message}")
+        }
+    }
+    
+    /**
+     * CRITICAL FIX: Safely pause the AR session with validity checks.
+     * Prevents SIGSEGV crashes when the native session/engine has already been destroyed
+     * (e.g., after a corrupted 3D model fails to load and Filament cleans up prematurely).
+     * 
+     * @param caller The calling context for logging purposes
+     */
+    private fun safelyPauseSession(caller: String) {
+        // Check if session was already marked as destroyed
+        if (sessionDestroyed) {
+            Log.w(TAG, "⚠️ [$caller] Session already destroyed, skipping pause")
+            return
+        }
+        
+        try {
+            val session = sceneView.session
+            if (session == null) {
+                Log.w(TAG, "⚠️ [$caller] Session is null, skipping pause")
+                return
+            }
+            
+            // Additional safety: check if SceneView's renderer is still valid
+            // If the engine was destroyed (e.g., by Filament cleanup after corrupted model),
+            // we shouldn't try to pause as it will cause a native crash
+            val isEngineValid = try {
+                sceneView.renderer != null
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ [$caller] Engine check threw exception: ${e.message}")
+                false
+            }
+            
+            if (!isEngineValid) {
+                Log.w(TAG, "⚠️ [$caller] Engine already destroyed, skipping session pause")
+                sessionDestroyed = true  // Mark for future calls
+                return
+            }
+            
+            // Session and engine are valid, safe to pause
+            session.pause()
+            Log.d(TAG, "⏸️ [$caller] AR session paused successfully")
+            
+        } catch (e: IllegalStateException) {
+            // Session was already closed/destroyed - this is expected in some cases
+            Log.w(TAG, "⚠️ [$caller] Session pause threw IllegalStateException (expected): ${e.message}")
+            sessionDestroyed = true  // Mark for future calls
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [$caller] Session pause threw unexpected exception: ${e.message}")
+            // Mark as destroyed to prevent future crash attempts
+            sessionDestroyed = true
         }
     }
 
@@ -2090,9 +2185,28 @@ class ArCoreCompatView(
                 
                 if (resetTracking) {
                     // Reset AR tracking by pausing and resuming
-                    sceneView.session?.pause()
-                    sceneView.session?.resume()
-                    Log.d(TAG, "✅ AR tracking reset")
+                    // CRITICAL FIX: Use safe pause to prevent SIGSEGV if session is destroyed
+                    if (!sessionDestroyed) {
+                        try {
+                            val session = sceneView.session
+                            if (session != null) {
+                                val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                                if (isEngineValid) {
+                                    session.pause()
+                                    session.resume()
+                                    Log.d(TAG, "✅ AR tracking reset")
+                                } else {
+                                    Log.w(TAG, "⚠️ Engine destroyed, skipping tracking reset")
+                                    sessionDestroyed = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Tracking reset failed: ${e.message}")
+                            sessionDestroyed = true
+                        }
+                    } else {
+                        Log.w(TAG, "⚠️ Session destroyed, skipping tracking reset")
+                    }
                 }
                 
                 // Clear plane tracking
@@ -2139,9 +2253,28 @@ class ArCoreCompatView(
                 // Phase 4: Reset AR session
                 if (resetTracking) {
                     Log.d(TAG, "Phase 4: Resetting AR session")
-                    val session = sceneView.session
-                    session?.pause()
-                    session?.resume()
+                    // CRITICAL FIX: Check session validity before pause/resume
+                    if (!sessionDestroyed) {
+                        try {
+                            val session = sceneView.session
+                            if (session != null) {
+                                val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                                if (isEngineValid) {
+                                    session.pause()
+                                    session.resume()
+                                    Log.d(TAG, "✅ AR session reset")
+                                } else {
+                                    Log.w(TAG, "⚠️ Engine destroyed, skipping session reset")
+                                    sessionDestroyed = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Session reset failed: ${e.message}")
+                            sessionDestroyed = true
+                        }
+                    } else {
+                        Log.w(TAG, "⚠️ Session already destroyed, skipping reset")
+                    }
                 }
                 
                 // Phase 5: Clear caches and force GC
