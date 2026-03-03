@@ -2110,7 +2110,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         sceneView.automaticallyUpdatesLighting = true
         
         // Configure SceneKit's lighting environment for PBR rendering
-        sceneView.scene.lightingEnvironment.intensity = 2.0  // Increased for better visibility
+        sceneView.scene.lightingEnvironment.intensity = 1.2  // Moderate — avoids over-bright specular reflections
         
         // =========================================================================
         // HIGH-QUALITY RENDERING OPTIONS
@@ -2136,7 +2136,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         let directionalLight = SCNLight()
         directionalLight.type = .directional
         directionalLight.color = UIColor.white
-        directionalLight.intensity = 800  // Moderate intensity for realistic look
+        directionalLight.intensity = 500  // Gentle intensity — prevents rubber-like specular shine
         directionalLight.castsShadow = true
         directionalLight.shadowMode = .deferred  // High-quality shadows
         directionalLight.shadowRadius = 3.0  // Soft shadow edges
@@ -2164,22 +2164,23 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         // POST-PROCESSING FOR ENHANCED DEPTH
         // =========================================================================
         
-        // Enable screen-space reflections (also enhances AO appearance)
-        sceneView.scene.wantsScreenSpaceReflection = true
+        // Disable screen-space reflections — they add an unrealistic glossy sheen
+        // that makes models look like rubber/plastic
+        sceneView.scene.wantsScreenSpaceReflection = false
         
         // Enable HDR rendering for better contrast
         if #available(iOS 13.0, *) {
             sceneView.allowsCameraControl = false  // Prevent accidental camera changes
         }
         
-        print("✅ AGGRESSIVE ambient occlusion configured")
-        print("   ✓ Strong directional light with soft shadows")
+        print("✅ Realistic rendering configured")
+        print("   ✓ Directional light (500 lux) with soft shadows")
         print("   ✓ Shadow map: 2048x2048 with 32 samples")
         print("   ✓ Shadow radius: 3.0 for soft edges")
         print("   ✓ Ambient fill light at 40% intensity")
+        print("   ✓ Environment lighting: 1.2x (no over-bright reflections)")
+        print("   ✓ Screen-space reflections: OFF (prevents rubber look)")
         print("   ✓ High-quality antialiasing (4x MSAA)")
-        print("   ✓ Native resolution rendering")
-        print("   → Should now have VERY visible shadows in corners and crevices!")
     }
 }
 

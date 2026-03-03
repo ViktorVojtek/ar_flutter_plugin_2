@@ -388,9 +388,9 @@ extension IosARViewRealityKit {
             // Android Filament: 15,000 lux out of ~100,000 default = ~15% of max
             // RealityKit default intensityExponent is ~1.0
             // A value of ~1.0-1.3 provides similar soft natural lighting
-            arView.environment.lighting.intensityExponent = 1.2
+            arView.environment.lighting.intensityExponent = 0.9
             
-            print("✅ HDR environment loaded and applied (intensityExponent: 1.2)")
+            print("✅ HDR environment loaded and applied (intensityExponent: 0.9)")
         } catch {
             print("⚠️ Sync load of HDR environment failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -409,9 +409,9 @@ extension IosARViewRealityKit {
                         guard let self = self else { return }
                         
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 1.2
+                        self.arView.environment.lighting.intensityExponent = 0.9
                         
-                        print("✅ HDR environment loaded async and applied (intensityExponent: 1.2)")
+                        print("✅ HDR environment loaded async and applied (intensityExponent: 0.9)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -433,7 +433,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.2)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.9)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -491,7 +491,7 @@ extension IosARViewRealityKit {
         // Android Filament uses the ARCore-estimated main light which typically has
         // moderate intensity. We use ~800 lux to approximate this.
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 800  // Moderate intensity (lux), not overpowering
+        directionalLightEntity.light.intensity = 500  // Gentle intensity (lux), avoids over-bright specular
         directionalLightEntity.light.isRealWorldProxy = false
         
         // CRITICAL: Enable shadow casting — this creates the contact shadow effect
@@ -513,7 +513,7 @@ extension IosARViewRealityKit {
         
         // Configure point light for soft ambient fill
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 300       // Gentle fill (lumens)
+        fillLightEntity.light.intensity = 150       // Subtle fill (lumens), prevents shiny hotspots
         fillLightEntity.light.attenuationRadius = 20 // Large radius for soft, even fill
         
         lightAnchor.addChild(fillLightEntity)

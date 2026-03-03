@@ -72,20 +72,22 @@ extension IosARViewRealityKit {
                             let currentRoughness = pbrMaterial.roughness.scale
                             if currentRoughness >= 0.99 {
                                 // Roughness at max probably means it was lost in conversion.
-                                // A moderate roughness (0.5) gives a more natural look with
-                                // visible specular highlights, closer to Android's rendering.
-                                pbrMaterial.roughness = .init(scale: 0.5)
-                                print("🔧 Roughness corrected: 1.0 → 0.5 (likely lost in GLB→USDZ conversion)")
+                                // Use 0.75 for a natural matte look that avoids rubber-like shine.
+                                // Android Filament typically preserves the original glTF roughness;
+                                // if the conversion lost it, err on the rougher (more matte) side.
+                                pbrMaterial.roughness = .init(scale: 0.75)
+                                print("🔧 Roughness corrected: 1.0 → 0.75 (likely lost in GLB→USDZ conversion)")
                             }
                         }
                         
-                        // Check for specular component — Filament on Android renders specular
-                        // highlights from the HDR IBL reflections. Ensure iOS materials have
-                        // some specular response.
+                        // Specular: Only give a subtle boost if specular is near zero.
+                        // Over-boosting specular causes a shiny/rubber appearance.
+                        // Android Filament uses physically-correct specular from the glTF;
+                        // we only nudge materials that lost specular entirely in conversion.
                         if pbrMaterial.specular.texture == nil {
                             let currentSpecular = pbrMaterial.specular.scale
-                            if currentSpecular < 0.3 {
-                                pbrMaterial.specular = .init(scale: 0.5)
+                            if currentSpecular < 0.01 {
+                                pbrMaterial.specular = .init(scale: 0.2)
                             }
                         }
                         
@@ -171,8 +173,9 @@ extension IosARViewRealityKit {
                 // If roughness is nil, SceneKit defaults to 1.0 (fully rough) which loses
                 // all specular highlights and makes the model look flat/matte.
                 if material.roughness.contents == nil {
-                    // Default to moderate roughness for a natural look
-                    material.roughness.contents = NSNumber(value: 0.5)
+                    // Default to higher roughness for a natural matte look
+                    // Lower values cause a shiny/rubber appearance
+                    material.roughness.contents = NSNumber(value: 0.75)
                 }
                 
                 // Ambient occlusion map preservation
