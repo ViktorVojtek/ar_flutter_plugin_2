@@ -388,9 +388,9 @@ extension IosARViewRealityKit {
             // Android Filament: 15,000 lux out of ~100,000 default = ~15% of max
             // RealityKit default intensityExponent is ~1.0
             // A value of ~1.0-1.3 provides similar soft natural lighting
-            arView.environment.lighting.intensityExponent = 0.9
+            arView.environment.lighting.intensityExponent = 1.1
             
-            print("✅ HDR environment loaded and applied (intensityExponent: 0.9)")
+            print("✅ HDR environment loaded and applied (intensityExponent: 1.1)")
         } catch {
             print("⚠️ Sync load of HDR environment failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -409,9 +409,9 @@ extension IosARViewRealityKit {
                         guard let self = self else { return }
                         
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 0.9
+                        self.arView.environment.lighting.intensityExponent = 1.1
                         
-                        print("✅ HDR environment loaded async and applied (intensityExponent: 0.9)")
+                        print("✅ HDR environment loaded async and applied (intensityExponent: 1.1)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -433,7 +433,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.9)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.1)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -490,60 +490,91 @@ extension IosARViewRealityKit {
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         
         // Configure directional light properties
+        // Raised to 700 lux to match Android's brighter IBL-derived main light
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 500  // Gentle intensity (lux), avoids over-bright specular
+        directionalLightEntity.light.intensity = 700
         directionalLightEntity.light.isRealWorldProxy = false
         
         // Enable shadow casting — this creates the contact shadow effect
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
-            maximumDistance: 8,  // Shadow visibility distance in meters
-            depthBias: 0.5      // Prevents shadow acne artifacts
+            maximumDistance: 10,   // Shadow visibility distance in meters
+            depthBias: 0.5        // Prevents shadow acne artifacts
         )
         
         lightAnchor.addChild(directionalLightEntity)
         
-        // --- SSAO-like Overhead Spot Light ---
-        // A wide-cone spot light pointing straight down from above creates darkening
-        // in crevices, under overhangs, and at contact edges — mimicking SSAO.
-        // Because it casts soft shadows, geometry that is self-occluded (cavities,
-        // folds, undercuts) naturally receives less light, producing the same
-        // visual effect as screen-space ambient occlusion.
-        let ssaoSpotLight = SpotLight()
-        ssaoSpotLight.name = "__ssao_spot_light__"
-        ssaoSpotLight.position = SIMD3<Float>(0, 4, 0)  // Directly above
-        ssaoSpotLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 4, 0), relativeTo: nil)
+        // --- SSAO-like Multi-directional Shadow Lights ---
+        // Multiple spot lights from different angles: where their shadows overlap
+        // (concave regions, crevices, contact edges) the scene darkens — mimicking SSAO.
         
-        // Wide cone (120°) so it covers large objects uniformly
-        // The inner angle creates a soft gradient from center to edge
-        ssaoSpotLight.light.innerAngleInDegrees = 100
-        ssaoSpotLight.light.outerAngleInDegrees = 120
-        ssaoSpotLight.light.color = .white
-        ssaoSpotLight.light.intensity = 350   // Moderate — enough to create visible shadow contrast
-        ssaoSpotLight.light.attenuationRadius = 15  // Covers room-scale objects
+        // 1) Top-down — strongest, catches horizontal crevices & contact shadows
+        let ssaoTopLight = SpotLight()
+        ssaoTopLight.name = "__ssao_top_light__"
+        ssaoTopLight.position = SIMD3<Float>(0, 5, 0)
+        ssaoTopLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 0), relativeTo: nil)
+        ssaoTopLight.light.innerAngleInDegrees = 100
+        ssaoTopLight.light.outerAngleInDegrees = 130
+        ssaoTopLight.light.color = .white
+        ssaoTopLight.light.intensity = 500
+        ssaoTopLight.light.attenuationRadius = 15
+        ssaoTopLight.shadow = SpotLightComponent.Shadow()
+        lightAnchor.addChild(ssaoTopLight)
         
-        // CRITICAL: Shadow on the spot light is what creates the SSAO-like darkening.
-        // Geometry that is occluded from this top-down light gets shadowed,
-        // producing dark creases, contact edges, and cavity darkening.
-        ssaoSpotLight.shadow = SpotLightComponent.Shadow()
+        // 2) Front-angled — catches crevices in vertical surfaces facing camera
+        let ssaoFrontLight = SpotLight()
+        ssaoFrontLight.name = "__ssao_front_light__"
+        ssaoFrontLight.position = SIMD3<Float>(0, 3, 4)
+        ssaoFrontLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 3, 4), relativeTo: nil)
+        ssaoFrontLight.light.innerAngleInDegrees = 60
+        ssaoFrontLight.light.outerAngleInDegrees = 110
+        ssaoFrontLight.light.color = .white
+        ssaoFrontLight.light.intensity = 300
+        ssaoFrontLight.light.attenuationRadius = 15
+        ssaoFrontLight.shadow = SpotLightComponent.Shadow()
+        lightAnchor.addChild(ssaoFrontLight)
         
-        lightAnchor.addChild(ssaoSpotLight)
+        // 3) Left side — catches right-facing crevices
+        let ssaoLeftLight = SpotLight()
+        ssaoLeftLight.name = "__ssao_left_light__"
+        ssaoLeftLight.position = SIMD3<Float>(-3, 3, 0)
+        ssaoLeftLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(-3, 3, 0), relativeTo: nil)
+        ssaoLeftLight.light.innerAngleInDegrees = 60
+        ssaoLeftLight.light.outerAngleInDegrees = 110
+        ssaoLeftLight.light.color = .white
+        ssaoLeftLight.light.intensity = 250
+        ssaoLeftLight.light.attenuationRadius = 15
+        ssaoLeftLight.shadow = SpotLightComponent.Shadow()
+        lightAnchor.addChild(ssaoLeftLight)
+        
+        // 4) Right side — mirrors left for symmetry
+        let ssaoRightLight = SpotLight()
+        ssaoRightLight.name = "__ssao_right_light__"
+        ssaoRightLight.position = SIMD3<Float>(3, 3, 0)
+        ssaoRightLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(3, 3, 0), relativeTo: nil)
+        ssaoRightLight.light.innerAngleInDegrees = 60
+        ssaoRightLight.light.outerAngleInDegrees = 110
+        ssaoRightLight.light.color = .white
+        ssaoRightLight.light.intensity = 250
+        ssaoRightLight.light.attenuationRadius = 15
+        ssaoRightLight.shadow = SpotLightComponent.Shadow()
+        lightAnchor.addChild(ssaoRightLight)
         
         // --- Secondary Ambient Fill Light (softer, no shadow) ---
-        // Prevents overly dark shadows while allowing the SSAO effect to read clearly
+        // Prevents overly dark shadows; raised to 250 lm for brighter base colours
         let fillLightEntity = PointLight()
         fillLightEntity.name = "__fill_light__"
-        fillLightEntity.position = SIMD3<Float>(0, 3, -2)  // Slightly behind and above
+        fillLightEntity.position = SIMD3<Float>(0, 3, -2)
         
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 150       // Subtle fill (lumens)
-        fillLightEntity.light.attenuationRadius = 20 // Large radius for soft, even fill
+        fillLightEntity.light.intensity = 250
+        fillLightEntity.light.attenuationRadius = 20
         
         lightAnchor.addChild(fillLightEntity)
         
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (500 lux) with shadow casting")
-        print("   ✓ SSAO spot light (350 lux, 120° cone) for cavity darkening")
-        print("   ✓ Fill light (150 lm) for ambient fill")
+        print("   ✓ Directional light (700 lux) with shadow casting")
+        print("   ✓ SSAO: 4 spot lights (top 500, front 300, L/R 250 lux) with shadows")
+        print("   ✓ Fill light (250 lm) for ambient fill")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.

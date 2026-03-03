@@ -186,19 +186,23 @@ extension IosARViewRealityKit {
                         material.ambientOcclusion.intensity = 1.0
                     }
                     print("📦 PBR: Preserved ambient occlusion map (intensity: \(material.ambientOcclusion.intensity))")
-                } else {
-                    // No AO map — slightly darken ambient to simulate contact darkening
-                    // This approximates the effect that Android gets from the HDR IBL
-                    material.ambient.intensity = 0.3
                 }
+                // DO NOT darken ambient for materials without AO maps.
+                // The blanket ambient.intensity = 0.3 was making iOS render darker than Android.
+                // Let the scene lighting (IBL + directional light) handle shading naturally.
                 
-                // Normal map preservation — critical for surface detail
+                // Normal map preservation — critical for visible surface bumps
+                // Android Filament renders normal maps at full glTF intensity.
+                // Boost intensity to 1.5 so bumps survive the USDZ conversion and
+                // remain visible under iOS lighting conditions.
                 if material.normal.contents != nil {
-                    // Normal map exists, ensure it has proper intensity
                     if material.normal.intensity < 0.01 {
-                        material.normal.intensity = 1.0
+                        material.normal.intensity = 1.5
+                    } else {
+                        // Boost existing normal maps for more visible bumps
+                        material.normal.intensity = max(material.normal.intensity, 1.5)
                     }
-                    print("📦 PBR: Preserved normal map (intensity: \(material.normal.intensity))")
+                    print("📦 PBR: Normal map preserved (intensity: \(material.normal.intensity))")
                 }
                 
                 // Emissive map/color preservation

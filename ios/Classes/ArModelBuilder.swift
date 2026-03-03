@@ -75,12 +75,14 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
-                // Let Flutter handle all scaling for cross-platform consistency
-                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
-                //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                node.addChildNode(child.flattenedClone())
+                // Use clone() instead of flattenedClone() to preserve:
+                // - Normal maps and their UV coordinate sets
+                // - Multi-material assignments per sub-mesh
+                // - All PBR texture channels from the glTF model
+                // flattenedClone() merges geometry and can strip texture data.
+                let cloned = child.clone()
+                self.enableShadowsOnNode(cloned)
+                node.addChildNode(cloned)
             }
 
             // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
@@ -114,12 +116,9 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
-                // Let Flutter handle all scaling for cross-platform consistency
-                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
-                //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                node.addChildNode(child.flattenedClone())
+                let cloned = child.clone()
+                self.enableShadowsOnNode(cloned)
+                node.addChildNode(cloned)
             }
 
             // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
@@ -153,12 +152,9 @@ class ArModelBuilder: NSObject {
             }
 
             for child in scene.rootNode.childNodes {
-                // SCALE FIX: Remove hardcoded 0.01x scale to match Android behavior
-                // Let Flutter handle all scaling for cross-platform consistency
-                //child.scale = SCNVector3(0.01,0.01,0.01) // REMOVED: This caused iOS models to be 100x smaller than Android
-                //child.eulerAngles.z = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                //child.eulerAngles.y = -.pi // Compensate for the different model coordinate definitions in iOS and Android
-                node.addChildNode(child.flattenedClone())
+                let cloned = child.clone()
+                self.enableShadowsOnNode(cloned)
+                node.addChildNode(cloned)
             }
 
             // CRITICAL FIX: Add "[#" prefix to match gesture detection pattern
@@ -304,26 +300,26 @@ class ArModelBuilder: NSObject {
      * This is critical for ambient occlusion to work properly in SceneKit
      */
     private func enableShadowsOnNode(_ node: SCNNode) {
-        // Enable shadow receiving on the node's geometry
         if let geometry = node.geometry {
-            // Enable shadow casting and receiving
-            geometry.firstMaterial?.lightingModel = .physicallyBased  // PBR for realistic lighting
-            geometry.firstMaterial?.isDoubleSided = false  // Cull backfaces for better performance
-            
-            // Process all materials
             for material in geometry.materials {
+                // Ensure PBR lighting model for all materials
                 material.lightingModel = .physicallyBased
-                material.isDoubleSided = false
+                material.isDoubleSided = true
                 
-                // Ensure materials receive shadows
+                // Depth buffer for proper shadow receiving
                 material.writesToDepthBuffer = true
                 material.readsFromDepthBuffer = true
                 
-                // Enhance ambient occlusion appearance
-                if material.ambientOcclusion.contents == nil {
-                    // If no AO map, make the material more receptive to lighting
-                    material.ambient.intensity = 0.3  // Darker ambient for pronounced shadows
+                // Boost normal map intensity for visible surface bumps
+                // Android Filament renders normal maps at full intensity;
+                // SceneKit sometimes under-renders them.
+                if material.normal.contents != nil {
+                    material.normal.intensity = max(material.normal.intensity, 1.2)
+                    print("📦 SceneKit: Normal map found, intensity=\(material.normal.intensity)")
                 }
+                
+                // DO NOT darken ambient — this was causing all materials to render
+                // darker than Android. Let the scene lighting handle shadows naturally.
             }
         }
         
