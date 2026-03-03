@@ -21,7 +21,6 @@ import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 
 //Other custom imports
-import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 class ObjectsOnPlanes extends StatefulWidget {

@@ -30,6 +30,7 @@ import '../providers/ar_navigation_provider.dart';
 import '../components/ar_modal_navigator.dart';
 import '../components/screen/inspiration/lead_form.dart';
 import '../services/ar_memory_manager.dart';
+import '../services/analytics_service.dart';
 
 import 'category.dart';
 
@@ -58,44 +59,54 @@ class _ARScreenState extends State<ARScreen> {
   ARObjectManager? arObjectManager;
   ARLocationManager? arLocationManager;
   ARAnchorManager? arAnchorManager;
-  
+
   // Simple state management
   List<ARNode> nodes = <ARNode>[];
   Map<String, ARNode> nodeIdToNodeMap = {}; // Track node ID to ARNode mapping
-  Map<String, Product> nodeToProductMap = {}; // Track which product belongs to each node
+  Map<String, Product> nodeToProductMap =
+      {}; // Track which product belongs to each node
   bool _isARInitialized = false;
   bool _isARSupported = true; // Add AR capability checking
   String _statusText = "Initializing AR...";
-  
+
   // Model queuing state - queue models until scanning is complete
   bool _hasPendingModel = false;
-  
+
   // Individual object selection state
   String? selectedNodeId;
   DateTime? _lastNodeTapTime; // Track when a node was last tapped
-  Set<String> _nodesBeingRemoved = {}; // Track nodes currently being removed
-  
+  final Set<String> _nodesBeingRemoved =
+      {}; // Track nodes currently being removed
+
   // Surface scanning state - RE-ENABLED (without UI overlay)
-  bool _isScanningComplete = false; // Changed back to false to require proper scanning
+  bool _isScanningComplete =
+      false; // Changed back to false to require proper scanning
   int _detectedPlanesCount = 0;
   bool _showScanningHint = false; // Keep false to hide UI overlay
-  static const int _minimumPlanesCount = 3; // At least 3 plane detections for good coverage
+  static const int _minimumPlanesCount =
+      3; // At least 3 plane detections for good coverage
   Timer? _planeScanningTimer;
-  
+
   // Light estimation state
   Timer? _lightEstimationTimer;
   double? _currentLightIntensity;
   bool _showLowLightWarning = false;
   static const double _lowLightThreshold = 0.3; // 30% threshold
-  
+
+  // Depth occlusion state
+  bool _depthSupported = false;
+  bool _occlusionEnabled = false;
+  String _depthInfo = "Checking...";
+  Timer? _depthMonitorTimer;
+
   // Product state (keep from original)
   Product? _currentProduct;
   String? modelUri;
   bool isDownloadingModel = false;
-  
+
   // Screenshot state
   bool _isTakingScreenshot = false;
-  
+
   // DEBUG: Force low memory UI for testing (set to true to see memory warning dialog and disabled button)
   static const bool _debugForceMemoryWarning = false;
 
@@ -106,11 +117,19 @@ class _ARScreenState extends State<ARScreen> {
     _arLog('🎬 AR SCREEN: widget.product = ${widget.product}');
     _arLog('🎬 AR SCREEN: widget.product?.id = ${widget.product?.id}');
     _arLog('🎬 AR SCREEN: widget.product?.name = ${widget.product?.name}');
-    _arLog('🎬 AR SCREEN: widget.product?.modelUrl = ${widget.product?.modelUrl}');
-    
+    _arLog(
+      '🎬 AR SCREEN: widget.product?.modelUrl = ${widget.product?.modelUrl}',
+    );
+
     _currentProduct = widget.product;
     _checkARSupport(); // Check AR capability first
-    _handleNewProductModel();
+
+    // Wrap initial model handling in error handler
+    try {
+      _handleNewProductModel();
+    } catch (e) {
+      _arLog('AR Screen: ⚠️ Error in initial model handling: $e');
+    }
   }
 
   @override
@@ -128,48 +147,122 @@ class _ARScreenState extends State<ARScreen> {
     _arLog('AR Screen: Disposing AR session...');
     _planeScanningTimer?.cancel();
     _lightEstimationTimer?.cancel();
-    arSessionManager?.dispose();
+    _depthMonitorTimer?.cancel();
+
+    // CRITICAL: Set flag FIRST to prevent new initialization during disposal
+    _isARInitialized = false;
+
+    // CRITICAL: Use safeDispose() to prevent EGL context and camera crashes
+    // safeDispose() automatically pauses AR session, releases camera, then disposes
+    if (arSessionManager != null) {
+      try {
+        _arLog(
+          'AR Screen: 🗑️ Safely disposing AR session (pause + dispose)...',
+        );
+        arSessionManager!.safeDispose();
+        _arLog('AR Screen: ✅ AR session safeDispose called successfully');
+      } catch (e) {
+        _arLog('AR Screen: ⚠️ Error during safeDispose: $e');
+        // Fallback to regular dispose if safeDispose fails
+        try {
+          arSessionManager?.dispose();
+        } catch (disposeError) {
+          _arLog('AR Screen: ⚠️ Error during fallback dispose: $disposeError');
+        }
+      }
+    }
+
+    // Clear all manager references
+    arSessionManager = null;
+    arObjectManager = null;
+    arAnchorManager = null;
+    arLocationManager = null;
+
+    // Clear all references to prevent memory leaks
+    nodes.clear();
+    nodeIdToNodeMap.clear();
+    nodeToProductMap.clear();
+
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) {
-          // Reset AR navigation state when user exits AR screen (e.g., Android back button)
-          context.read<ArNavigationProvider>().resetGoFromAR();
-        }
-      },
-      child: Scaffold(
-        body: Stack(
-          children: [
-            // Check if AR is supported before showing ARView
-            if (_isARSupported) ...[
-            // AR View (simplified, based on working example)
-            ARView(
-              onARViewCreated: _onARViewCreated,
-              planeDetectionConfig: PlaneDetectionConfig.horizontal,
-            ),
-            
-            // UI Overlays (keep from original but simplified)
-            _buildLowLightWarning(),
-            // _buildScanningGuidanceOverlay(), // DISABLED: Scanning guidance overlay removed
-            _buildBackButton(),
-            _buildAddButton(), // Now handles both add and delete functionality
-            _buildShoppingCartButton(), // New shopping cart button
-            _buildCameraButton(),
-            
-            // Loading overlay for model downloads
-            if (isDownloadingModel) _buildLoadingOverlay(),
-          ] else ...[
-            // Show fallback UI for unsupported devices
-            _buildARUnsupportedView(),
-          ]
-        ],
-      ),
-    ),
-    );
+    // Wrap entire build in error boundary
+    try {
+      return PopScope(
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) {
+            // Reset AR navigation state when user exits AR screen (e.g., Android back button)
+            context.read<ArNavigationProvider>().resetGoFromAR();
+          }
+        },
+        child: Scaffold(
+          body: Stack(
+            children: [
+              // Check if AR is supported before showing ARView
+              if (_isARSupported) ...[
+                // AR View (simplified, based on working example)
+                ARView(
+                  onARViewCreated: _onARViewCreated,
+                  planeDetectionConfig: PlaneDetectionConfig.horizontal,
+                ),
+
+                // UI Overlays (keep from original but simplified)
+                _buildLowLightWarning(),
+                _buildDepthStatusOverlay(),
+                // _buildScanningGuidanceOverlay(), // DISABLED: Scanning guidance overlay removed
+                _buildBackButton(),
+                _buildAddButton(), // Now handles both add and delete functionality
+                _buildShoppingCartButton(), // New shopping cart button
+                _buildDepthToggleButton(),
+                _buildCameraButton(),
+
+                // Loading overlay for model downloads
+                if (isDownloadingModel) _buildLoadingOverlay(),
+              ] else ...[
+                // Show fallback UI for unsupported devices
+                _buildARUnsupportedView(),
+              ],
+            ],
+          ),
+        ),
+      );
+    } catch (e, stackTrace) {
+      _arLog('AR Screen: ❌ Error in build method: $e');
+      _arLog('AR Screen: Stack trace: $stackTrace');
+      // Return error view instead of crashing
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
+              const SizedBox(height: 16),
+              const Text(
+                'AR Error',
+                style: TextStyle(color: Colors.white, fontSize: 20),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  'Please restart the app',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Go Back'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
   }
 
   /// Check if AR is supported on this device
@@ -198,11 +291,7 @@ class _ARScreenState extends State<ARScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.error_outline,
-              size: 64,
-              color: Colors.white,
-            ),
+            const Icon(Icons.error_outline, size: 64, color: Colors.white),
             const SizedBox(height: 16),
             const Text(
               'AR Not Supported',
@@ -215,10 +304,7 @@ class _ARScreenState extends State<ARScreen> {
             const SizedBox(height: 8),
             const Text(
               'Toto zariadenie nepodporuje AR funkcie.\nProsim použite zariadenie s podporou ARKit.',
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-              ),
+              style: TextStyle(color: Colors.white70, fontSize: 16),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -237,14 +323,27 @@ class _ARScreenState extends State<ARScreen> {
     ARLocationManager arLocationManager,
   ) {
     _arLog('AR Screen: Initializing AR session...');
-    
+
     this.arSessionManager = arSessionManager;
     this.arObjectManager = arObjectManager;
     this.arAnchorManager = arAnchorManager;
     this.arLocationManager = arLocationManager;
 
-    // Set up managers (simplified)
-    _initializeAR();
+    // Wrap initialization in error handler to prevent crashes
+    runZonedGuarded(
+      () {
+        _initializeAR();
+      },
+      (error, stackTrace) {
+        _arLog('AR Screen: ❌ Error during AR view creation: $error');
+        _arLog('AR Screen: Stack trace: $stackTrace');
+        if (mounted) {
+          setState(() {
+            _statusText = "AR initialization error - please restart";
+          });
+        }
+      },
+    );
   }
 
   Future<void> _initializeAR() async {
@@ -252,6 +351,18 @@ class _ARScreenState extends State<ARScreen> {
       setState(() {
         _statusText = "Initializing AR session...";
       });
+
+      // CRITICAL: Check if session is already initialized to prevent double initialization
+      if (_isARInitialized) {
+        _arLog('AR Screen: ⚠️ AR session already initialized, skipping');
+        return;
+      }
+
+      // CRITICAL: Check if managers are null (screen was disposed during initialization)
+      if (arSessionManager == null || arObjectManager == null) {
+        _arLog('AR Screen: ⚠️ Managers are null, screen was likely disposed');
+        return;
+      }
 
       // Configure session with plane detection enabled for surface scanning
       await arSessionManager!.onInitialize(
@@ -261,6 +372,7 @@ class _ARScreenState extends State<ARScreen> {
         showWorldOrigin: false,
         handlePans: true,
         handleRotation: true,
+        maxPanDistance: 5.0,
       );
 
       // Configure object manager with proper gesture handling
@@ -270,8 +382,11 @@ class _ARScreenState extends State<ARScreen> {
       arObjectManager!.onPanStart = (String nodeName) {
         try {
           // Check if node is being removed or doesn't exist
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) {
-            _arLog('AR Screen: ⚠️ Pan started on non-existent/removing node: $nodeName');
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName)) {
+            _arLog(
+              'AR Screen: ⚠️ Pan started on non-existent/removing node: $nodeName',
+            );
             return;
           }
           _arLog('AR Screen: 🔥 Pan started on node: $nodeName');
@@ -282,7 +397,9 @@ class _ARScreenState extends State<ARScreen> {
 
       arObjectManager!.onPanChange = (String nodeName) {
         try {
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) return;
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName))
+            return;
           _arLog('AR Screen: 🔥 Pan changing on node: $nodeName');
         } catch (e) {
           _arLog('AR Screen: ❌ Error in onPanChange: $e');
@@ -291,8 +408,11 @@ class _ARScreenState extends State<ARScreen> {
 
       arObjectManager!.onPanEnd = (String nodeName, Matrix4 transform) {
         try {
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) {
-            _arLog('AR Screen: ⚠️ Pan ended on non-existent/removing node: $nodeName');
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName)) {
+            _arLog(
+              'AR Screen: ⚠️ Pan ended on non-existent/removing node: $nodeName',
+            );
             return;
           }
           _arLog('AR Screen: 🔥 Pan ended on node: $nodeName');
@@ -303,8 +423,11 @@ class _ARScreenState extends State<ARScreen> {
 
       arObjectManager!.onRotationStart = (String nodeName) {
         try {
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) {
-            _arLog('AR Screen: ⚠️ Rotation started on non-existent/removing node: $nodeName');
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName)) {
+            _arLog(
+              'AR Screen: ⚠️ Rotation started on non-existent/removing node: $nodeName',
+            );
             return;
           }
           _arLog('AR Screen: 🔥 Rotation started on node: $nodeName');
@@ -315,7 +438,9 @@ class _ARScreenState extends State<ARScreen> {
 
       arObjectManager!.onRotationChange = (String nodeName) {
         try {
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) return;
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName))
+            return;
           _arLog('AR Screen: 🔥 Rotation changing on node: $nodeName');
         } catch (e) {
           _arLog('AR Screen: ❌ Error in onRotationChange: $e');
@@ -324,8 +449,11 @@ class _ARScreenState extends State<ARScreen> {
 
       arObjectManager!.onRotationEnd = (String nodeName, Matrix4 transform) {
         try {
-          if (_nodesBeingRemoved.contains(nodeName) || !nodeIdToNodeMap.containsKey(nodeName)) {
-            _arLog('AR Screen: ⚠️ Rotation ended on non-existent/removing node: $nodeName');
+          if (_nodesBeingRemoved.contains(nodeName) ||
+              !nodeIdToNodeMap.containsKey(nodeName)) {
+            _arLog(
+              'AR Screen: ⚠️ Rotation ended on non-existent/removing node: $nodeName',
+            );
             return;
           }
           _arLog('AR Screen: 🔥 Rotation ended on node: $nodeName');
@@ -333,7 +461,7 @@ class _ARScreenState extends State<ARScreen> {
           _arLog('AR Screen: ❌ Error in onRotationEnd: $e');
         }
       };
-      
+
       // Set up node tap callback with null checks to prevent crashes
       arObjectManager!.onNodeTap = (List<String> nodeNames) {
         try {
@@ -345,60 +473,117 @@ class _ARScreenState extends State<ARScreen> {
               _arLog('AR Screen: ⚠️ Tapped node no longer exists: $tappedNode');
               return;
             }
-            _arLog('AR Screen: 🔍 DEBUG: Setting selectedNodeId from "$selectedNodeId" to "$tappedNode"');
-            _arLog('AR Screen: 🔍 DEBUG: Available product mappings: ${nodeToProductMap.keys.toList()}');
+            _arLog(
+              'AR Screen: 🔍 DEBUG: Setting selectedNodeId from "$selectedNodeId" to "$tappedNode"',
+            );
+            _arLog(
+              'AR Screen: 🔍 DEBUG: Available product mappings: ${nodeToProductMap.keys.toList()}',
+            );
             setState(() {
               selectedNodeId = tappedNode;
               _lastNodeTapTime = DateTime.now(); // Record when node was tapped
               _statusText = "Selected: ${nodeNames.join(', ')}";
             });
-            _arLog('AR Screen: 🔍 DEBUG: After setState - selectedNodeId = "$selectedNodeId"');
+            _arLog(
+              'AR Screen: 🔍 DEBUG: After setState - selectedNodeId = "$selectedNodeId"',
+            );
             _arLog('AR Screen: 🔍 DEBUG: Recorded tap time: $_lastNodeTapTime');
           } else {
-            _arLog('AR Screen: ⚠️ Node tap received but nodeNames list is empty');
+            _arLog(
+              'AR Screen: ⚠️ Node tap received but nodeNames list is empty',
+            );
           }
         } catch (e) {
           _arLog('AR Screen: ❌ Error in onNodeTap: $e');
         }
       };
 
+      // iOS DESELECTION FIX: Handle onSelectionChanged for iOS RealityKit
+      // iOS sends this callback when tapping empty space to deselect
+      arObjectManager!.onSelectionChanged = (String? newSelectedNodeId) {
+        try {
+          _arLog('AR Screen: 🔄 onSelectionChanged received: $newSelectedNodeId');
+          
+          // If newSelectedNodeId is null, iOS is telling us to deselect
+          if (newSelectedNodeId == null && selectedNodeId != null) {
+            _arLog('AR Screen: 🔄 iOS deselection - clearing selectedNodeId');
+            _deselectCurrentObject();
+          } else if (newSelectedNodeId != null) {
+            // Selection changed to a new node (handled by onNodeTap, but sync state)
+            _arLog('AR Screen: 🔄 iOS selection changed to: $newSelectedNodeId');
+            if (selectedNodeId != newSelectedNodeId) {
+              setState(() {
+                selectedNodeId = newSelectedNodeId;
+                _statusText = "Selected: $newSelectedNodeId";
+              });
+            }
+          }
+        } catch (e) {
+          _arLog('AR Screen: ❌ Error in onSelectionChanged: $e');
+        }
+      };
+
+      // Check again if managers are still valid before setting up session callbacks
+      if (arSessionManager == null) {
+        _arLog(
+          'AR Screen: ⚠️ Session manager became null during initialization',
+        );
+        return;
+      }
+
       // Set up plane detection callback (for error prevention)
       arSessionManager!.onPlaneDetected = (dynamic plane) {
         _arLog('AR Screen: 🌊 Plane detected event: $plane');
         // This callback might not work reliably, using timer approach instead
       };
-      
+
       // Set up plane/point tap handler for object interaction only
       arSessionManager!.onPlaneOrPointTap = (List<ARHitTestResult> hitResults) {
-        _arLog('AR Screen: 🎯 Plane/point tapped with ${hitResults.length} hit results');
-        _arLog('AR Screen: 🔍 DEBUG: Current selectedNodeId = "$selectedNodeId"');
-        
+        _arLog(
+          'AR Screen: 🎯 Plane/point tapped with ${hitResults.length} hit results',
+        );
+        _arLog(
+          'AR Screen: 🔍 DEBUG: Current selectedNodeId = "$selectedNodeId"',
+        );
+
         // RE-ENABLED: Surface scanning check - wait for scanning completion
         if (!_isScanningComplete && selectedNodeId != null) {
-          _arLog('AR Screen: ⏳ Surface scanning not complete - waiting for floor scan');
+          _arLog(
+            'AR Screen: ⏳ Surface scanning not complete - waiting for floor scan',
+          );
           setState(() {
             _statusText = "Scanning floor... Please wait.";
             _showScanningHint = false; // Keep false to hide UI overlay
           });
           return;
         }
-        
+
         // CRITICAL FIX: Prevent immediate deselection if a node was just tapped
         // This fixes iOS issue where onPlaneOrPointTap fires right after onNodeTap
         if (_lastNodeTapTime != null) {
           final timeSinceTap = DateTime.now().difference(_lastNodeTapTime!);
           if (timeSinceTap.inMilliseconds < 200) {
-            _arLog('AR Screen: 🛡️ Ignoring plane tap - node was just selected ${timeSinceTap.inMilliseconds}ms ago');
+            _arLog(
+              'AR Screen: 🛡️ Ignoring plane tap - node was just selected ${timeSinceTap.inMilliseconds}ms ago',
+            );
             return;
           }
         }
-        
+
         // SIMPLIFIED DESELECTION: Only clear local state when tapping empty space
         if (selectedNodeId != null) {
           _arLog('AR Screen: 🔥 Deselecting object: $selectedNodeId');
           _deselectCurrentObject(); // Now synchronous
         }
       };
+
+      // Check one more time before marking as initialized
+      if (!mounted || arSessionManager == null) {
+        _arLog(
+          'AR Screen: ⚠️ Widget unmounted or session null, aborting initialization',
+        );
+        return;
+      }
 
       setState(() {
         _isARInitialized = true;
@@ -407,24 +592,28 @@ class _ARScreenState extends State<ARScreen> {
       });
 
       _arLog('AR Screen: ✅ AR initialization completed');
-      
+
       // Start light estimation monitoring
       _startLightEstimationMonitoring();
-      
+
+      // Initialize depth occlusion
+      _initializeDepthOcclusion();
+
       // RE-ENABLED: Automatic plane detection timer (without UI overlay)
       _startAutomaticPlaneDetection();
-      
+
       // Check if we have a product to load - this handles both initial product and updates
       if (_currentProduct != null || widget.product != null) {
-        _arLog('AR Screen: 🎯 Product available after AR init - processing model...');
+        _arLog(
+          'AR Screen: 🎯 Product available after AR init - processing model...',
+        );
         _handleNewProductModel();
       }
-
     } catch (e) {
       _arLog('AR Screen: ❌ Error initializing AR: $e');
-      
+
       // Check if this is an AR capability issue
-      if (e.toString().contains('ARKit') || 
+      if (e.toString().contains('ARKit') ||
           e.toString().contains('not supported') ||
           e.toString().contains('unsupported')) {
         setState(() {
@@ -455,17 +644,19 @@ class _ARScreenState extends State<ARScreen> {
     }
 
     String? modelUrl;
-    
+
     // Method 1: Direct modelUrl field
     if (product.modelUrl.isNotEmpty) {
       final candidate = product.modelUrl.toString();
       _arLog('AR Screen: Checking direct modelUrl: $candidate');
-      
+
       if (candidate.toLowerCase().endsWith('.glb')) {
         modelUrl = candidate;
         _arLog('AR Screen: ✅ Found GLB modelUrl directly: $modelUrl');
       } else {
-        _arLog('AR Screen: modelUrl is not GLB ($candidate), checking assets for GLB files...');
+        _arLog(
+          'AR Screen: modelUrl is not GLB ($candidate), checking assets for GLB files...',
+        );
         final assets = product.assets;
         if (assets.isNotEmpty) {
           // Find the first .glb file in assets
@@ -496,21 +687,30 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: 📦 New model URL detected: $modelUrl');
       setState(() {
         modelUri = modelUrl;
-        _statusText = _isARInitialized 
-            ? (_isScanningComplete ? "Loading new model..." : "Scanning floor... Model will load when ready.")
+        _statusText = _isARInitialized
+            ? (_isScanningComplete
+                  ? "Loading new model..."
+                  : "Scanning floor... Model will load when ready.")
             : "AR initializing...";
       });
-      
+
       // If AR is ready, place the model immediately
       if (_isARInitialized) {
         _arLog('AR Screen: 📦 AR is ready, calling _placeModelFromProduct()');
         _placeModelFromProduct();
       } else {
-        _arLog('AR Screen: 📦 AR not ready yet, model will be placed after initialization');
+        _arLog(
+          'AR Screen: 📦 AR not ready yet, model will be placed after initialization',
+        );
       }
-    } else if (modelUrl != null && modelUrl == modelUri && _isARInitialized && !_hasPendingModel) {
+    } else if (modelUrl != null &&
+        modelUrl == modelUri &&
+        _isARInitialized &&
+        !_hasPendingModel) {
       // Model URL is same as before, but AR just initialized - try placing again
-      _arLog('AR Screen: 🔄 Same model URL but AR just initialized - attempting placement');
+      _arLog(
+        'AR Screen: 🔄 Same model URL but AR just initialized - attempting placement',
+      );
       _arLog('AR Screen: 🔄 modelUri: $modelUri');
       _arLog('AR Screen: 🔄 _isARInitialized: $_isARInitialized');
       _arLog('AR Screen: 🔄 _isScanningComplete: $_isScanningComplete');
@@ -519,176 +719,256 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ⚠️ No GLB model found for product');
       setState(() {
         modelUri = null;
-        _statusText = _isARInitialized ? "No 3D model available for this product" : "AR initializing...";
+        _statusText = _isARInitialized
+            ? "No 3D model available for this product"
+            : "AR initializing...";
       });
     }
   }
 
   /// Place model from current product (simplified)
   Future<void> _placeModelFromProduct() async {
-    if (!_isARInitialized || arObjectManager == null || modelUri == null) {
-      _arLog('AR Screen: ❌ Cannot place model - AR not ready or no model URI');
-      return;
-    }
-    
-    // RE-ENABLED: Surface scanning check - wait for proper floor scanning
-    if (!_isScanningComplete) {
-      _arLog('AR Screen: ⏳ Surface scanning not complete - queuing model for placement');
-      _arLog('AR Screen: ⏳ Model URI queued: $modelUri');
-      _arLog('AR Screen: ⏳ Detected planes: $_detectedPlanesCount / $_minimumPlanesCount');
-      setState(() {
-        _hasPendingModel = true;
-        _statusText = "Scanning floor... Model will be placed automatically when ready.";
-        _showScanningHint = false; // Keep false to hide UI overlay
-      });
-      return;
-    }
-
-    // Clear pending flag since we're placing now
-    _hasPendingModel = false;
-
-    setState(() {
-      isDownloadingModel = true;
-      _statusText = "Loading 3D model...";
-    });
-
+    // Wrap entire method in try-catch to prevent crashes
     try {
-      _arLog('AR Screen: 🎯 Placing model from URL: $modelUri');
-      
-      // FIXED: Use simple positioning like the working auto_placement_test.dart
-      // Instead of complex trigonometric calculations, use simple offset positions
-      double baseX = 0.0;
-      double baseY = -1.0; // Consistent Y level
-      double baseZ = -1.0; // Consistent distance
-      
-      // Simple positioning: spread objects in a line instead of complex semi-circle
-      if (nodes.isNotEmpty) {
-        int objectIndex = nodes.length;
-        // Simple spacing: 0.6 meters apart horizontally
-        baseX = (objectIndex % 3 - 1) * 0.6; // -0.6, 0.0, 0.6 pattern
-        // Alternate between front and back rows
-        if (objectIndex >= 3) {
-          baseZ = -1.5; // Back row
-        }
+      if (!_isARInitialized || arObjectManager == null || modelUri == null) {
+        _arLog(
+          'AR Screen: ❌ Cannot place model - AR not ready or no model URI',
+        );
+        return;
       }
-      
-      vm.Vector3 simplePosition = vm.Vector3(baseX, baseY, baseZ);
-      
-      _arLog('AR Screen: 🎯 Simple position for object ${nodes.length + 1}:');
-      _arLog('AR Screen: 🎯   Position: $simplePosition');
-      
-      Matrix4 transformation = Matrix4.identity();
-      transformation.setTranslationRaw(simplePosition.x, simplePosition.y, simplePosition.z);
-      
-      String nodeName = "Product_${DateTime.now().millisecondsSinceEpoch}";
 
-      // FIXED: Use smaller, consistent scale like auto_placement_test.dart
-      vm.Vector3 scale = vm.Vector3(1.0, 1.0, 1.0); // Consistent scale instead of platform-dependent
-      
-      // CRITICAL: Create an anchor at the desired position for panning to work
-      // Panning requires an anchor - without it, only rotation works!
-      var newAnchor = ARPlaneAnchor(transformation: transformation);
-      bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
-      
-      if (didAddAnchor != true) {
-        _arLog('AR Screen: ❌ Failed to create anchor for object');
+      // Check if widget is still mounted
+      if (!mounted) {
+        _arLog('AR Screen: ⚠️ Widget unmounted, aborting model placement');
+        return;
+      }
+
+      // RE-ENABLED: Surface scanning check - wait for proper floor scanning
+      if (!_isScanningComplete) {
+        _arLog(
+          'AR Screen: ⏳ Surface scanning not complete - queuing model for placement',
+        );
+        _arLog('AR Screen: ⏳ Model URI queued: $modelUri');
+        _arLog(
+          'AR Screen: ⏳ Detected planes: $_detectedPlanesCount / $_minimumPlanesCount',
+        );
         setState(() {
-          isDownloadingModel = false;
-          _statusText = "Failed to create anchor";
+          _hasPendingModel = true;
+          _statusText =
+              "Scanning floor... Model will be placed automatically when ready.";
+          _showScanningHint = false; // Keep false to hide UI overlay
         });
         return;
       }
-      
-      _arLog('AR Screen: ✅ Anchor created: ${newAnchor.name}');
 
-      // Node position should be (0,0,0) relative to anchor - anchor provides world position
-      ARNode node = ARNode(
-        type: NodeType.webGLB,
-        uri: modelUri!,
-        name: nodeName,
-        position: vm.Vector3(0.0, 0.0, 0.0), // Position relative to anchor
-        scale: scale, // Reasonable default scale
-        isTransformable: true,
-        enablePanGestures: true,
-        enableRotationGestures: true,
-      );
+      // Clear pending flag since we're placing now
+      _hasPendingModel = false;
 
-      _arLog('AR Screen: 📦 Created ARNode: $nodeName');
-      _arLog('AR Screen: 📍 Position: $simplePosition (anchor position)');
-      _arLog('AR Screen: 🌐 URL: $modelUri');
+      if (!mounted) return;
 
-      // Place the model WITH the anchor - this enables panning!
-      String? result = await arObjectManager!.addNode(node, planeAnchor: newAnchor);
+      setState(() {
+        isDownloadingModel = true;
+        _statusText = "Loading 3D model...";
+      });
 
-      if (result != null) {
-        _arLog('AR Screen: ✅ PLACEMENT SUCCESS! Node ID: $result');
-        
-        // Store the ARNode with comprehensive tracking
-        nodes.add(node);
-        
-        // Map both the returned ID and original node name to the ARNode object
-        nodeIdToNodeMap[result] = node; // Map returned ID to ARNode object
-        nodeIdToNodeMap[node.name] = node; // Also map original name to ARNode object
-        
-        // Map both the returned ID and original node name to the product
-        if (_currentProduct != null) {
-          nodeToProductMap[result] = _currentProduct!; // Use the returned ID as primary key
-          nodeToProductMap[node.name] = _currentProduct!; // Also map original name for compatibility
-          _arLog('AR Screen: 📝 Stored product mapping: $result -> ${_currentProduct!.name}');
-          _arLog('AR Screen: 📝 Stored product mapping: ${node.name} -> ${_currentProduct!.name}');
-          _arLog('AR Screen: 📝 Stored ARNode mapping: $result -> ${node.name}');
-          _arLog('AR Screen: 📝 Stored ARNode mapping: ${node.name} -> ${node.name}');
+      try {
+        _arLog('AR Screen: 🎯 Placing model from URL: $modelUri');
+
+        // Additional safety check
+        if (arObjectManager == null || arAnchorManager == null) {
+          _arLog('AR Screen: ❌ Managers became null during placement');
+          if (mounted) {
+            setState(() {
+              isDownloadingModel = false;
+              _statusText = "AR session lost - please restart";
+            });
+          }
+          return;
         }
-        
+
+        // FIXED: Use simple positioning like the working auto_placement_test.dart
+        // Instead of complex trigonometric calculations, use simple offset positions
+        double baseX = 0.0;
+        double baseY = -1.0; // Consistent Y level
+        double baseZ = -1.0; // Consistent distance
+
+        // Simple positioning: spread objects in a line instead of complex semi-circle
+        if (nodes.isNotEmpty) {
+          int objectIndex = nodes.length;
+          // Simple spacing: 0.6 meters apart horizontally
+          baseX = (objectIndex % 3 - 1) * 0.6; // -0.6, 0.0, 0.6 pattern
+          // Alternate between front and back rows
+          if (objectIndex >= 3) {
+            baseZ = -1.5; // Back row
+          }
+        }
+
+        vm.Vector3 simplePosition = vm.Vector3(baseX, baseY, baseZ);
+
+        _arLog('AR Screen: 🎯 Simple position for object ${nodes.length + 1}:');
+        _arLog('AR Screen: 🎯   Position: $simplePosition');
+
+        Matrix4 transformation = Matrix4.identity();
+        transformation.setTranslationRaw(
+          simplePosition.x,
+          simplePosition.y,
+          simplePosition.z,
+        );
+
+        String nodeName = "Product_${DateTime.now().millisecondsSinceEpoch}";
+
+        // FIXED: Use smaller, consistent scale like auto_placement_test.dart
+        vm.Vector3 scale = vm.Vector3(
+          1.0,
+          1.0,
+          1.0,
+        ); // Consistent scale instead of platform-dependent
+
+        // CRITICAL: Create an anchor at the desired position for panning to work
+        // Panning requires an anchor - without it, only rotation works!
+        var newAnchor = ARPlaneAnchor(transformation: transformation);
+        bool? didAddAnchor = await arAnchorManager!.addAnchor(newAnchor);
+
+        if (didAddAnchor != true) {
+          _arLog('AR Screen: ❌ Failed to create anchor for object');
+          setState(() {
+            isDownloadingModel = false;
+            _statusText = "Failed to create anchor";
+          });
+          return;
+        }
+
+        _arLog('AR Screen: ✅ Anchor created: ${newAnchor.name}');
+
+        // Node position should be (0,0,0) relative to anchor - anchor provides world position
+        ARNode node = ARNode(
+          type: NodeType.webGLB,
+          uri: modelUri!,
+          name: nodeName,
+          position: vm.Vector3(0.0, 0.0, 0.0), // Position relative to anchor
+          scale: scale, // Reasonable default scale
+          isTransformable: true,
+          enablePanGestures: true,
+          enableRotationGestures: true,
+        );
+
+        _arLog('AR Screen: 📦 Created ARNode: $nodeName');
+        _arLog('AR Screen: 📍 Position: $simplePosition (anchor position)');
+        _arLog('AR Screen: 🌐 URL: $modelUri');
+
+        // Place the model WITH the anchor - this enables panning!
+        String? result = await arObjectManager!.addNode(
+          node,
+          planeAnchor: newAnchor,
+        );
+
+        if (result != null) {
+          _arLog('AR Screen: ✅ PLACEMENT SUCCESS! Node ID: $result');
+
+          // Store the ARNode with comprehensive tracking
+          nodes.add(node);
+
+          // Map both the returned ID and original node name to the ARNode object
+          nodeIdToNodeMap[result] = node; // Map returned ID to ARNode object
+          nodeIdToNodeMap[node.name] =
+              node; // Also map original name to ARNode object
+
+          // Map both the returned ID and original node name to the product
+          if (_currentProduct != null) {
+            nodeToProductMap[result] =
+                _currentProduct!; // Use the returned ID as primary key
+            nodeToProductMap[node.name] =
+                _currentProduct!; // Also map original name for compatibility
+            _arLog(
+              'AR Screen: 📝 Stored product mapping: $result -> ${_currentProduct!.name}',
+            );
+            _arLog(
+              'AR Screen: 📝 Stored product mapping: ${node.name} -> ${_currentProduct!.name}',
+            );
+            _arLog(
+              'AR Screen: 📝 Stored ARNode mapping: $result -> ${node.name}',
+            );
+            _arLog(
+              'AR Screen: 📝 Stored ARNode mapping: ${node.name} -> ${node.name}',
+            );
+          }
+
+          setState(() {
+            isDownloadingModel = false;
+            _statusText =
+                "✅ Model placed! Tap objects to select them for deletion.";
+          });
+        } else {
+          _arLog('AR Screen: ❌ PLACEMENT FAILED! addNode returned null');
+          setState(() {
+            isDownloadingModel = false;
+            _statusText = "❌ Model placement failed - please try again";
+          });
+        }
+      } catch (e) {
+        _arLog('AR Screen: ❌ Exception during model placement: $e');
+        if (mounted) {
+          setState(() {
+            isDownloadingModel = false;
+            _statusText = "❌ Model placement error: $e";
+          });
+        }
+      }
+    } catch (outerError, stackTrace) {
+      // Outer catch to handle any errors in the entire method
+      _arLog(
+        'AR Screen: ❌ Critical error in _placeModelFromProduct: $outerError',
+      );
+      _arLog('AR Screen: Stack trace: $stackTrace');
+      if (mounted) {
         setState(() {
           isDownloadingModel = false;
-          _statusText = "✅ Model placed! Tap objects to select them for deletion.";
-        });
-      } else {
-        _arLog('AR Screen: ❌ PLACEMENT FAILED! addNode returned null');
-        setState(() {
-          isDownloadingModel = false;
-          _statusText = "❌ Model placement failed - please try again";
+          _statusText = "❌ Critical error - please restart";
         });
       }
-
-    } catch (e) {
-      _arLog('AR Screen: ❌ Exception during model placement: $e');
-      setState(() {
-        isDownloadingModel = false;
-        _statusText = "❌ Model placement error: $e";
-      });
     }
   }
 
   /// Start automatic plane detection using timer-based approach (without UI overlay)
   void _startAutomaticPlaneDetection() {
     if (_isScanningComplete) return;
-    
+
     _arLog('AR Screen: 🔍 Starting automatic plane detection timer...');
-    
+
     // Start a timer that checks for planes periodically
     _planeScanningTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
-      if (!_isARInitialized || arSessionManager == null || _isScanningComplete) {
-        timer.cancel();
-        return;
+      try {
+        if (!_isARInitialized ||
+            arSessionManager == null ||
+            _isScanningComplete ||
+            !mounted) {
+          timer.cancel();
+          return;
+        }
+
+        await _checkForDetectedPlanes();
+      } catch (e) {
+        _arLog('AR Screen: ⚠️ Error in plane detection timer: $e');
+        // Don't cancel timer, just log the error
       }
-      
-      await _checkForDetectedPlanes();
     });
-    
+
     // Also simulate plane detection based on time (planes are hidden but detection still works)
     Timer.periodic(Duration(seconds: 3), (timer) {
-      if (_isScanningComplete) {
-        timer.cancel();
-        return;
+      try {
+        if (_isScanningComplete || !mounted) {
+          timer.cancel();
+          return;
+        }
+
+        // Simulate plane detection (planes are hidden with showPlanes: false)
+        _simulatePlaneDetection();
+      } catch (e) {
+        _arLog('AR Screen: ⚠️ Error in plane simulation timer: $e');
       }
-      
-      // Simulate plane detection (planes are hidden with showPlanes: false)
-      _simulatePlaneDetection();
     });
   }
-  
+
   /// Check for detected planes using hit testing
   Future<void> _checkForDetectedPlanes() async {
     try {
@@ -703,7 +983,7 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ❌ Error checking for planes: $e');
     }
   }
-  
+
   /// Simulate plane detection since visual planes are confirmed
   void _simulatePlaneDetection() {
     if (_detectedPlanesCount < _minimumPlanesCount) {
@@ -716,33 +996,40 @@ class _ARScreenState extends State<ARScreen> {
   void _updateSurfaceScanning() {
     // Increment the counter each time a plane is detected
     _detectedPlanesCount++;
-    
-    _arLog('AR Screen: 📊 Surface scanning update - detected planes: $_detectedPlanesCount');
-    
+
+    _arLog(
+      'AR Screen: 📊 Surface scanning update - detected planes: $_detectedPlanesCount',
+    );
+
     // Check if we have sufficient surface area scanned
     bool wasComplete = _isScanningComplete;
     _isScanningComplete = _detectedPlanesCount >= _minimumPlanesCount;
-    
+
     if (!wasComplete && _isScanningComplete) {
       // Scanning just completed
       _arLog('AR Screen: ✅ Surface scanning completed!');
       _planeScanningTimer?.cancel(); // Stop the timer
       setState(() {
-        _statusText = "Floor scanned! Tap + to add products or tap objects to select them.";
+        _statusText =
+            "Floor scanned! Tap + to add products or tap objects to select them.";
         _showScanningHint = false; // Keep false to hide UI overlay
       });
-      
+
       // If we have a pending model, place it now
       _arLog('AR Screen: 🔍 Checking for pending model...');
       _arLog('AR Screen: 🔍 _hasPendingModel: $_hasPendingModel');
       _arLog('AR Screen: 🔍 modelUri: $modelUri');
       _arLog('AR Screen: 🔍 _currentProduct: ${_currentProduct?.name}');
-      
+
       if (_hasPendingModel && modelUri != null) {
-        _arLog('AR Screen: 🎯 Placing queued model now that scanning is complete');
+        _arLog(
+          'AR Screen: 🎯 Placing queued model now that scanning is complete',
+        );
         _placeModelFromProduct();
       } else if (modelUri != null && !_hasPendingModel) {
-        _arLog('AR Screen: 🎯 Model available but not flagged as pending - placing anyway');
+        _arLog(
+          'AR Screen: 🎯 Model available but not flagged as pending - placing anyway',
+        );
         _placeModelFromProduct();
       } else {
         _arLog('AR Screen: ⚠️ No pending model to place');
@@ -750,7 +1037,8 @@ class _ARScreenState extends State<ARScreen> {
     } else if (!_isScanningComplete) {
       // Still scanning - update progress (without showing UI overlay)
       setState(() {
-        _statusText = "Scanning floor (${_detectedPlanesCount}/$_minimumPlanesCount areas found)";
+        _statusText =
+            "Scanning floor ($_detectedPlanesCount/$_minimumPlanesCount areas found)";
         _showScanningHint = false; // Keep false to hide UI overlay
       });
     }
@@ -758,8 +1046,10 @@ class _ARScreenState extends State<ARScreen> {
 
   /// Deselect the currently selected object (SIMPLIFIED: Only clear local state)
   void _deselectCurrentObject() {
-    _arLog('AR Screen: 🔄 _deselectCurrentObject called - selectedNodeId: "$selectedNodeId"');
-    
+    _arLog(
+      'AR Screen: 🔄 _deselectCurrentObject called - selectedNodeId: "$selectedNodeId"',
+    );
+
     if (selectedNodeId == null) {
       _arLog('AR Screen: ⚠️ No object selected to deselect');
       return;
@@ -768,15 +1058,17 @@ class _ARScreenState extends State<ARScreen> {
     // SIMPLIFIED: Only clear local UI state, don't interfere with AR plugin internals
     final previousSelection = selectedNodeId;
     _arLog('AR Screen: 🔄 Clearing selection state for: $previousSelection');
-    
+
     setState(() {
       selectedNodeId = null;
-      _statusText = _isScanningComplete 
-          ? "Object deselected. Tap + to add products." 
+      _statusText = _isScanningComplete
+          ? "Object deselected. Tap + to add products."
           : "Scanning floor..."; // Restored scanning check
     });
-    
-    _arLog('AR Screen: ✅ Local selection state cleared - gestures should work normally');
+
+    _arLog(
+      'AR Screen: ✅ Local selection state cleared - gestures should work normally',
+    );
   }
 
   bool _isBenignRemovalError(Object error) {
@@ -804,15 +1096,21 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ⚠️ MissingPluginException during removeNode: $error');
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating MissingPluginException as benign, assuming removal succeeded');
+        _arLog(
+          'AR Screen: ✅ Treating MissingPluginException as benign, assuming removal succeeded',
+        );
         return true;
       }
       return false;
     } on PlatformException catch (error, stackTrace) {
-      _arLog('AR Screen: ⚠️ PlatformException during removeNode: ${error.code} ${error.message}');
+      _arLog(
+        'AR Screen: ⚠️ PlatformException during removeNode: ${error.code} ${error.message}',
+      );
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating PlatformException as benign, assuming removal succeeded');
+        _arLog(
+          'AR Screen: ✅ Treating PlatformException as benign, assuming removal succeeded',
+        );
         return true;
       }
       return false;
@@ -820,7 +1118,9 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ❌ Unexpected error during removeNode: $error');
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating unexpected error as benign, assuming removal succeeded');
+        _arLog(
+          'AR Screen: ✅ Treating unexpected error as benign, assuming removal succeeded',
+        );
         return true;
       }
       return false;
@@ -837,18 +1137,26 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ✅ removeNodeDeep returned $result for $nodeId');
       return result;
     } on MissingPluginException catch (error, stackTrace) {
-      _arLog('AR Screen: ⚠️ MissingPluginException during removeNodeDeep: $error');
+      _arLog(
+        'AR Screen: ⚠️ MissingPluginException during removeNodeDeep: $error',
+      );
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating MissingPluginException as benign for removeNodeDeep');
+        _arLog(
+          'AR Screen: ✅ Treating MissingPluginException as benign for removeNodeDeep',
+        );
         return true;
       }
       return false;
     } on PlatformException catch (error, stackTrace) {
-      _arLog('AR Screen: ⚠️ PlatformException during removeNodeDeep: ${error.code} ${error.message}');
+      _arLog(
+        'AR Screen: ⚠️ PlatformException during removeNodeDeep: ${error.code} ${error.message}',
+      );
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating PlatformException as benign for removeNodeDeep');
+        _arLog(
+          'AR Screen: ✅ Treating PlatformException as benign for removeNodeDeep',
+        );
         return true;
       }
       return false;
@@ -856,7 +1164,9 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ❌ Unexpected error during removeNodeDeep: $error');
       _arLog(stackTrace.toString());
       if (_isBenignRemovalError(error)) {
-        _arLog('AR Screen: ✅ Treating unexpected error as benign for removeNodeDeep');
+        _arLog(
+          'AR Screen: ✅ Treating unexpected error as benign for removeNodeDeep',
+        );
         return true;
       }
       return false;
@@ -892,7 +1202,9 @@ class _ARScreenState extends State<ARScreen> {
       });
     }
 
-    _arLog('AR Screen: 🧹 Cleanup complete - remaining objects: ${nodes.length}');
+    _arLog(
+      'AR Screen: 🧹 Cleanup complete - remaining objects: ${nodes.length}',
+    );
   }
 
   /// Remove selected object (improved node tracking for cross-platform compatibility)
@@ -901,14 +1213,14 @@ class _ARScreenState extends State<ARScreen> {
       _arLog('AR Screen: ❌ Cannot remove - no object selected or AR not ready');
       return;
     }
-    
+
     // Store the node ID before clearing to prevent race conditions
     final nodeIdToRemove = selectedNodeId!;
-    
+
     // Mark this node as being removed to prevent gesture handlers from accessing it
     _nodesBeingRemoved.add(nodeIdToRemove);
-    
-    // CRITICAL: Clear selection state IMMEDIATELY to prevent gesture callbacks 
+
+    // CRITICAL: Clear selection state IMMEDIATELY to prevent gesture callbacks
     // from trying to access the node while it's being removed
     setState(() {
       selectedNodeId = null;
@@ -917,7 +1229,7 @@ class _ARScreenState extends State<ARScreen> {
 
     try {
       _arLog('AR Screen: 🗑️ Removing individual object: $nodeIdToRemove');
-      
+
       // First, try to get the ARNode object from our tracking map
       ARNode? nodeToRemove = nodeIdToNodeMap[nodeIdToRemove];
       if (nodeToRemove == null) {
@@ -930,9 +1242,13 @@ class _ARScreenState extends State<ARScreen> {
       }
 
       if (nodeToRemove == null) {
-        _arLog('AR Screen: ❌ Could not find ARNode object for selected ID: $nodeIdToRemove');
+        _arLog(
+          'AR Screen: ❌ Could not find ARNode object for selected ID: $nodeIdToRemove',
+        );
         _arLog('AR Screen: 🔍 Available node IDs: ${nodeIdToNodeMap.keys}');
-        _arLog('AR Screen: 🔍 Available node names: ${nodes.map((n) => n.name)}');
+        _arLog(
+          'AR Screen: 🔍 Available node names: ${nodes.map((n) => n.name)}',
+        );
 
         final deepRemovalSuccess = await _tryRemoveNodeById(nodeIdToRemove);
         if (deepRemovalSuccess) {
@@ -953,7 +1269,9 @@ class _ARScreenState extends State<ARScreen> {
       bool removalSucceeded = await _tryRemoveNode(nodeToRemove);
 
       if (!removalSucceeded) {
-        _arLog('AR Screen: ❌ Regular removeNode did not confirm success, trying removeNodeDeep...');
+        _arLog(
+          'AR Screen: ❌ Regular removeNode did not confirm success, trying removeNodeDeep...',
+        );
         removalSucceeded = await _tryRemoveNodeById(nodeIdToRemove);
       }
 
@@ -964,12 +1282,11 @@ class _ARScreenState extends State<ARScreen> {
           _statusText = "❌ Failed to remove object - please try again";
         });
       }
-
     } catch (e, stackTrace) {
       _arLog('AR Screen: ❌ Exception during object removal: $e');
       _arLog('AR Screen: ❌ Error type: ${e.runtimeType}');
       _arLog('AR Screen: ❌ Stack trace: $stackTrace');
-      
+
       if (mounted) {
         setState(() {
           _statusText = "❌ Object removal failed";
@@ -985,43 +1302,44 @@ class _ARScreenState extends State<ARScreen> {
   /// Navigate to category (keep from original)
   Future<void> _navigateToCategory() async {
     _arLog('AR Screen: === CHECKING MEMORY BEFORE SHOWING CATEGORY MODAL ===');
-    
+
     // CRITICAL: Check memory BEFORE opening modal to prevent user from browsing if memory is full
     final memInfo = await ARMemoryManager.getCurrentMemoryInfo();
-    
+
     // DEBUG: Force memory warning for UI testing
     if (_debugForceMemoryWarning || !memInfo.canAddModel) {
       _arLog('AR Screen: ❌ Memory check failed - cannot add more models');
-      _arLog('AR Screen: Memory status: ${memInfo.status}, Usage: ${memInfo.usagePercentage.toStringAsFixed(1)}%');
-      
+      _arLog(
+        'AR Screen: Memory status: ${memInfo.status}, Usage: ${memInfo.usagePercentage.toStringAsFixed(1)}%',
+      );
+
       // Show memory warning dialog
       _showMemoryWarningDialog(memInfo);
-      
+
       setState(() {
         _statusText = "Nedostatok pamäte - odstráňte niektoré objekty";
       });
-      
+
       return;
     }
-    
+
     _arLog('AR Screen: ✅ Memory check passed - showing category modal');
-    
+
     // Set navigation state
     if (mounted) {
       context.read<ArNavigationProvider>().setGoFromAR();
     }
-    
+
     // Show modal overlay instead of navigation - this keeps AR session alive
     final result = await showModalBottomSheet<Product?>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _buildARModalOverlay(
-        child: CategoryScreen(isSearchHeaderShow: true),
-      ),
+      builder: (context) =>
+          _buildARModalOverlay(child: CategoryScreen(isSearchHeaderShow: true)),
     );
-    
+
     // Handle result if user selected a product
     if (mounted && result != null) {
       _arLog('AR Screen: 📦 Product selected from modal: ${result.name}');
@@ -1029,14 +1347,14 @@ class _ARScreenState extends State<ARScreen> {
       setState(() {
         _currentProduct = result;
       });
-      
+
       // Process the new product model
       _handleNewProductModel();
     } else {
       // User closed modal without selecting a product
       _arLog('AR Screen: ℹ️ Modal closed without selection');
     }
-    
+
     _arLog('AR Screen: ✅ Category modal closed - AR session preserved');
   }
 
@@ -1069,28 +1387,35 @@ class _ARScreenState extends State<ARScreen> {
   /// Start monitoring light estimation
   void _startLightEstimationMonitoring() {
     _arLog('AR Screen: Starting light estimation monitoring');
-    
+
     // Check light estimation every second
-    _lightEstimationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+    _lightEstimationTimer = Timer.periodic(const Duration(seconds: 1), (
+      timer,
+    ) async {
       if (arSessionManager != null) {
         try {
           final lightData = await arSessionManager!.getLightEstimate();
-          
+
           if (lightData != null) {
             // Extract intensity from the light estimate data
             // Android uses 'pixelIntensity', iOS uses 'normalizedIntensity'
             // Both are normalized to 0.0-1.0 range
-            final intensity = (lightData['pixelIntensity'] ?? 
-                              lightData['normalizedIntensity'] ?? 
-                              0.0) as double;
-            
-            _arLog('AR Screen: Light intensity: ${(intensity * 100).toStringAsFixed(1)}%');
-            
+            final intensity =
+                (lightData['pixelIntensity'] ??
+                        lightData['normalizedIntensity'] ??
+                        0.0)
+                    as double;
+
+            _arLog(
+              'AR Screen: Light intensity: ${(intensity * 100).toStringAsFixed(1)}%',
+            );
+
             // Check if we should show warning (below 30% threshold)
             bool shouldShowWarning = intensity < _lowLightThreshold;
-            
+
             // Update state if light condition changed
-            if (_showLowLightWarning != shouldShowWarning || _currentLightIntensity != intensity) {
+            if (_showLowLightWarning != shouldShowWarning ||
+                _currentLightIntensity != intensity) {
               if (mounted) {
                 setState(() {
                   _currentLightIntensity = intensity;
@@ -1111,9 +1436,11 @@ class _ARScreenState extends State<ARScreen> {
     if (!_showLowLightWarning) {
       return const SizedBox.shrink();
     }
-    
+
     return Positioned(
-      bottom: MediaQuery.of(context).padding.bottom + 120.0, // Above bottom controls
+      bottom:
+          MediaQuery.of(context).padding.bottom +
+          120.0, // Above bottom controls
       left: 16,
       right: 16,
       child: Container(
@@ -1125,11 +1452,7 @@ class _ARScreenState extends State<ARScreen> {
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.lightbulb_outline,
-              color: Colors.yellow,
-              size: 24,
-            ),
+            const Icon(Icons.lightbulb_outline, color: Colors.yellow, size: 24),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -1250,8 +1573,6 @@ class _ARScreenState extends State<ARScreen> {
   //   );
   // }
 
-
-
   /// Build back button (keep from original but simplified)
   Widget _buildBackButton() {
     return Positioned(
@@ -1287,23 +1608,27 @@ class _ARScreenState extends State<ARScreen> {
   /// Build add/delete button (merged functionality)
   Widget _buildAddButton() {
     bool hasSelection = selectedNodeId != null;
-    bool showAddButton = !hasSelection; // Show + when no selection, trash when object selected
-    
+    bool showAddButton =
+        !hasSelection; // Show + when no selection, trash when object selected
+
     // RE-ENABLED: Scanning state check - only allow adding after scanning
     // Also check for debug memory warning or actual memory limits
-    bool canAddObjects = (_isScanningComplete && !_debugForceMemoryWarning) || hasSelection;
-    
+    bool canAddObjects =
+        (_isScanningComplete && !_debugForceMemoryWarning) || hasSelection;
+
     // Use red background for delete button, white/gray for add button
     Color buttonColor;
     if (showAddButton) {
-      buttonColor = canAddObjects 
+      buttonColor = canAddObjects
           ? Colors.white.withAlpha((0.9 * 255).toInt())
-          : Colors.grey.withAlpha((0.7 * 255).toInt()); // Gray when scanning or memory full
+          : Colors.grey.withAlpha(
+              (0.7 * 255).toInt(),
+            ); // Gray when scanning or memory full
     } else {
       // Red background for delete/remove button
       buttonColor = Colors.red.withAlpha((0.9 * 255).toInt());
     }
-    
+
     return Positioned(
       bottom: MediaQuery.of(context).padding.bottom + 16.0,
       left: 20,
@@ -1335,34 +1660,42 @@ class _ARScreenState extends State<ARScreen> {
                 _showMemoryWarningDialog(memInfo);
               } else {
                 // Silently ignore tap while scanning (no UI overlay shown)
-                _arLog('AR Screen: ⏳ Cannot add objects - floor scanning in progress');
+                _arLog(
+                  'AR Screen: ⏳ Cannot add objects - floor scanning in progress',
+                );
               }
             } else {
               // Run removal in a zone to catch any uncaught exceptions from the plugin
-              await runZonedGuarded(() async {
-                try {
-                  await _removeSelectedObject();
-                } catch (e) {
-                  _arLog('AR Screen: ❌ Error in delete button handler: $e');
-                  if (mounted) {
-                    setState(() {
-                      _statusText = "Error removing object";
-                    });
+              await runZonedGuarded(
+                () async {
+                  try {
+                    await _removeSelectedObject();
+                  } catch (e) {
+                    _arLog('AR Screen: ❌ Error in delete button handler: $e');
+                    if (mounted) {
+                      setState(() {
+                        _statusText = "Error removing object";
+                      });
+                    }
                   }
-                }
-              }, (error, stackTrace) {
-                // Catch any exceptions that escaped our try-catch (from plugin native code)
-                _arLog('AR Screen: ⚠️ Uncaught exception in zone: $error');
-                _arLog('AR Screen: ⚠️ Stack trace: $stackTrace');
-                // Don't show error to user since removal likely succeeded
-              });
+                },
+                (error, stackTrace) {
+                  // Catch any exceptions that escaped our try-catch (from plugin native code)
+                  _arLog('AR Screen: ⚠️ Uncaught exception in zone: $error');
+                  _arLog('AR Screen: ⚠️ Stack trace: $stackTrace');
+                  // Don't show error to user since removal likely succeeded
+                },
+              );
             }
           },
           icon: Icon(
             showAddButton ? Icons.add : Icons.delete,
-            color: showAddButton 
-                ? (canAddObjects ? Color(0xFF22514C) : Colors.grey[600]) // Gray icon while scanning
-                : Colors.white, // White icon for delete button on red background
+            color: showAddButton
+                ? (canAddObjects
+                      ? Color(0xFF22514C)
+                      : Colors.grey[600]) // Gray icon while scanning
+                : Colors
+                      .white, // White icon for delete button on red background
             size: 24,
           ),
           padding: EdgeInsets.zero,
@@ -1376,57 +1709,74 @@ class _ARScreenState extends State<ARScreen> {
     _arLog('AR Screen: 🛒 Building shopping cart button...');
     final currentSelectedId = selectedNodeId;
     _arLog('AR Screen: 🛒 selectedNodeId: $currentSelectedId');
-    
+
     // Only show if we have a selected object and can find its corresponding product
     if (currentSelectedId == null) {
       _arLog('AR Screen: 🛒 No selected node - hiding shopping cart button');
       return const SizedBox.shrink();
     }
-    
+
     // Get the product for the selected node (try multiple lookup strategies)
     Product? selectedProduct = nodeToProductMap[currentSelectedId];
-    
+
     // If not found by direct lookup, try finding by matching any stored key
     if (selectedProduct == null) {
-      _arLog('AR Screen: 🛒 Direct lookup failed, trying alternative lookups...');
-      _arLog('AR Screen: 🛒 Available keys in nodeToProductMap: ${nodeToProductMap.keys.toList()}');
-      
+      _arLog(
+        'AR Screen: 🛒 Direct lookup failed, trying alternative lookups...',
+      );
+      _arLog(
+        'AR Screen: 🛒 Available keys in nodeToProductMap: ${nodeToProductMap.keys.toList()}',
+      );
+
       // Try to find a key that contains or matches our selectedNodeId
       for (String key in nodeToProductMap.keys) {
-        if (key.contains(currentSelectedId) || currentSelectedId.contains(key)) {
+        if (key.contains(currentSelectedId) ||
+            currentSelectedId.contains(key)) {
           selectedProduct = nodeToProductMap[key];
-          _arLog('AR Screen: 🛒 Found product via alternative lookup with key: $key');
+          _arLog(
+            'AR Screen: 🛒 Found product via alternative lookup with key: $key',
+          );
           break;
         }
       }
-      
+
       // If still not found, try using _currentProduct as fallback since we track it
       if (selectedProduct == null && _currentProduct != null) {
         selectedProduct = _currentProduct;
-      _arLog('AR Screen: 🛒 Using _currentProduct as fallback: ${selectedProduct?.name}');
+        _arLog(
+          'AR Screen: 🛒 Using _currentProduct as fallback: ${selectedProduct?.name}',
+        );
       }
     }
-    
-    _arLog('AR Screen: 🛒 Product for selected node: ${selectedProduct?.name ?? "NOT FOUND"}');
-    
+
+    _arLog(
+      'AR Screen: 🛒 Product for selected node: ${selectedProduct?.name ?? "NOT FOUND"}',
+    );
+
     if (selectedProduct == null) {
-      _arLog('AR Screen: 🛒 No product found for node $currentSelectedId - hiding shopping cart button');
+      _arLog(
+        'AR Screen: 🛒 No product found for node $currentSelectedId - hiding shopping cart button',
+      );
       return const SizedBox.shrink();
     }
-    
+
     final hasCompanyForm = _hasCompanyForm(selectedProduct);
     final hasShopUrl = _hasShopUrl(selectedProduct);
-    
-    _arLog('AR Screen: 🛒 hasCompanyForm: $hasCompanyForm, hasShopUrl: $hasShopUrl');
-    
+
+    _arLog(
+      'AR Screen: 🛒 hasCompanyForm: $hasCompanyForm, hasShopUrl: $hasShopUrl',
+    );
+
     // Only show if product has either form capability or shop URL
     if (!hasCompanyForm && !hasShopUrl) {
       _arLog('AR Screen: 🛒 No form or shop URL - hiding shopping cart button');
       return const SizedBox.shrink();
     }
-    
-    _arLog('AR Screen: 🛒 Showing shopping cart button for ${selectedProduct.name}');
-    
+
+    _arLog(
+      'AR Screen: 🛒 Showing shopping cart button for ${selectedProduct.name}',
+    );
+
     return Positioned(
       bottom: MediaQuery.of(context).padding.bottom + 16.0,
       right: 20,
@@ -1446,12 +1796,10 @@ class _ARScreenState extends State<ARScreen> {
           ],
         ),
         child: IconButton(
-          onPressed: () => _onShoppingCartPress(selectedProduct!), // selectedProduct is guaranteed non-null here
-          icon: Icon(
-            Icons.shopping_cart,
-            color: Color(0xFF22514C),
-            size: 24,
-          ),
+          onPressed: () => _onShoppingCartPress(
+            selectedProduct!,
+          ), // selectedProduct is guaranteed non-null here
+          icon: Icon(Icons.shopping_cart, color: Color(0xFF22514C), size: 24),
           padding: EdgeInsets.zero,
         ),
       ),
@@ -1466,7 +1814,7 @@ class _ARScreenState extends State<ARScreen> {
     if (product.name.toLowerCase().contains('saffron')) {
       return true; // Saffron products have forms
     }
-    return false; 
+    return false;
   }
 
   /// Check if product has shop URL
@@ -1478,7 +1826,7 @@ class _ARScreenState extends State<ARScreen> {
   /// Handle shopping cart button press
   Future<void> _onShoppingCartPress(Product product) async {
     final hasCompanyForm = _hasCompanyForm(product);
-    
+
     if (hasCompanyForm) {
       // Show lead form modal
       await _showLeadFormModal(product);
@@ -1536,7 +1884,12 @@ class _ARScreenState extends State<ARScreen> {
               Expanded(
                 child: SingleChildScrollView(
                   controller: scrollController,
-                  padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 32.0), // Extra bottom padding
+                  padding: const EdgeInsets.fromLTRB(
+                    16.0,
+                    0,
+                    16.0,
+                    32.0,
+                  ), // Extra bottom padding
                   child: const InspirationLeadForm(shouldAutoFocus: true),
                 ),
               ),
@@ -1551,27 +1904,29 @@ class _ARScreenState extends State<ARScreen> {
   Future<void> _openShopUrl(Product product) async {
     // Use the actual product shop URL if available
     String? targetUrl = product.shopUrl;
-    
+
     // If no shop URL is available, show an error
-    if (targetUrl == null || targetUrl.isEmpty) {
-      _arLog('AR Screen: ⚠️ No shop URL available for product: ${product.name}');
+    if (targetUrl.isEmpty) {
+      _arLog(
+        'AR Screen: ⚠️ No shop URL available for product: ${product.name}',
+      );
       _showSnackBar('❌ No shop link available for this product');
       return;
     }
-    
+
     _arLog('AR Screen: 🌐 Attempting to open URL: $targetUrl');
-    
+
     try {
       final uri = Uri.parse(targetUrl);
       _arLog('AR Screen: 🌐 Parsed URI: $uri');
-      
+
       // Check if URL can be launched
       bool canLaunch = await canLaunchUrl(uri);
       _arLog('AR Screen: 🌐 Can launch URL: $canLaunch');
-      
+
       if (canLaunch) {
         bool launched = await launchUrl(
-          uri, 
+          uri,
           mode: LaunchMode.externalApplication,
           // Add additional web view fallback for Android
           webViewConfiguration: const WebViewConfiguration(
@@ -1579,7 +1934,7 @@ class _ARScreenState extends State<ARScreen> {
             enableDomStorage: true,
           ),
         );
-        
+
         if (launched) {
           _arLog('AR Screen: ✅ Successfully opened shop URL: $targetUrl');
           // _showSnackBar('Opening shop for ${product.name}...');
@@ -1592,9 +1947,14 @@ class _ARScreenState extends State<ARScreen> {
         // Try alternative launch mode
         try {
           _arLog('AR Screen: 🔄 Trying platformDefault launch mode...');
-          bool altLaunched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+          bool altLaunched = await launchUrl(
+            uri,
+            mode: LaunchMode.platformDefault,
+          );
           if (altLaunched) {
-            _arLog('AR Screen: ✅ Successfully opened with platformDefault mode');
+            _arLog(
+              'AR Screen: ✅ Successfully opened with platformDefault mode',
+            );
             // _showSnackBar('Opening shop for ${product.name}...');
           } else {
             _arLog('AR Screen: ❌ Alternative launch also failed');
@@ -1633,10 +1993,7 @@ class _ARScreenState extends State<ARScreen> {
                 SizedBox(height: 16),
                 Text(
                   "Nahrávam 3D model...",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                 ),
               ],
             ),
@@ -1649,26 +2006,40 @@ class _ARScreenState extends State<ARScreen> {
   /// Build camera button (centered at bottom)
   Widget _buildCameraButton() {
     if (nodes.isEmpty) return const SizedBox.shrink();
-  
+
+    // Show disabled state if AR is reinitializing
+    bool isARReady = arSessionManager != null && _isARInitialized;
+
     return Positioned(
       bottom: MediaQuery.of(context).padding.bottom + 16.0,
       left: 0,
       right: 0,
       child: Center(
         child: GestureDetector(
-          onTap: _isTakingScreenshot ? null : _takeARScreenshot,
+          onTap: (isARReady && !_isTakingScreenshot)
+              ? _takeARScreenshot
+              : () {
+                  if (!isARReady) {
+                    _showSnackBar('⏳ Počkajte na inicializáciu AR');
+                  }
+                },
           child: Container(
             width: 64,
             height: 64,
             decoration: BoxDecoration(
-              color: const Color(0xFF004C44).withValues(alpha: 0.85), // Green background with 85% opacity
+              // Gray out button if AR not ready, otherwise green
+              color: isARReady
+                  ? const Color(0xFF004C44).withValues(alpha: 0.85)
+                  : Colors.grey.withValues(alpha: 0.6),
               shape: BoxShape.circle,
             ),
             child: Center(
               child: _isTakingScreenshot
                   ? const CircularProgressIndicator(
                       strokeWidth: 3,
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFA6E7B8)),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFFA6E7B8),
+                      ),
                     )
                   : Container(
                       width: 50, // 64 - (7px padding * 2) = 50px
@@ -1676,7 +2047,10 @@ class _ARScreenState extends State<ARScreen> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: const Color(0xFFA6E7B8), // Light green border
+                          // Gray border if not ready
+                          color: isARReady
+                              ? const Color(0xFFA6E7B8)
+                              : Colors.grey[400]!,
                           width: 1,
                         ),
                       ),
@@ -1685,6 +2059,12 @@ class _ARScreenState extends State<ARScreen> {
                           'assets/icons/camera_icon.svg',
                           width: 24,
                           height: 24,
+                          colorFilter: isARReady
+                              ? null
+                              : ColorFilter.mode(
+                                  Colors.grey[600]!,
+                                  BlendMode.srcIn,
+                                ),
                         ),
                       ),
                     ),
@@ -1701,39 +2081,72 @@ class _ARScreenState extends State<ARScreen> {
     setState(() {
       _isTakingScreenshot = true;
     });
-    
+
     try {
       _arLog('AR Screen: 📸 Starting screenshot process...');
-      
+
+      // CRITICAL: Check if AR session is still valid before proceeding
+      if (arSessionManager == null || !_isARInitialized) {
+        _arLog('AR Screen: ❌ AR session not ready for screenshot');
+        _showSnackBar('❌ AR nepripravené, skúste znova');
+        return;
+      }
+
       // For Android, check permissions BEFORE attempting to capture
       if (Platform.isAndroid) {
-        if (arSessionManager == null) {
-          _showSnackBar('❌ AR session not initialized yet');
-          _arLog('AR Screen: ❌ Android AR session not ready');
-          return;
-        }
-        
         _arLog('AR Screen: 🤖 Android detected, checking permissions first...');
-        
+
         // Android-specific: Request storage permission and WAIT for user response
+        // CRITICAL: Permission dialog will cause window focus loss and may pause AR session
         bool hasPermission = await _requestStoragePermission();
         if (!hasPermission) {
           // Permission denied - don't show error, user already knows they denied it
           _arLog('AR Screen: ❌ Android storage permission denied by user');
           return; // Exit silently without showing error message
         }
-        
-        _arLog('AR Screen: ✅ Storage permission granted, proceeding with capture');
+
+        _arLog('AR Screen: ✅ Storage permission granted');
+
+        // CRITICAL: After permission dialog closes, the AR session may have been destroyed
+        // This is an Android system behavior - permission dialogs can cause activity recreation
+        if (arSessionManager == null || !_isARInitialized) {
+          _arLog(
+            'AR Screen: ❌ AR session was destroyed during permission dialog',
+          );
+          _showSnackBar('❌ AR bolo reštartované. Prosím skúste znova.');
+
+          // The AR screen will automatically reinitialize through the normal lifecycle
+          // User should just wait a moment and try again
+          return;
+        }
+
+        // Give the system time to fully restore after permission dialog
+        // and ensure AR session is stable before attempting screenshot
+        _arLog(
+          'AR Screen: ⏳ Waiting for AR session to stabilize after permission...',
+        );
+        await Future.delayed(Duration(milliseconds: 500));
+
+        // Double-check session is still valid after delay
+        if (arSessionManager == null || !_isARInitialized) {
+          _arLog('AR Screen: ❌ AR session lost after permission dialog');
+          _showSnackBar('❌ AR sa reštartuje. Počkajte chvíľu a skúste znova.');
+          return;
+        }
+
+        _arLog(
+          'AR Screen: ✅ AR session verified stable, proceeding with screenshot',
+        );
       }
-      
+
       // For iOS or Android with granted permission, proceed with capture
       await _captureAndSaveScreenshot();
-
     } catch (e) {
       _arLog('AR Screen: ❌ Screenshot error: $e');
       // Only show error snackbar for actual capture errors, not permission issues
-      if (!e.toString().contains('permission') && !e.toString().contains('Permission')) {
-        _showSnackBar('❌ Screenshot failed: $e');
+      if (!e.toString().contains('permission') &&
+          !e.toString().contains('Permission')) {
+        _showSnackBar('❌ Snímka obrazovky zlyhala');
       }
     } finally {
       // Always clear loading state when done
@@ -1758,22 +2171,34 @@ class _ARScreenState extends State<ARScreen> {
 
       _arLog('AR Screen: 📸 Taking AR scene snapshot...');
       _arLog('AR Screen: Platform: ${Platform.isAndroid ? 'Android' : 'iOS'}');
-      
+
       // Get the native AR screenshot with platform-specific error handling
+      // CRITICAL: The snapshot() method may pause the AR session internally
       ImageProvider imageProvider;
       try {
         imageProvider = await arSessionManager!.snapshot();
         _arLog('AR Screen: 📸 Snapshot captured successfully');
+
+        // CRITICAL: Give AR session time to stabilize after snapshot
+        // The snapshot may have briefly paused the session
+        await Future.delayed(Duration(milliseconds: 150));
+        _arLog('AR Screen: 📸 AR session stabilized after snapshot');
       } catch (snapshotError) {
         _arLog('AR Screen: ❌ Snapshot failed: $snapshotError');
-        _arLog('AR Screen: ❌ Snapshot error type: ${snapshotError.runtimeType}');
-        
+        _arLog(
+          'AR Screen: ❌ Snapshot error type: ${snapshotError.runtimeType}',
+        );
+
         if (Platform.isAndroid) {
           // Android AR screenshots have known issues - don't show error messages
           // Just log for debugging purposes
-          _arLog('AR Screen: 🤖 Android snapshot failed (expected on first permission request)');
+          _arLog(
+            'AR Screen: 🤖 Android snapshot failed (expected on first permission request)',
+          );
           if (snapshotError is MissingPluginException) {
-            _arLog('AR Screen: 🤖 Android snapshot method not implemented in AR plugin');
+            _arLog(
+              'AR Screen: 🤖 Android snapshot method not implemented in AR plugin',
+            );
           }
           // Don't show any error message - permission dialog provides feedback
         } else {
@@ -1782,16 +2207,20 @@ class _ARScreenState extends State<ARScreen> {
         }
         return;
       }
-      
+
       // Convert ImageProvider to bytes with enhanced error handling
       Uint8List imageBytes;
       try {
         if (imageProvider is MemoryImage) {
           imageBytes = imageProvider.bytes;
-          _arLog('AR Screen: 📸 Image converted to bytes, size: ${imageBytes.length} bytes');
+          _arLog(
+            'AR Screen: 📸 Image converted to bytes, size: ${imageBytes.length} bytes',
+          );
         } else {
-          _arLog('AR Screen: ❌ ImageProvider is not MemoryImage: ${imageProvider.runtimeType}');
-          
+          _arLog(
+            'AR Screen: ❌ ImageProvider is not MemoryImage: ${imageProvider.runtimeType}',
+          );
+
           // Don't show error messages on Android
           if (!Platform.isAndroid) {
             _showSnackBar('❌ Failed to process AR screenshot');
@@ -1817,9 +2246,10 @@ class _ARScreenState extends State<ARScreen> {
       }
 
       // Generate filename with timestamp
-      String fileName = 'AR_Screenshot_${DateTime.now().millisecondsSinceEpoch}.png';
+      String fileName =
+          'AR_Screenshot_${DateTime.now().millisecondsSinceEpoch}.png';
       _arLog('AR Screen: 📸 Saving as: $fileName');
-      
+
       // Save image to gallery using SaverGallery
       try {
         final result = await SaverGallery.saveImage(
@@ -1827,16 +2257,30 @@ class _ARScreenState extends State<ARScreen> {
           quality: 100,
           fileName: fileName,
           skipIfExists: false,
-          androidRelativePath: "Pictures/Virtualdom", // Creates a VirtualDom folder
+          androidRelativePath:
+              "Pictures/Virtualdom", // Creates a VirtualDom folder
         );
 
-        _arLog('AR Screen: 📸 SaverGallery result: isSuccess=${result.isSuccess}');
+        _arLog(
+          'AR Screen: 📸 SaverGallery result: isSuccess=${result.isSuccess}',
+        );
         if (result.errorMessage != null) {
           _arLog('AR Screen: 📸 SaverGallery error: ${result.errorMessage}');
         }
 
         if (result.isSuccess) {
-          _showSuccessDialog('AR Fotka Uložená!', 'Vaša AR fotka bola úspešne uložená do galérie.');
+          // Track AR screenshot event (fire-and-forget with safety wrapper)
+          AnalyticsService.trackEventSafely(
+            () => AnalyticsService.trackARScreenshot(
+              productId: _currentProduct?.id,
+              partnerId: null, // Could extract from product if available
+            ),
+          );
+
+          _showSuccessDialog(
+            'AR Fotka Uložená!',
+            'Vaša AR fotka bola úspešne uložená do galérie.',
+          );
           _arLog('AR Screen: ✅ AR screenshot saved successfully: $fileName');
         } else {
           // Don't show save errors on Android - permission dialogs provide feedback
@@ -1872,79 +2316,88 @@ class _ARScreenState extends State<ARScreen> {
         // For Android 13+ (API 33+), the system automatically uses READ_MEDIA_IMAGES
         // For older versions, it falls back to storage permission
         // We try photos permission first (works for all Android versions)
-        
+
         _arLog('AR Screen: Requesting photos permission...');
         var permission = await Permission.photos.request();
         _arLog('AR Screen: Photos permission status: $permission');
-        
+
         if (permission == PermissionStatus.granted) {
           return true;
         }
-        
+
         // If photos permission is not available or denied, try storage permission
         // This handles older Android versions
-        _arLog('AR Screen: Photos permission not granted, trying storage permission...');
+        _arLog(
+          'AR Screen: Photos permission not granted, trying storage permission...',
+        );
         permission = await Permission.storage.request();
         _arLog('AR Screen: Storage permission status: $permission');
-        
+
         if (permission == PermissionStatus.granted) {
           return true;
         }
-        
+
         // If both failed, try manageExternalStorage for Android 11+
         _arLog('AR Screen: Trying manageExternalStorage permission...');
         permission = await Permission.manageExternalStorage.request();
-        _arLog('AR Screen: ManageExternalStorage permission status: $permission');
-        
+        _arLog(
+          'AR Screen: ManageExternalStorage permission status: $permission',
+        );
+
         return permission == PermissionStatus.granted;
-        
       } else {
         // For iOS, try multiple photo permission approaches
         _arLog('AR Screen: Checking iOS photo permissions...');
-        
+
         // First try photosAddOnly (specifically for saving photos)
         var permission = await Permission.photosAddOnly.status;
-        _arLog('AR Screen: iOS PhotosAddOnly permission current status: $permission');
-        
+        _arLog(
+          'AR Screen: iOS PhotosAddOnly permission current status: $permission',
+        );
+
         if (permission == PermissionStatus.granted) {
           return true;
         }
-        
-        if (permission != PermissionStatus.granted && permission != PermissionStatus.permanentlyDenied) {
+
+        if (permission != PermissionStatus.granted &&
+            permission != PermissionStatus.permanentlyDenied) {
           permission = await Permission.photosAddOnly.request();
-          _arLog('AR Screen: iOS PhotosAddOnly permission after request: $permission');
-          
+          _arLog(
+            'AR Screen: iOS PhotosAddOnly permission after request: $permission',
+          );
+
           if (permission == PermissionStatus.granted) {
             return true;
           }
         }
-        
+
         // Fallback to general photos permission
         permission = await Permission.photos.status;
         _arLog('AR Screen: iOS Photos permission current status: $permission');
-        
+
         if (permission == PermissionStatus.granted) {
           return true;
         }
-        
+
         if (permission == PermissionStatus.permanentlyDenied) {
           // Show dialog to guide user to settings
           _showPermissionSettingsDialog();
           return false;
         }
-        
-        if (permission != PermissionStatus.granted && permission != PermissionStatus.permanentlyDenied) {
+
+        if (permission != PermissionStatus.granted &&
+            permission != PermissionStatus.permanentlyDenied) {
           permission = await Permission.photos.request();
           _arLog('AR Screen: iOS Photos permission after request: $permission');
-          
+
           if (permission == PermissionStatus.permanentlyDenied) {
             _showPermissionSettingsDialog();
             return false;
           }
-          
+
           return permission == PermissionStatus.granted;
         }
-        
+
         return false;
       }
     } catch (e) {
@@ -1964,7 +2417,7 @@ class _ARScreenState extends State<ARScreen> {
   /// Show memory warning dialog when user tries to add model but memory is low
   void _showMemoryWarningDialog(MemoryInfo memInfo) {
     if (!mounted) return;
-    
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -2014,7 +2467,7 @@ class _ARScreenState extends State<ARScreen> {
   /// Show dialog to guide user to app settings for permission
   void _showPermissionSettingsDialog() {
     if (!mounted) return;
-    
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -2045,23 +2498,19 @@ class _ARScreenState extends State<ARScreen> {
   /// Show success dialog with custom title and message
   void _showSuccessDialog(String title, String message) {
     if (!mounted) return;
-    
+
     // Clear loading state before showing the success dialog
     setState(() {
       _isTakingScreenshot = false;
     });
-    
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: Row(
             children: [
-              Icon(
-                Icons.check_circle,
-                color: Colors.green[600],
-                size: 28,
-              ),
+              Icon(Icons.check_circle, color: Colors.green[600], size: 28),
               const SizedBox(width: 12),
               Text(
                 title,
@@ -2072,25 +2521,20 @@ class _ARScreenState extends State<ARScreen> {
               ),
             ],
           ),
-          content: Text(
-            message,
-            style: const TextStyle(
-              fontSize: 16,
-            ),
-          ),
+          content: Text(message, style: const TextStyle(fontSize: 16)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               style: TextButton.styleFrom(
                 foregroundColor: const Color(0xFF22514C),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
               ),
               child: const Text(
                 'OK',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
           ],
@@ -2102,14 +2546,241 @@ class _ARScreenState extends State<ARScreen> {
   /// Show snackbar message to user
   void _showSnackBar(String message) {
     if (!mounted) return;
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         duration: const Duration(seconds: 3),
-        backgroundColor: message.startsWith('✅') ? Colors.green[700] : 
-                         message.startsWith('❌') ? Colors.red[700] : 
-                         Colors.blue[700],
+        backgroundColor: message.startsWith('✅')
+            ? Colors.green[700]
+            : message.startsWith('❌')
+            ? Colors.red[700]
+            : Colors.blue[700],
+      ),
+    );
+  }
+
+  // ==================== DEPTH OCCLUSION METHODS ====================
+
+  /// Initialize depth occlusion support
+  Future<void> _initializeDepthOcclusion() async {
+    try {
+      if (arSessionManager == null) {
+        _arLog(
+          'AR Screen: ⚠️ Cannot initialize depth - session manager is null',
+        );
+        return;
+      }
+
+      // Check if depth is supported on this device
+      bool supported = await arSessionManager!.isDepthSupported();
+      _arLog('AR Screen: 🔍 Depth support check: $supported');
+
+      if (supported) {
+        // Explicitly enable depth occlusion (as per the guide)
+        _arLog('AR Screen: 🔍 Enabling depth occlusion...');
+        bool enableResult = await arSessionManager!.enableDepthOcclusion(true);
+        _arLog('AR Screen: 🔍 Enable depth occlusion result: $enableResult');
+
+        // Verify it's actually enabled
+        bool enabled = await arSessionManager!.isDepthOcclusionEnabled();
+        _arLog('AR Screen: 🔍 Depth occlusion verified status: $enabled');
+
+        if (mounted) {
+          setState(() {
+            _depthSupported = supported;
+            _occlusionEnabled = enabled;
+            _depthInfo = enabled
+                ? "Occlusion enabled - objects hidden behind real objects"
+                : "Occlusion disabled - objects always visible";
+          });
+        }
+
+        // Start monitoring depth data
+        _monitorDepthData();
+      } else {
+        if (mounted) {
+          setState(() {
+            _depthSupported = false;
+            _depthInfo = "Depth not supported on this device";
+          });
+        }
+        _arLog(
+          'AR Screen: ℹ️ Depth not supported - occlusion features unavailable',
+        );
+      }
+    } catch (e) {
+      _arLog('AR Screen: ❌ Error initializing depth occlusion: $e');
+      if (mounted) {
+        setState(() {
+          _depthSupported = false;
+          _depthInfo = "Depth initialization failed";
+        });
+      }
+    }
+  }
+
+  /// Monitor depth data availability
+  void _monitorDepthData() {
+    _depthMonitorTimer?.cancel();
+    _depthMonitorTimer = Timer.periodic(const Duration(seconds: 3), (
+      timer,
+    ) async {
+      if (!mounted || arSessionManager == null) {
+        timer.cancel();
+        return;
+      }
+
+      try {
+        final depthImage = await arSessionManager!.acquireDepthImage();
+        if (depthImage != null) {
+          int width = depthImage['width'];
+          int height = depthImage['height'];
+          String format = depthImage['format'] ?? 'unknown';
+
+          if (mounted) {
+            setState(() {
+              _depthInfo = "Depth: ${width}x${height} ($format)";
+            });
+          }
+          _arLog(
+            'AR Screen: 🔍 Depth image: ${width}x${height} format: $format',
+          );
+        }
+      } catch (e) {
+        _arLog('AR Screen: ⚠️ Error acquiring depth image: $e');
+      }
+    });
+  }
+
+  /// Toggle depth occlusion on/off
+  Future<void> _toggleDepthOcclusion() async {
+    if (!_depthSupported) {
+      _showSnackBar('❌ Depth not supported on this device');
+      return;
+    }
+
+    if (arSessionManager == null) {
+      _showSnackBar('❌ AR session not initialized');
+      return;
+    }
+
+    try {
+      bool newState = !_occlusionEnabled;
+      bool success = await arSessionManager!.enableDepthOcclusion(newState);
+
+      if (success) {
+        setState(() {
+          _occlusionEnabled = newState;
+          _depthInfo = newState
+              ? "Occlusion enabled - objects hidden behind real objects"
+              : "Occlusion disabled - objects always visible";
+        });
+
+        _showSnackBar(
+          newState
+              ? '✅ Occlusion enabled - objects hidden behind real objects'
+              : '⚠️ Occlusion disabled - objects always visible',
+        );
+
+        _arLog('AR Screen: 🔍 Depth occlusion toggled to: $newState');
+      } else {
+        _showSnackBar('❌ Failed to toggle occlusion');
+        _arLog('AR Screen: ❌ Failed to toggle depth occlusion');
+      }
+    } catch (e) {
+      _showSnackBar('❌ Error toggling occlusion: $e');
+      _arLog('AR Screen: ❌ Error toggling depth occlusion: $e');
+    }
+  }
+
+  /// Build depth status overlay (top-left corner)
+  Widget _buildDepthStatusOverlay() {
+    if (!_depthSupported) return const SizedBox.shrink();
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 60,
+      left: 16,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _occlusionEnabled ? const Color(0xFF4CAF50) : Colors.grey,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _occlusionEnabled ? Icons.visibility : Icons.visibility_off,
+              color: _occlusionEnabled ? const Color(0xFF4CAF50) : Colors.grey,
+              size: 16,
+            ),
+            const SizedBox(width: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '🔍 Depth Occlusion',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  _occlusionEnabled ? 'ON' : 'OFF',
+                  style: TextStyle(
+                    color: _occlusionEnabled
+                        ? const Color(0xFF4CAF50)
+                        : Colors.grey,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Build depth occlusion toggle button (right side, middle)
+  Widget _buildDepthToggleButton() {
+    if (!_depthSupported) return const SizedBox.shrink();
+
+    return Positioned(
+      right: 16,
+      top: MediaQuery.of(context).size.height / 2 - 28,
+      child: GestureDetector(
+        onTap: _toggleDepthOcclusion,
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: _occlusionEnabled
+                ? const Color(0xFF4CAF50).withValues(alpha: 0.85)
+                : Colors.grey.withValues(alpha: 0.85),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Icon(
+            _occlusionEnabled ? Icons.visibility : Icons.visibility_off,
+            color: Colors.white,
+            size: 28,
+          ),
+        ),
       ),
     );
   }

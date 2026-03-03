@@ -51,6 +51,10 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
     // Depth occlusion state
     var depthOcclusionEnabled = true
     
+    // Enhanced lighting state
+    var enhancedLightingEnabled = false
+    var lightAnchorEntity: AnchorEntity?
+    
     // Configurable gesture settings (set at init time only)
     var debugGesturesEnabled = false  // Enable verbose gesture logging for development
     var maxPanDistanceMeters: Float = 5.0  // Maximum distance from camera for pan gestures (default 5m)
@@ -114,8 +118,20 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         // Configure environment for realistic rendering
         arView.environment.background = .cameraFeed()
         
-        // RealityKit automatically manages lighting based on ARKit light estimation
-        // Let ARKit handle lighting automatically - it adapts to real-world conditions
+        // CRITICAL: Ensure all rendering features are enabled for best visual quality
+        // RealityKit disables some effects by default - we want them ALL on
+        // An empty set means: grounding shadows ON, motion blur ON, camera grain ON, etc.
+        arView.renderOptions = []
+        
+        // Explicitly remove any options that disable visual quality features
+        // These are the features we want ENABLED (by NOT including their disable flags):
+        // - Grounding shadows (contact shadows under objects)
+        // - AR environment lighting (IBL from camera feed)
+        // - Camera grain (realistic noise matching)
+        // - Motion blur
+        // - Face mesh occlusion (if applicable)
+        arView.renderOptions.remove(.disableGroundingShadows)
+        arView.renderOptions.remove(.disableAREnvironmentLighting)
         
         // Set session delegate
         arView.session.delegate = self
@@ -124,7 +140,7 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         let configuration = ARWorldTrackingConfiguration()
         arView.session.run(configuration)
         
-        print("✅ ARView configured with camera feed and automatic lighting")
+        print("✅ ARView configured with camera feed, grounding shadows, and enhanced lighting")
     }
     
     private func setupCoachingOverlay() {
@@ -159,6 +175,9 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         
         // Stop lighting monitoring
         stopLightingMonitoring()
+        
+        // Clean up enhanced lighting
+        cleanupEnhancedLighting()
         
         // Clear cancellables
         cancellableCollection.removeAll()
@@ -389,6 +408,15 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
         
         // Run AR session
         arView.session.run(configuration)
+        
+        // Setup enhanced lighting to match Android's Filament rendering quality
+        // Android uses a custom HDR environment (pdp-model-viewer.hdr) with IBL at 15,000 lux
+        // plus Filament's built-in ACES tone mapping and shadow casting.
+        // We replicate this on iOS with:
+        // 1. Custom IBL environment resource from the same HDR file (iOS 16+)
+        // 2. DirectionalLight with shadow for contact shadows (iOS 15+)
+        // 3. RenderOptions ensuring grounding shadows are enabled (all iOS)
+        setupEnhancedLighting()
         
         print("✅ RealityKit ARView initialized successfully")
         result(nil)

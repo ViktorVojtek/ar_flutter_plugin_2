@@ -320,7 +320,7 @@ class _ObjectGesturesState extends State<ObjectGestures> {
                       Switch(
                         value: _heightLockedPanningEnabled,
                         onChanged: _toggleHeightLockedPanning,
-                        activeColor: Colors.green,
+                        activeThumbColor: Colors.green,
                       ),
                     ],
                   ),

@@ -13,9 +13,13 @@ extension IosARViewRealityKit {
     
     // MARK: - Material Configuration
     
-    /// Configure entity materials for proper transparency and PBR rendering
-    /// This addresses the GLB→USDZ conversion issues where transparency may be lost
-    /// and ensures materials are properly configured for RealityKit's rendering pipeline
+    /// Configure entity materials for proper transparency, PBR rendering, and enhanced lighting.
+    /// This addresses the GLB→USDZ conversion issues where transparency and PBR properties may be lost
+    /// and ensures materials are properly configured for RealityKit's rendering pipeline.
+    ///
+    /// On Android, Filament preserves all glTF PBR properties natively (metallic, roughness, normal, AO).
+    /// On iOS, the GLB→SceneKit→USDZ→RealityKit pipeline can degrade these properties.
+    /// This method compensates by verifying and adjusting material properties post-load.
     func configureEntityMaterials(_ entity: Entity) {
         // Visit all entities recursively to configure their materials
         entity.visit { childEntity in
@@ -55,6 +59,36 @@ extension IosARViewRealityKit {
                             print("🔧 Material configured for transparency: tintAlpha=\(alpha), hasTexture=\(pbrMaterial.baseColor.texture != nil)")
                         }
                         
+                        // =====================================================
+                        // PBR QUALITY CHECKS (match Android Filament quality)
+                        // =====================================================
+                        
+                        // Check roughness — if fully rough (1.0) with no texture, the model
+                        // will look completely matte with no specular highlights.
+                        // Android Filament preserves roughness accurately from the glTF model.
+                        // After GLB→USDZ conversion, roughness may reset to 1.0.
+                        if pbrMaterial.roughness.texture == nil {
+                            // Extract current roughness scalar value
+                            let currentRoughness = pbrMaterial.roughness.scale
+                            if currentRoughness >= 0.99 {
+                                // Roughness at max probably means it was lost in conversion.
+                                // A moderate roughness (0.5) gives a more natural look with
+                                // visible specular highlights, closer to Android's rendering.
+                                pbrMaterial.roughness = .init(scale: 0.5)
+                                print("🔧 Roughness corrected: 1.0 → 0.5 (likely lost in GLB→USDZ conversion)")
+                            }
+                        }
+                        
+                        // Check for specular component — Filament on Android renders specular
+                        // highlights from the HDR IBL reflections. Ensure iOS materials have
+                        // some specular response.
+                        if pbrMaterial.specular.texture == nil {
+                            let currentSpecular = pbrMaterial.specular.scale
+                            if currentSpecular < 0.3 {
+                                pbrMaterial.specular = .init(scale: 0.5)
+                            }
+                        }
+                        
                         newMaterials.append(pbrMaterial)
                         materialsModified = true
                     } else {
@@ -76,7 +110,11 @@ extension IosARViewRealityKit {
     }
     
     /// Configure SceneKit scene materials before USDZ export
-    /// This helps preserve transparency during the GLB→SceneKit→USDZ conversion
+    /// This helps preserve transparency AND PBR properties during the GLB→SceneKit→USDZ conversion.
+    /// 
+    /// On Android, Filament loads GLB models natively and preserves all PBR properties perfectly.
+    /// On iOS, we go through GLB→SceneKit→USDZ→RealityKit which can lose PBR data.
+    /// This method ensures metalness, roughness, normal maps, and AO maps survive the conversion.
     func configureSceneKitMaterialsForExport(_ scene: SCNScene) {
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let geometry = node.geometry else { return }
@@ -114,6 +152,66 @@ extension IosARViewRealityKit {
                 // Also check for explicit transparency
                 if material.transparency < 0.99 {
                     material.transparencyMode = .dualLayer
+                }
+                
+                // =====================================================================
+                // PBR PROPERTY PRESERVATION (critical for matching Android Filament quality)
+                // =====================================================================
+                
+                // Preserve metalness — if GLTFSceneKit parsed it, ensure it survives export.
+                // If metalness is nil/zero but the model should be metallic, this ensures
+                // the USDZ export carries the property through.
+                if material.metalness.contents == nil {
+                    // Default to non-metallic (dielectric) — matches glTF default
+                    material.metalness.contents = NSNumber(value: 0.0)
+                }
+                
+                // Preserve roughness — critical for specular highlight quality.
+                // Android Filament renders roughness accurately from the glTF model.
+                // If roughness is nil, SceneKit defaults to 1.0 (fully rough) which loses
+                // all specular highlights and makes the model look flat/matte.
+                if material.roughness.contents == nil {
+                    // Default to moderate roughness for a natural look
+                    material.roughness.contents = NSNumber(value: 0.5)
+                }
+                
+                // Ambient occlusion map preservation
+                // If the model has an AO map (from glTF occlusionTexture), ensure it's preserved
+                if material.ambientOcclusion.contents != nil {
+                    // AO map exists — make sure intensity is set
+                    if material.ambientOcclusion.intensity < 0.01 {
+                        material.ambientOcclusion.intensity = 1.0
+                    }
+                    print("📦 PBR: Preserved ambient occlusion map (intensity: \(material.ambientOcclusion.intensity))")
+                } else {
+                    // No AO map — slightly darken ambient to simulate contact darkening
+                    // This approximates the effect that Android gets from the HDR IBL
+                    material.ambient.intensity = 0.3
+                }
+                
+                // Normal map preservation — critical for surface detail
+                if material.normal.contents != nil {
+                    // Normal map exists, ensure it has proper intensity
+                    if material.normal.intensity < 0.01 {
+                        material.normal.intensity = 1.0
+                    }
+                    print("📦 PBR: Preserved normal map (intensity: \(material.normal.intensity))")
+                }
+                
+                // Emissive map/color preservation
+                if material.emission.contents != nil {
+                    if material.emission.intensity < 0.01 {
+                        material.emission.intensity = 1.0
+                    }
+                }
+                
+                // Log PBR property state for debugging
+                let hasMetalness = material.metalness.contents != nil
+                let hasRoughness = material.roughness.contents != nil
+                let hasNormal = material.normal.contents != nil
+                let hasAO = material.ambientOcclusion.contents != nil
+                if hasMetalness || hasNormal || hasAO {
+                    print("📦 PBR properties: metal=\(hasMetalness) rough=\(hasRoughness) normal=\(hasNormal) ao=\(hasAO)")
                 }
             }
         }
@@ -166,6 +264,9 @@ extension IosARViewRealityKit {
                     
                     // Add to scene
                     self.arView.scene.addAnchor(anchorEntity)
+                    
+                    // Apply IBL receiver so the entity receives custom HDR lighting
+                    self.applyIBLReceiverIfNeeded(entity)
                     
                     // Store references
                     self.entityCollection[nodeId] = entity
@@ -756,6 +857,9 @@ extension IosARViewRealityKit {
                     
                     // Add entity to the anchor
                     anchorEntity.addChild(entity)
+                    
+                    // Apply IBL receiver so the entity receives custom HDR lighting
+                    self.applyIBLReceiverIfNeeded(entity)
                     
                     // Store reference
                     self.entityCollection[nodeId] = entity
