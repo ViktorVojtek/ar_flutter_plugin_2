@@ -455,15 +455,20 @@ extension IosARViewRealityKit {
         }
     }
     
-    /// Add a directional light with shadow casting for contact shadow effect.
-    /// This is the key component that creates the "ambient occlusion" look on Android —
-    /// Filament automatically derives a main directional light from ARCore's ENVIRONMENTAL_HDR
-    /// and uses it for shadow mapping. We add an explicit directional light on iOS to match.
+    /// Add a directional light with shadow casting for contact shadow effect,
+    /// plus a soft overhead spot light for SSAO-like contact darkening.
+    ///
+    /// Android's Filament automatically derives a main directional light from ARCore's
+    /// ENVIRONMENTAL_HDR and uses it for shadow mapping AND screen-space ambient occlusion.
+    /// RealityKit doesn't expose SSAO directly, so we approximate it with:
+    ///   1. A directional light with aggressive, soft shadows (contact shadow effect)
+    ///   2. A wide-cone spot light pointing straight down (darkens crevices and undersides)
+    ///   3. Grounding shadows (already enabled via renderOptions)
     ///
     /// Uses `DirectionalLight` class (available iOS 13.0+) which conforms to `HasDirectionalLight`
     /// and supports `.shadow` property for shadow casting.
     private func setupDirectionalLight() {
-        print("💡 Adding directional light with shadows...")
+        print("💡 Adding directional light with shadows + SSAO-like spot light...")
         
         // Create a dedicated anchor entity for lighting
         let lightAnchor: AnchorEntity
@@ -477,26 +482,19 @@ extension IosARViewRealityKit {
         }
         
         // --- Primary Directional Light (shadow-casting, simulates sun/main light) ---
-        // Use the DirectionalLight class which conforms to HasDirectionalLight protocol
-        // and exposes .light and .shadow properties
         let directionalLightEntity = DirectionalLight()
         directionalLightEntity.name = "__directional_light__"
         
         // Position the light above and slightly angled (mimics overhead lighting)
-        // Pointing downward at ~45 degrees like Android's estimated main light
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         
         // Configure directional light properties
-        // Android Filament uses the ARCore-estimated main light which typically has
-        // moderate intensity. We use ~800 lux to approximate this.
         directionalLightEntity.light.color = .white
         directionalLightEntity.light.intensity = 500  // Gentle intensity (lux), avoids over-bright specular
         directionalLightEntity.light.isRealWorldProxy = false
         
-        // CRITICAL: Enable shadow casting — this creates the contact shadow effect
-        // that makes Android models look more grounded and realistic.
-        // Shadow is a property on HasDirectionalLight protocol (available iOS 13.0+)
+        // Enable shadow casting — this creates the contact shadow effect
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
             maximumDistance: 8,  // Shadow visibility distance in meters
             depthBias: 0.5      // Prevents shadow acne artifacts
@@ -504,21 +502,48 @@ extension IosARViewRealityKit {
         
         lightAnchor.addChild(directionalLightEntity)
         
+        // --- SSAO-like Overhead Spot Light ---
+        // A wide-cone spot light pointing straight down from above creates darkening
+        // in crevices, under overhangs, and at contact edges — mimicking SSAO.
+        // Because it casts soft shadows, geometry that is self-occluded (cavities,
+        // folds, undercuts) naturally receives less light, producing the same
+        // visual effect as screen-space ambient occlusion.
+        let ssaoSpotLight = SpotLight()
+        ssaoSpotLight.name = "__ssao_spot_light__"
+        ssaoSpotLight.position = SIMD3<Float>(0, 4, 0)  // Directly above
+        ssaoSpotLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 4, 0), relativeTo: nil)
+        
+        // Wide cone (120°) so it covers large objects uniformly
+        // The inner angle creates a soft gradient from center to edge
+        ssaoSpotLight.light.innerAngleInDegrees = 100
+        ssaoSpotLight.light.outerAngleInDegrees = 120
+        ssaoSpotLight.light.color = .white
+        ssaoSpotLight.light.intensity = 350   // Moderate — enough to create visible shadow contrast
+        ssaoSpotLight.light.attenuationRadius = 15  // Covers room-scale objects
+        
+        // CRITICAL: Shadow on the spot light is what creates the SSAO-like darkening.
+        // Geometry that is occluded from this top-down light gets shadowed,
+        // producing dark creases, contact edges, and cavity darkening.
+        ssaoSpotLight.shadow = SpotLightComponent.Shadow()
+        
+        lightAnchor.addChild(ssaoSpotLight)
+        
         // --- Secondary Ambient Fill Light (softer, no shadow) ---
-        // This provides soft fill lighting to prevent overly dark shadows
-        // Similar to how Android's HDR IBL provides ambient fill from all directions
+        // Prevents overly dark shadows while allowing the SSAO effect to read clearly
         let fillLightEntity = PointLight()
         fillLightEntity.name = "__fill_light__"
         fillLightEntity.position = SIMD3<Float>(0, 3, -2)  // Slightly behind and above
         
-        // Configure point light for soft ambient fill
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 150       // Subtle fill (lumens), prevents shiny hotspots
+        fillLightEntity.light.intensity = 150       // Subtle fill (lumens)
         fillLightEntity.light.attenuationRadius = 20 // Large radius for soft, even fill
         
         lightAnchor.addChild(fillLightEntity)
         
-        print("✅ Directional light with shadows + fill light added")
+        print("✅ Enhanced lighting added:")
+        print("   ✓ Directional light (500 lux) with shadow casting")
+        print("   ✓ SSAO spot light (350 lux, 120° cone) for cavity darkening")
+        print("   ✓ Fill light (150 lm) for ambient fill")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.

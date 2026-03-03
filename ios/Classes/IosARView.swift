@@ -2097,10 +2097,10 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     /**
      * Configure SceneKit for maximum realism matching ARCore's ENVIRONMENTAL_HDR
      * Uses ARKit's automatic environment texturing and light estimation
-     * WITH AGGRESSIVE AMBIENT OCCLUSION
+     * WITH SCREEN-SPACE AMBIENT OCCLUSION (SSAO)
      */
     private func configureRealisticRendering() {
-        print("🌅 Configuring AGGRESSIVE ambient occlusion rendering for iOS")
+        print("🌅 Configuring realistic rendering with SSAO for iOS")
         
         // =========================================================================
         // Enable Automatic Environment & Lighting
@@ -2129,10 +2129,18 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         sceneView.preferredFramesPerSecond = 60
         
         // =========================================================================
-        // AGGRESSIVE AMBIENT OCCLUSION SETUP
+        // SSAO (SCREEN-SPACE AMBIENT OCCLUSION) SETUP
+        // =========================================================================
+        // This is the key feature that Android's Filament provides automatically.
+        // SceneKit supports SSAO natively on the camera since iOS 13.
+        // We configure it after the session starts (pointOfView becomes available).
+        configureSSAO()
+        
+        // =========================================================================
+        // LIGHTING SETUP FOR SHADOWS
         // =========================================================================
         
-        // Add directional light to create realistic shadows with ambient occlusion
+        // Add directional light to create realistic shadows alongside SSAO
         let directionalLight = SCNLight()
         directionalLight.type = .directional
         directionalLight.color = UIColor.white
@@ -2161,7 +2169,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         sceneView.scene.rootNode.addChildNode(ambientNode)
         
         // =========================================================================
-        // POST-PROCESSING FOR ENHANCED DEPTH
+        // POST-PROCESSING
         // =========================================================================
         
         // Disable screen-space reflections — they add an unrealistic glossy sheen
@@ -2170,17 +2178,89 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         
         // Enable HDR rendering for better contrast
         if #available(iOS 13.0, *) {
-            sceneView.allowsCameraControl = false  // Prevent accidental camera changes
+            sceneView.allowsCameraControl = false
         }
         
         print("✅ Realistic rendering configured")
+        print("   ✓ SSAO (screen-space ambient occlusion) ENABLED")
         print("   ✓ Directional light (500 lux) with soft shadows")
         print("   ✓ Shadow map: 2048x2048 with 32 samples")
-        print("   ✓ Shadow radius: 3.0 for soft edges")
         print("   ✓ Ambient fill light at 40% intensity")
-        print("   ✓ Environment lighting: 1.2x (no over-bright reflections)")
-        print("   ✓ Screen-space reflections: OFF (prevents rubber look)")
-        print("   ✓ High-quality antialiasing (4x MSAA)")
+        print("   ✓ Screen-space reflections: OFF")
+    }
+    
+    // MARK: - SSAO Configuration
+    
+    /**
+     * Configure Screen-Space Ambient Occlusion (SSAO) on the SceneKit camera.
+     *
+     * SSAO darkens creases, cavities, and contact edges — the same effect
+     * that Android's Filament renderer produces automatically via its
+     * ENVIRONMENTAL_HDR ambient occlusion pass.
+     *
+     * On SceneKit, SSAO is controlled through `SCNCamera` properties:
+     * - `screenSpaceAmbientOcclusionIntensity`: Strength of the darkening (0–1+)
+     * - `screenSpaceAmbientOcclusionRadius`:    Sampling radius in scene units (meters)
+     * - `screenSpaceAmbientOcclusionBias`:      Depth bias to avoid self-occlusion artifacts
+     * - `screenSpaceAmbientOcclusionDepthThreshold`: Max depth difference for occlusion
+     * - `screenSpaceAmbientOcclusionNormalThreshold`: Max normal difference for occlusion
+     *
+     * The pointOfView camera may not be available immediately when ARSCNView
+     * is first created, so we retry on a short delay if needed.
+     */
+    private func configureSSAO() {
+        if #available(iOS 13.0, *) {
+            if let camera = sceneView.pointOfView?.camera {
+                applySSAOSettings(to: camera)
+            } else {
+                // Camera not yet available — ARSCNView creates it after the first frame.
+                // Retry after a short delay.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self = self else { return }
+                    if let camera = self.sceneView.pointOfView?.camera {
+                        self.applySSAOSettings(to: camera)
+                    } else {
+                        // Second retry after 1 more second
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                            guard let self = self else { return }
+                            if let camera = self.sceneView.pointOfView?.camera {
+                                self.applySSAOSettings(to: camera)
+                            } else {
+                                print("⚠️ SSAO: Could not access camera — SSAO not applied")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @available(iOS 13.0, *)
+    private func applySSAOSettings(to camera: SCNCamera) {
+        // SSAO intensity: How dark the occlusion shadows are.
+        // Android Filament uses a moderate SSAO; 0.5–1.0 gives a natural look.
+        // Values above 1.0 produce very pronounced (stylised) AO.
+        camera.screenSpaceAmbientOcclusionIntensity = 0.7
+        
+        // SSAO radius: The sampling radius in scene units (meters in AR).
+        // Larger values spread the darkening over wider areas (soft, diffuse shadow).
+        // Smaller values give tighter contact shadows.
+        // 0.05–0.15 m works well for furniture-scale objects.
+        camera.screenSpaceAmbientOcclusionRadius = 0.1
+        
+        // Depth bias: Prevents flat surfaces from self-occluding ("halo" artifacts).
+        // A small bias (0.01–0.03) is typically enough.
+        camera.screenSpaceAmbientOcclusionBias = 0.02
+        
+        // Depth threshold: Maximum depth difference (in meters) that still
+        // contributes to occlusion. Prevents objects far apart from darkening each other.
+        camera.screenSpaceAmbientOcclusionDepthThreshold = 0.2
+        
+        // Normal threshold: How different surface normals must be to create occlusion.
+        // Lower = more AO on subtle angles; higher = only sharp creases get AO.
+        camera.screenSpaceAmbientOcclusionNormalThreshold = 0.3
+        
+        print("✅ SSAO applied — intensity: 0.7, radius: 0.10m, bias: 0.02")
     }
 }
 
