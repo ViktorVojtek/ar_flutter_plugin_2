@@ -192,15 +192,15 @@ extension IosARViewRealityKit {
                 // Let the scene lighting (IBL + directional light) handle shading naturally.
                 
                 // Normal map preservation — critical for visible surface bumps
-                // Android Filament renders normal maps at full glTF intensity.
-                // Boost intensity to 1.5 so bumps survive the USDZ conversion and
-                // remain visible under iOS lighting conditions.
+                // Keep at 1.0 (native glTF value). A boost to 1.5 made the surface
+                // noisy/plastic under the previous over-bright lighting; with corrected
+                // IBL and reduced directional light, 1.0 gives natural bump depth.
                 if material.normal.contents != nil {
                     if material.normal.intensity < 0.01 {
-                        material.normal.intensity = 1.5
+                        material.normal.intensity = 1.0
                     } else {
-                        // Boost existing normal maps for more visible bumps
-                        material.normal.intensity = max(material.normal.intensity, 1.5)
+                        // Preserve author-defined intensity; clamp to minimum 1.0
+                        material.normal.intensity = max(material.normal.intensity, 1.0)
                     }
                     print("📦 PBR: Normal map preserved (intensity: \(material.normal.intensity))")
                 }

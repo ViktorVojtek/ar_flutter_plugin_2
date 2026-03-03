@@ -365,53 +365,48 @@ extension IosARViewRealityKit {
     
     /// Load the custom HDR environment (`pdp-model-viewer.hdr`) as an IBL environment resource.
     /// This provides the same rich image-based lighting that Android gets from Filament,
-    /// creating natural lighting gradients in crevices and contact points (the "ambient occlusion" effect).
+    /// creating natural lighting gradients in crevices and contact points.
     ///
-    /// `EnvironmentResource.load(named:in:)` is available from iOS 13.0+.
-    /// We load the HDR and apply it to `arView.environment.lighting.resource`.
+    /// Uses `EnvironmentResource.load(named:in:)` which is available from iOS 13+.
+    /// The bundle is discovered at runtime via `findPluginBundle()` so it works in both
+    /// CocoaPods and framework embedding scenarios.
     private func setupCustomIBLEnvironment() {
         print("💡 Loading custom HDR environment for IBL...")
         
-        // First, try to find the bundle that contains our HDR asset
-        let pluginBundle = findPluginBundle()
+        // Find the bundle that actually contains pdp-model-viewer.hdr
+        guard let pluginBundle = findPluginBundle() else {
+            print("⚠️ pdp-model-viewer.hdr not found in any bundle — using ARKit auto-lighting")
+            return
+        }
+        print("💡 Loading HDR from bundle: \(pluginBundle.bundlePath)")
         
-        // Try loading the HDR resource using the named resource API
-        // EnvironmentResource.load(named:in:) looks for the resource in the given bundle
         do {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
-            // Apply the HDR environment as the scene's lighting resource
             arView.environment.lighting.resource = resource
+            // intensityExponent 1.0 = natural, matches Android's ~15K/100K = ~15% indirect light
+            arView.environment.lighting.intensityExponent = 1.0
             
-            // Tune the intensity to match Android's 15,000 lux setting
-            // RealityKit uses an intensity exponent (logarithmic scale)
-            // Android Filament: 15,000 lux out of ~100,000 default = ~15% of max
-            // RealityKit default intensityExponent is ~1.0
-            // A value of ~1.0-1.3 provides similar soft natural lighting
-            arView.environment.lighting.intensityExponent = 1.1
-            
-            print("✅ HDR environment loaded and applied (intensityExponent: 1.1)")
+            print("✅ HDR IBL loaded (intensityExponent: 1.0)")
         } catch {
-            print("⚠️ Sync load of HDR environment failed: \(error.localizedDescription)")
+            print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
             
-            // Fallback: Try async loading
+            // Async fallback
             EnvironmentResource.loadAsync(named: "pdp-model-viewer", in: pluginBundle)
                 .receive(on: DispatchQueue.main)
                 .sink(
                     receiveCompletion: { completion in
-                        if case .failure(let error) = completion {
-                            print("⚠️ Failed to load HDR environment (async): \(error.localizedDescription)")
-                            print("💡 Falling back to ARKit automatic environment lighting only")
+                        if case .failure(let err) = completion {
+                            print("⚠️ Async HDR load also failed: \(err.localizedDescription)")
+                            print("💡 IBL unavailable — scene uses ARKit auto-lighting only")
                         }
                     },
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
-                        
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 1.1
-                        
-                        print("✅ HDR environment loaded async and applied (intensityExponent: 1.1)")
+                        self.arView.environment.lighting.intensityExponent = 1.0
+                        print("✅ HDR IBL loaded async (intensityExponent: 1.0)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -423,10 +418,13 @@ extension IosARViewRealityKit {
     /// image-based lighting directly to entities for more pronounced IBL effects.
     private func setupPerEntityIBL() {
         if #available(iOS 18.0, *) {
-            let pluginBundle = findPluginBundle()
+            guard findPluginBundle() != nil else {
+                print("⚠️ iOS 18+ per-entity IBL: HDR bundle not found")
+                return
+            }
             
             do {
-                let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
+                let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: findPluginBundle())
                 
                 // Create a dedicated entity for the IBL
                 let iblEntity = Entity()
@@ -450,7 +448,7 @@ extension IosARViewRealityKit {
                 
                 print("✅ iOS 18+: Per-entity ImageBasedLightComponent set up")
             } catch {
-                print("⚠️ Failed to load HDR for per-entity IBL: \(error.localizedDescription)")
+                print("⚠️ Failed to load HDR for per-entity IBL (URL): \(error.localizedDescription)")
             }
         }
     }
@@ -482,99 +480,42 @@ extension IosARViewRealityKit {
         }
         
         // --- Primary Directional Light (shadow-casting, simulates sun/main light) ---
+        // Kept at a moderate intensity so it works WITH IBL, not against it.
+        // When IBL is loaded, it provides soft omnidirectional lighting that naturally
+        // darkens crevices (irradiance falloff). The directional light adds cast shadows
+        // for contact shadows and shape definition.
         let directionalLightEntity = DirectionalLight()
         directionalLightEntity.name = "__directional_light__"
-        
-        // Position the light above and slightly angled (mimics overhead lighting)
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
-        
-        // Configure directional light properties
-        // Raised to 700 lux to match Android's brighter IBL-derived main light
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 700
+        directionalLightEntity.light.intensity = 400  // Reduced from 700 — IBL handles ambient fill
         directionalLightEntity.light.isRealWorldProxy = false
-        
-        // Enable shadow casting — this creates the contact shadow effect
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
-            maximumDistance: 10,   // Shadow visibility distance in meters
-            depthBias: 0.5        // Prevents shadow acne artifacts
+            maximumDistance: 10,
+            depthBias: 0.5
         )
-        
         lightAnchor.addChild(directionalLightEntity)
         
-        // --- SSAO-like Multi-directional Shadow Lights ---
-        // Multiple spot lights from different angles: where their shadows overlap
-        // (concave regions, crevices, contact edges) the scene darkens — mimicking SSAO.
+        // NOTE: The previous "SSAO" spot lights (4× 250-500 lux from all directions) were REMOVED.
+        // They were additive lights that *brightened* the scene from all angles, which is the
+        // opposite of ambient occlusion. Real crevice darkening comes from IBL irradiance falloff:
+        // surfaces that see less of the environment hemisphere receive less indirect light.
+        // With a working IBL, no extra lights are needed to simulate AO.
         
-        // 1) Top-down — strongest, catches horizontal crevices & contact shadows
-        let ssaoTopLight = SpotLight()
-        ssaoTopLight.name = "__ssao_top_light__"
-        ssaoTopLight.position = SIMD3<Float>(0, 5, 0)
-        ssaoTopLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 0), relativeTo: nil)
-        ssaoTopLight.light.innerAngleInDegrees = 100
-        ssaoTopLight.light.outerAngleInDegrees = 130
-        ssaoTopLight.light.color = .white
-        ssaoTopLight.light.intensity = 500
-        ssaoTopLight.light.attenuationRadius = 15
-        ssaoTopLight.shadow = SpotLightComponent.Shadow()
-        lightAnchor.addChild(ssaoTopLight)
-        
-        // 2) Front-angled — catches crevices in vertical surfaces facing camera
-        let ssaoFrontLight = SpotLight()
-        ssaoFrontLight.name = "__ssao_front_light__"
-        ssaoFrontLight.position = SIMD3<Float>(0, 3, 4)
-        ssaoFrontLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 3, 4), relativeTo: nil)
-        ssaoFrontLight.light.innerAngleInDegrees = 60
-        ssaoFrontLight.light.outerAngleInDegrees = 110
-        ssaoFrontLight.light.color = .white
-        ssaoFrontLight.light.intensity = 300
-        ssaoFrontLight.light.attenuationRadius = 15
-        ssaoFrontLight.shadow = SpotLightComponent.Shadow()
-        lightAnchor.addChild(ssaoFrontLight)
-        
-        // 3) Left side — catches right-facing crevices
-        let ssaoLeftLight = SpotLight()
-        ssaoLeftLight.name = "__ssao_left_light__"
-        ssaoLeftLight.position = SIMD3<Float>(-3, 3, 0)
-        ssaoLeftLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(-3, 3, 0), relativeTo: nil)
-        ssaoLeftLight.light.innerAngleInDegrees = 60
-        ssaoLeftLight.light.outerAngleInDegrees = 110
-        ssaoLeftLight.light.color = .white
-        ssaoLeftLight.light.intensity = 250
-        ssaoLeftLight.light.attenuationRadius = 15
-        ssaoLeftLight.shadow = SpotLightComponent.Shadow()
-        lightAnchor.addChild(ssaoLeftLight)
-        
-        // 4) Right side — mirrors left for symmetry
-        let ssaoRightLight = SpotLight()
-        ssaoRightLight.name = "__ssao_right_light__"
-        ssaoRightLight.position = SIMD3<Float>(3, 3, 0)
-        ssaoRightLight.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(3, 3, 0), relativeTo: nil)
-        ssaoRightLight.light.innerAngleInDegrees = 60
-        ssaoRightLight.light.outerAngleInDegrees = 110
-        ssaoRightLight.light.color = .white
-        ssaoRightLight.light.intensity = 250
-        ssaoRightLight.light.attenuationRadius = 15
-        ssaoRightLight.shadow = SpotLightComponent.Shadow()
-        lightAnchor.addChild(ssaoRightLight)
-        
-        // --- Secondary Ambient Fill Light (softer, no shadow) ---
-        // Prevents overly dark shadows; raised to 250 lm for brighter base colours
+        // --- Minimal Fill Light (very soft, prevents pitch-black shadow areas) ---
         let fillLightEntity = PointLight()
         fillLightEntity.name = "__fill_light__"
         fillLightEntity.position = SIMD3<Float>(0, 3, -2)
-        
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 250
+        fillLightEntity.light.intensity = 80   // Very soft — just lifts absolute blacks slightly
         fillLightEntity.light.attenuationRadius = 20
-        
         lightAnchor.addChild(fillLightEntity)
         
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (700 lux) with shadow casting")
-        print("   ✓ SSAO: 4 spot lights (top 500, front 300, L/R 250 lux) with shadows")
-        print("   ✓ Fill light (250 lm) for ambient fill")
+        print("   ✓ Directional light (400 lux) with shadow casting")
+        print("   ✓ Fill light (80 lm) to prevent pitch-black shadows")
+        print("   ✓ IBL (pdp-model-viewer.hdr) provides crevice darkening via irradiance falloff")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.
@@ -582,27 +523,34 @@ extension IosARViewRealityKit {
     /// On iOS <18, entities still benefit from the scene-level `arView.environment.lighting.resource`.
     func applyIBLReceiverIfNeeded(_ entity: Entity) {
         if #available(iOS 18.0, *) {
-            // Only apply if we have an IBL entity set up
+            // Apply GroundingShadowComponent (iOS 18.0+ only)
+            applyGroundingShadowIfAvailable(entity)
+            
+            // Apply ImageBasedLightReceiverComponent if we have a custom IBL entity
             guard let iblAnchor = lightAnchorEntity,
                   let iblEntity = iblAnchor.children.first(where: { $0.name == "__enhanced_ibl__" }) else {
+                print("💡 iOS 18+: Applied grounding shadow to entity")
                 return
             }
             
-            // Apply ImageBasedLightReceiverComponent recursively to all model entities
             entity.visit { child in
                 if child.components[ModelComponent.self] != nil {
                     child.components.set(ImageBasedLightReceiverComponent(imageBasedLight: iblEntity))
                 }
             }
             
-            // Also apply GroundingShadowComponent for enhanced grounding shadows
-            entity.visit { child in
-                if child.components[ModelComponent.self] != nil {
-                    child.components.set(GroundingShadowComponent(castsShadow: true))
-                }
-            }
-            
             print("💡 iOS 18+: Applied IBL receiver + grounding shadow to entity")
+        }
+    }
+    
+    /// Apply GroundingShadowComponent to all model entities in the hierarchy.
+    /// GroundingShadowComponent requires iOS 18.0+.
+    @available(iOS 18.0, *)
+    private func applyGroundingShadowIfAvailable(_ entity: Entity) {
+        entity.visit { child in
+            if child.components[ModelComponent.self] != nil {
+                child.components.set(GroundingShadowComponent(castsShadow: true))
+            }
         }
     }
     
@@ -616,8 +564,49 @@ extension IosARViewRealityKit {
         print("🧹 Enhanced lighting cleaned up")
     }
     
+    /// Locate the `pdp-model-viewer.hdr` file and return its URL.
+    /// Use this URL with `EnvironmentResource.load(contentsOf:)` — the only API that
+    /// can load raw Radiance `.hdr` files. `load(named:in:)` only handles compiled .skybox.
+    private func findHDRFileURL() -> URL? {
+        // Try the main bundle first
+        if let url = Bundle.main.url(forResource: "pdp-model-viewer", withExtension: "hdr") {
+            return url
+        }
+        
+        // Try CocoaPods-created resource bundles
+        let bundleNames = [
+            "ar_flutter_plugin_2",
+            "ar_flutter_plugin_2_ar_flutter_plugin_2",
+            "ArFlutterPlugin"
+        ]
+        for bundleName in bundleNames {
+            if let bundlePath = Bundle.main.path(forResource: bundleName, ofType: "bundle"),
+               let bundle = Bundle(path: bundlePath),
+               let url = bundle.url(forResource: "pdp-model-viewer", withExtension: "hdr") {
+                print("💡 Found HDR in bundle: \(bundleName)")
+                return url
+            }
+        }
+        
+        // Search all loaded bundles
+        for bundle in Bundle.allBundles {
+            if let url = bundle.url(forResource: "pdp-model-viewer", withExtension: "hdr") {
+                return url
+            }
+        }
+        
+        // Try via plugin class bundle
+        let pluginClass: AnyClass? = NSClassFromString("ArFlutterPlugin") ??
+                                    NSClassFromString("ar_flutter_plugin_2.ArFlutterPlugin")
+        if let cls = pluginClass,
+           let url = Bundle(for: cls).url(forResource: "pdp-model-viewer", withExtension: "hdr") {
+            return url
+        }
+        
+        return nil
+    }
+    
     /// Find the plugin's resource bundle (handles CocoaPods bundle structure).
-    /// `EnvironmentResource.load(named:in:)` requires a Bundle, not a URL.
     /// Returns the bundle containing 'pdp-model-viewer.hdr', or nil if not found.
     private func findPluginBundle() -> Bundle? {
         // Try the main bundle first (for development/debug builds)
