@@ -384,10 +384,11 @@ extension IosARViewRealityKit {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
             arView.environment.lighting.resource = resource
-            // intensityExponent 1.0 = natural, matches Android's ~15K/100K = ~15% indirect light
-            arView.environment.lighting.intensityExponent = 1.0
+            // Lower intensityExponent = less ambient bounce into crevices = darker shadows
+            // 0.5 gives a ~3× darker indirect fill compared to 1.0, boosting crevice contrast
+            arView.environment.lighting.intensityExponent = 0.5
             
-            print("✅ HDR IBL loaded (intensityExponent: 1.0)")
+            print("✅ HDR IBL loaded (intensityExponent: 0.5)")
         } catch {
             print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -405,8 +406,8 @@ extension IosARViewRealityKit {
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 1.0
-                        print("✅ HDR IBL loaded async (intensityExponent: 1.0)")
+                        self.arView.environment.lighting.intensityExponent = 0.5
+                        print("✅ HDR IBL loaded async (intensityExponent: 0.5)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -431,7 +432,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.1)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.6)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -489,7 +490,7 @@ extension IosARViewRealityKit {
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 400  // Reduced from 700 — IBL handles ambient fill
+        directionalLightEntity.light.intensity = 600  // Higher highlight brightness = more contrast with darker shadows
         directionalLightEntity.light.isRealWorldProxy = false
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
             maximumDistance: 10,
@@ -503,19 +504,14 @@ extension IosARViewRealityKit {
         // surfaces that see less of the environment hemisphere receive less indirect light.
         // With a working IBL, no extra lights are needed to simulate AO.
         
-        // --- Minimal Fill Light (very soft, prevents pitch-black shadow areas) ---
-        let fillLightEntity = PointLight()
-        fillLightEntity.name = "__fill_light__"
-        fillLightEntity.position = SIMD3<Float>(0, 3, -2)
-        fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 80   // Very soft — just lifts absolute blacks slightly
-        fillLightEntity.light.attenuationRadius = 20
-        lightAnchor.addChild(fillLightEntity)
+        // Fill light removed — it was lifting shadow areas and reducing crevice contrast.
+        // The directional light + IBL irradiance provides sufficient shading without
+        // artificially brightening shadow regions.
         
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (400 lux) with shadow casting")
-        print("   ✓ Fill light (80 lm) to prevent pitch-black shadows")
-        print("   ✓ IBL (pdp-model-viewer.hdr) provides crevice darkening via irradiance falloff")
+        print("   ✓ Directional light (600 lux) with shadow casting")
+        print("   ✓ IBL intensityExponent 0.5 — low ambient fill for deep crevice shadows")
+        print("   ✓ Fill light removed for maximum shadow contrast")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.
