@@ -187,7 +187,7 @@ extension IosARViewRealityKit {
         var scalarParams = SSAOScalarParams(
             screenSize: SIMD2<Float>(Float(W), Float(H)),
             radius:      0.025,   // 2.5 cm — tight crevice detail; floor lift handles contrast
-            bias:        0.008,   // 8 mm — prevents flat-surface self-occlusion
+            bias:        0.012,   // 12 mm — stable normals allow larger bias; kills residual flat-surface speckling
             intensity:   1.0,     // linear; composite floor lift provides perceptual contrast
             sampleCount: 32,
             pad:         .zero
@@ -357,14 +357,28 @@ kernel void ssaoCompute(
     float2 ndc    = pixelToNDC(float2(gid) + 0.5f, sz);
     float3 origin = viewPosFromDepth(depth, ndc, invProj);
 
-    float2 ndcR  = pixelToNDC(float2(gid.x + 1, gid.y) + 0.5f, sz);
-    float2 ndcD  = pixelToNDC(float2(gid.x, gid.y + 1) + 0.5f, sz);
-    float depthR = (gid.x + 1 < W) ? depthTex.read(uint2(gid.x + 1, gid.y)).r : depth;
-    float depthD = (gid.y + 1 < H) ? depthTex.read(uint2(gid.x, gid.y + 1)).r : depth;
-    float3 posR  = viewPosFromDepth(depthR > 0.001f ? depthR : depth, ndcR, invProj);
-    float3 posD  = viewPosFromDepth(depthD > 0.001f ? depthD : depth, ndcD, invProj);
+    // Symmetric 4-point, 2-pixel-wide normal estimation.
+    // Using a wider baseline (±2 px) and averaging opposite-side differences
+    // reduces per-pixel variance ~4× vs. the previous 1-sided 1-pixel cross product,
+    // eliminating the quantization-noise speckle pattern on flat surfaces.
+    uint2 pR2 = uint2(min(gid.x + 2u, W - 1u), gid.y);
+    uint2 pL2 = uint2(gid.x >= 2u ? gid.x - 2u : 0u, gid.y);
+    uint2 pD2 = uint2(gid.x, min(gid.y + 2u, H - 1u));
+    uint2 pU2 = uint2(gid.x, gid.y >= 2u ? gid.y - 2u : 0u);
 
-    float3 normal = normalize(cross(posD - origin, posR - origin));
+    float dR = depthTex.read(pR2).r; float dL = depthTex.read(pL2).r;
+    float dD = depthTex.read(pD2).r; float dU = depthTex.read(pU2).r;
+
+    float3 posR = viewPosFromDepth(dR > 0.001f ? dR : depth,
+                                   pixelToNDC(float2(pR2) + 0.5f, sz), invProj);
+    float3 posL = viewPosFromDepth(dL > 0.001f ? dL : depth,
+                                   pixelToNDC(float2(pL2) + 0.5f, sz), invProj);
+    float3 posD = viewPosFromDepth(dD > 0.001f ? dD : depth,
+                                   pixelToNDC(float2(pD2) + 0.5f, sz), invProj);
+    float3 posU = viewPosFromDepth(dU > 0.001f ? dU : depth,
+                                   pixelToNDC(float2(pU2) + 0.5f, sz), invProj);
+
+    float3 normal = normalize(cross(posD - posU, posR - posL));
     if (normal.z > 0.0f) normal = -normal;
 
     float2 rvec      = kNoise[(gid.x % 4u) + (gid.y % 4u) * 4u];
@@ -428,9 +442,9 @@ kernel void ssaoBlurAndComposite(
     // check prevents AO from bleeding across object/floor boundaries.
     float aoSum     = 0.0f;
     float weightSum = 0.0f;
-    const int   R            = 2;       // 5×5 footprint
-    const float kDepthThresh = 0.005f;  // slightly looser to accommodate 4×4 noise tile footprint
-    const float kSigma2      = 4.5f;    // 2 × sigma², sigma = 1.5
+    const int   R            = 3;       // 7×7 footprint — covers >1 full 4×4 tile in all directions
+    const float kDepthThresh = 0.005f;  // depth edge preservation
+    const float kSigma2      = 8.0f;    // 2 × sigma², sigma = 2.0
 
     for (int dy = -R; dy <= R; ++dy) {
         for (int dx = -R; dx <= R; ++dx) {
