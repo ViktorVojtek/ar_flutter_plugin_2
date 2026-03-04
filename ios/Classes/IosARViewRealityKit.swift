@@ -5,6 +5,7 @@ import ARKit
 import RealityKit
 import Combine
 import ModelIO
+import Metal
 import ARCoreCloudAnchors
 
 /// RealityKit-based AR view implementation with automatic depth occlusion
@@ -54,7 +55,14 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
     // Enhanced lighting state
     var enhancedLightingEnabled = false
     var lightAnchorEntity: AnchorEntity?
-    
+
+    // SSAO (Screen-Space Ambient Occlusion) via Metal post-process (iOS 15+)
+    var ssaoEnabled = false
+    var ssaoComputePipeline: MTLComputePipelineState?
+    var ssaoBlurCompositePipeline: MTLComputePipelineState?
+    var ssaoTexture: MTLTexture?
+    var ssaoSampleKernel: [SIMD4<Float>] = []
+
     // Configurable gesture settings (set at init time only)
     var debugGesturesEnabled = false  // Enable verbose gesture logging for development
     var maxPanDistanceMeters: Float = 5.0  // Maximum distance from camera for pan gestures (default 5m)

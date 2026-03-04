@@ -179,13 +179,13 @@ extension IosARViewRealityKit {
                 }
                 
                 // Ambient occlusion map preservation
-                // If the model has an AO map (from glTF occlusionTexture), ensure it's preserved
+                // Baked AO texture is the primary source of crevice darkening on iOS.
+                // RealityKit has no screen-space AO — the baked map IS the AO.
+                // Boost intensity significantly so it shows up prominently.
                 if material.ambientOcclusion.contents != nil {
-                    // AO map exists — make sure intensity is set
-                    if material.ambientOcclusion.intensity < 0.01 {
-                        material.ambientOcclusion.intensity = 1.0
-                    }
-                    print("📦 PBR: Preserved ambient occlusion map (intensity: \(material.ambientOcclusion.intensity))")
+                    // AO map exists — push intensity high so crevices stay very dark
+                    material.ambientOcclusion.intensity = 3.0
+                    print("📦 PBR: Boosted ambient occlusion map (intensity: 3.0)")
                 }
                 // DO NOT darken ambient for materials without AO maps.
                 // The blanket ambient.intensity = 0.3 was making iOS render darker than Android.

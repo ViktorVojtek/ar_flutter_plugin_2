@@ -358,7 +358,12 @@ extension IosARViewRealityKit {
         
         // Step 4: On iOS 18+, set up per-entity ImageBasedLightComponent for richer IBL
         setupPerEntityIBL()
-        
+
+        // Step 5: Metal Screen-Space Ambient Occlusion (iOS 15+)
+        // Darkens crevices, contacts, and shadow areas per-pixel every frame,
+        // matching Android Filament's built-in SSAO quality.
+        setupSSAO()
+
         enhancedLightingEnabled = true
         print("💡 Enhanced lighting setup complete")
     }
@@ -384,11 +389,11 @@ extension IosARViewRealityKit {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
             arView.environment.lighting.resource = resource
-            // Lower intensityExponent = less ambient bounce into crevices = darker shadows
-            // 0.5 gives a ~3× darker indirect fill compared to 1.0, boosting crevice contrast
-            arView.environment.lighting.intensityExponent = 0.5
+            // intensityExponent uses a 2^n scale; 1.0 = 2^1 = balanced IBL illumination.
+            // Crevice darkening is now handled by the Metal SSAO post-process (SSAO.metal).
+            arView.environment.lighting.intensityExponent = 1.0
             
-            print("✅ HDR IBL loaded (intensityExponent: 0.5)")
+            print("✅ HDR IBL loaded (intensityExponent: 1.0 — SSAO handles crevice darkening)")
         } catch {
             print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -406,8 +411,8 @@ extension IosARViewRealityKit {
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 0.5
-                        print("✅ HDR IBL loaded async (intensityExponent: 0.5)")
+                        self.arView.environment.lighting.intensityExponent = 1.0
+                        print("✅ HDR IBL loaded async (intensityExponent: 1.0 — SSAO handles crevice darkening)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -432,7 +437,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.6)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.0)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -490,28 +495,29 @@ extension IosARViewRealityKit {
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 600  // Higher highlight brightness = more contrast with darker shadows
+        directionalLightEntity.light.intensity = 500  // Balanced key light; SSAO darkens contacts
         directionalLightEntity.light.isRealWorldProxy = false
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
             maximumDistance: 10,
             depthBias: 0.5
         )
         lightAnchor.addChild(directionalLightEntity)
-        
-        // NOTE: The previous "SSAO" spot lights (4× 250-500 lux from all directions) were REMOVED.
-        // They were additive lights that *brightened* the scene from all angles, which is the
-        // opposite of ambient occlusion. Real crevice darkening comes from IBL irradiance falloff:
-        // surfaces that see less of the environment hemisphere receive less indirect light.
-        // With a working IBL, no extra lights are needed to simulate AO.
-        
-        // Fill light removed — it was lifting shadow areas and reducing crevice contrast.
-        // The directional light + IBL irradiance provides sufficient shading without
-        // artificially brightening shadow regions.
-        
+
+        // Soft fill light: prevents pure black shadows on the non-lit side of models.
+        // IBL provides the main indirect contribution; this is just a gentle lift.
+        let fillLightEntity = PointLight()
+        fillLightEntity.name = "__fill_light__"
+        fillLightEntity.position = SIMD3<Float>(0, 3, 0)
+        fillLightEntity.light.color = .white
+        fillLightEntity.light.intensity = 100  // gentle — 100 lm
+        fillLightEntity.light.attenuationRadius = 15
+        lightAnchor.addChild(fillLightEntity)
+
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (600 lux) with shadow casting")
-        print("   ✓ IBL intensityExponent 0.5 — low ambient fill for deep crevice shadows")
-        print("   ✓ Fill light removed for maximum shadow contrast")
+        print("   ✓ Directional light (500 lux) with shadow casting")
+        print("   ✓ Fill light (100 lm point light) to lift dark sides")
+        print("   ✓ IBL intensityExponent 1.0 — balanced ambient")
+        print("   ✓ SSAO post-process handles crevice darkening (iOS 15+)")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.
@@ -552,6 +558,9 @@ extension IosARViewRealityKit {
     
     /// Clean up enhanced lighting entities on dispose
     func cleanupEnhancedLighting() {
+        // Tear down Metal SSAO callbacks and GPU resources first
+        cleanupSSAO()
+
         if let anchor = lightAnchorEntity {
             arView.scene.removeAnchor(anchor)
             lightAnchorEntity = nil
