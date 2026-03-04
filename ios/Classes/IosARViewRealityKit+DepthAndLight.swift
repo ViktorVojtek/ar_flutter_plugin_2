@@ -389,11 +389,12 @@ extension IosARViewRealityKit {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
             arView.environment.lighting.resource = resource
-            // intensityExponent uses a 2^n scale; 0.5 = 2^0.5 = 1.41× baseline — a gentle
-            // IBL lift without over-brightening. SSAO handles crevice darkening.
-            arView.environment.lighting.intensityExponent = 0.5
+            // intensityExponent uses a 2^n scale; 1.5 = 2^1.5 = 2.83× baseline.
+            // ACES tone mapping in the post-process compresses highlights gracefully,
+            // so we can push IBL higher for richer specular/metallic response.
+            arView.environment.lighting.intensityExponent = 1.5
             
-            print("✅ HDR IBL loaded (intensityExponent: 0.5 — gentle ambient, SSAO darkens crevices)")
+            print("✅ HDR IBL loaded (intensityExponent: 1.5 — ACES tone mapping compresses highlights)")
         } catch {
             print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -411,8 +412,8 @@ extension IosARViewRealityKit {
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 0.5
-                        print("✅ HDR IBL loaded async (intensityExponent: 0.5 — gentle ambient, SSAO darkens crevices)")
+                        self.arView.environment.lighting.intensityExponent = 1.5
+                        print("✅ HDR IBL loaded async (intensityExponent: 1.5 — ACES tone mapping compresses highlights)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -437,7 +438,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.5)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.5)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -495,7 +496,7 @@ extension IosARViewRealityKit {
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 200  // ARKit estimation drives the main fill; this is just key top-up
+        directionalLightEntity.light.intensity = 100  // subtle key top-up; IBL + accent lights now carry the load
         directionalLightEntity.light.isRealWorldProxy = true  // tracks real-world estimated light direction
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
             maximumDistance: 10,
@@ -509,15 +510,43 @@ extension IosARViewRealityKit {
         fillLightEntity.name = "__fill_light__"
         fillLightEntity.position = SIMD3<Float>(0, 3, 0)
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 150  // slightly stronger to compensate for lower IBL exponent
+        fillLightEntity.light.intensity = 200  // compensates for directional reduction
         fillLightEntity.light.attenuationRadius = 15
         lightAnchor.addChild(fillLightEntity)
 
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (200 lux, isRealWorldProxy=true — tracks scene lighting)")
-        print("   ✓ Fill light (150 lm point light) to lift dark sides")
-        print("   ✓ IBL intensityExponent 0.5 — gentle ambient (1.41× baseline)")
-        print("   ✓ SSAO post-process with 5×5 Gaussian blur + floor lift (iOS 15+)")
+        print("   ✓ Directional light (100 lux, isRealWorldProxy=true)")
+        print("   ✓ Fill light (200 lm point light)")
+        print("   ✓ IBL intensityExponent 1.5 — 2.83× baseline (ACES compresses highlights)")
+        print("   ✓ Per-model warm key + cool rim accent lights")
+        print("   ✓ SSAO + ACES tone mapping post-process (iOS 15+)")
+    }
+    
+    /// Add per-model accent lights (warm key + cool rim) as children of the anchor entity.
+    /// Creates subtle 3-point lighting depth that matches Filament's ENVIRONMENTAL_HDR
+    /// directional + spherical harmonics look.
+    func addAccentLightsToAnchor(_ anchorEntity: AnchorEntity) {
+        // Warm key light — above-left, slightly forward
+        // Simulates a warm studio key light adding shape to the model
+        let keyLight = PointLight()
+        keyLight.name = "__accent_key__"
+        keyLight.position = SIMD3<Float>(-0.5, 0.8, 0.3)
+        keyLight.light.color = UIColor(red: 1.0, green: 0.95, blue: 0.88, alpha: 1.0)  // warm ~3500K
+        keyLight.light.intensity = 200  // lumens — subtle fill
+        keyLight.light.attenuationRadius = 3.0
+        anchorEntity.addChild(keyLight)
+
+        // Cool rim light — behind-right, above
+        // Adds edge definition and separates model from background
+        let rimLight = PointLight()
+        rimLight.name = "__accent_rim__"
+        rimLight.position = SIMD3<Float>(0.5, 0.6, -0.4)
+        rimLight.light.color = UIColor(red: 0.88, green: 0.93, blue: 1.0, alpha: 1.0)  // cool ~6500K
+        rimLight.light.intensity = 120  // lumens — subtle rim
+        rimLight.light.attenuationRadius = 3.0
+        anchorEntity.addChild(rimLight)
+        
+        print("💡 Accent lights added (warm key 200lm + cool rim 120lm)")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.

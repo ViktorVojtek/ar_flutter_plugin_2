@@ -294,6 +294,9 @@ extension IosARViewRealityKit {
                     // Add to scene
                     self.arView.scene.addAnchor(anchorEntity)
                     
+                    // Add per-model accent lighting for studio-quality rendering
+                    self.addAccentLightsToAnchor(anchorEntity)
+                    
                     // Apply IBL receiver so the entity receives custom HDR lighting
                     self.applyIBLReceiverIfNeeded(entity)
                     
@@ -886,6 +889,9 @@ extension IosARViewRealityKit {
                     
                     // Add entity to the anchor
                     anchorEntity.addChild(entity)
+                    
+                    // Add per-model accent lighting for studio-quality rendering
+                    self.addAccentLightsToAnchor(anchorEntity)
                     
                     // Apply IBL receiver so the entity receives custom HDR lighting
                     self.applyIBLReceiverIfNeeded(entity)

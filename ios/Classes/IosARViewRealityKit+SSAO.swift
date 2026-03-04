@@ -324,6 +324,19 @@ constant float2 kNoise[16] = {
     float2(-0.3827f, -0.9239f), float2( 0.9239f, -0.3827f)
 };
 
+// ACES filmic tone mapping (Narkowicz 2015 approximation).
+// Filament applies this by default; RealityKit does not. Adding it here
+// lifts shadow detail, compresses highlights gracefully, and adds the
+// punchy midtone contrast that makes Android rendering look richer.
+static inline float3 ACESFilm(float3 x) {
+    float a = 2.51f;
+    float b = 0.03f;
+    float c = 2.43f;
+    float d = 0.59f;
+    float e = 0.14f;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
 static inline float3 viewPosFromDepth(float depth, float2 ndc, constant float4x4& invProj) {
     float4 clipPos = float4(ndc.x, ndc.y, depth, 1.0f);
     float4 viewPos = invProj * clipPos;
@@ -462,12 +475,16 @@ kernel void ssaoBlurAndComposite(
 
     float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
 
-    // Minimum AO floor: even fully-occluded crevices retain 25% ambient light,
-    // matching Filament's minAmbientOcclusion default. Open surfaces (ao≈1) are unchanged.
-    const float kMinAO = 0.25f;
+    // Minimum AO floor: 15% ambient retained in fully-occluded crevices.
+    // ACES tone mapping naturally lifts shadow detail, so the floor can be lower
+    // than before while still preventing pitch-black crevices.
+    const float kMinAO = 0.15f;
     ao = ao * (1.0f - kMinAO) + kMinAO;
 
-    // Multiply blurred, floor-lifted AO into RGB, preserve alpha
-    targetTex.write(float4(color.rgb * ao, color.a), gid);
+    // Apply AO then ACES filmic tone mapping.
+    // Camera passthrough pixels (depth ≤ 0.001) are already sRGB and skip this path.
+    float3 lit = color.rgb * ao;
+    lit = ACESFilm(lit);
+    targetTex.write(float4(lit, color.a), gid);
 }
 """#
