@@ -186,9 +186,9 @@ extension IosARViewRealityKit {
         // --- Build SSAOScalarParams ---
         var scalarParams = SSAOScalarParams(
             screenSize: SIMD2<Float>(Float(W), Float(H)),
-            radius:      0.035,   // 6 cm — large enough to catch where model planes meet
-            bias:        0.008,  // 10 mm — prevents flat-surface self-occlusion while catching edges
-            intensity:   1.25,    // >1.0 crushes occluded areas dark; open surfaces remain bright
+            radius:      0.025,   // 2.5 cm — tight crevice detail; floor lift handles contrast
+            bias:        0.008,   // 8 mm — prevents flat-surface self-occlusion
+            intensity:   1.0,     // linear; composite floor lift provides perceptual contrast
             sampleCount: 32,
             pad:         .zero
         )
@@ -309,12 +309,20 @@ struct SSAOScalarParams {
     float2 pad;
 };
 
-static inline float2 hashCoord(uint2 coord) {
-    float2 p = float2(coord) * float2(127.1f, 311.7f);
-    float2 h = fract(sin(float2(dot(p, float2(127.1f, 311.7f)),
-                               dot(p, float2(269.5f, 183.3f)))) * 43758.5453f);
-    return h * 2.0f - 1.0f;
-}
+// 4×4 baked TBN rotation table: 16 unit vectors spread evenly around the circle
+// (every 22.5°, shuffled). Adjacent pixels share nearby rotations within the same
+// 4×4 tile, so a Gaussian blur can clean up the stochastic pattern without needing
+// a per-pixel hash that produces spatially-uncorrelated (fragmented) results.
+constant float2 kNoise[16] = {
+    float2( 0.9239f,  0.3827f), float2(-0.3827f,  0.9239f),
+    float2(-0.9239f, -0.3827f), float2( 0.3827f, -0.9239f),
+    float2( 0.7071f,  0.7071f), float2(-0.7071f,  0.7071f),
+    float2(-0.7071f, -0.7071f), float2( 0.7071f, -0.7071f),
+    float2( 1.0000f,  0.0000f), float2( 0.0000f,  1.0000f),
+    float2(-1.0000f,  0.0000f), float2( 0.0000f, -1.0000f),
+    float2( 0.3827f,  0.9239f), float2(-0.9239f,  0.3827f),
+    float2(-0.3827f, -0.9239f), float2( 0.9239f, -0.3827f)
+};
 
 static inline float3 viewPosFromDepth(float depth, float2 ndc, constant float4x4& invProj) {
     float4 clipPos = float4(ndc.x, ndc.y, depth, 1.0f);
@@ -359,7 +367,7 @@ kernel void ssaoCompute(
     float3 normal = normalize(cross(posD - origin, posR - origin));
     if (normal.z > 0.0f) normal = -normal;
 
-    float2 rvec      = hashCoord(gid);
+    float2 rvec      = kNoise[(gid.x % 4u) + (gid.y % 4u) * 4u];
     float3 randVec   = normalize(float3(rvec.x, rvec.y, 0.0f));
     float3 tangent   = normalize(randVec - normal * dot(randVec, normal));
     float3 bitangent = cross(normal, tangent);
@@ -415,10 +423,14 @@ kernel void ssaoBlurAndComposite(
 
     if (centerDepth <= 0.001f) { targetTex.write(color, gid); return; }
 
+    // 5×5 depth-aware Gaussian bilateral blur (sigma = 1.5).
+    // Gaussian weights smooth the 4×4 tiled noise cleanly; the depth edge
+    // check prevents AO from bleeding across object/floor boundaries.
     float aoSum     = 0.0f;
     float weightSum = 0.0f;
-    const int   R              = 1;      // 3x3 kernel — avoids bleeding AO onto surrounding floor
-    const float kDepthThresh   = 0.003f; // tight edge preservation — no cross-surface blur
+    const int   R            = 2;       // 5×5 footprint
+    const float kDepthThresh = 0.005f;  // slightly looser to accommodate 4×4 noise tile footprint
+    const float kSigma2      = 4.5f;    // 2 × sigma², sigma = 1.5
 
     for (int dy = -R; dy <= R; ++dy) {
         for (int dx = -R; dx <= R; ++dx) {
@@ -428,20 +440,20 @@ kernel void ssaoBlurAndComposite(
             uint2 nc = uint2(sx, sy);
             float nd = depthTex.read(nc).r;
             if (abs(centerDepth - nd) > kDepthThresh) continue;
-            aoSum     += ssaoTex.read(nc).r;
-            weightSum += 1.0f;
+            float gw  = exp(-float(dx*dx + dy*dy) / kSigma2);
+            aoSum     += ssaoTex.read(nc).r * gw;
+            weightSum += gw;
         }
     }
 
     float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
 
-    // Contrast remap: smoothstep compresses midtones toward 1.0 (bright)
-    // and crushes the dark end, so crevices/edges get noticeably darker
-    // while open flat surfaces are barely affected.
-    ao = smoothstep(0.0f, 1.0f, ao);      // soften the very-dark end
-    ao = mix(ao, ao * ao, 0.4f);          // slight gamma crush on dark zones only
+    // Minimum AO floor: even fully-occluded crevices retain 25% ambient light,
+    // matching Filament's minAmbientOcclusion default. Open surfaces (ao≈1) are unchanged.
+    const float kMinAO = 0.25f;
+    ao = ao * (1.0f - kMinAO) + kMinAO;
 
-    // Multiply AO into RGB, preserve alpha
+    // Multiply blurred, floor-lifted AO into RGB, preserve alpha
     targetTex.write(float4(color.rgb * ao, color.a), gid);
 }
 """#

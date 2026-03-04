@@ -389,11 +389,11 @@ extension IosARViewRealityKit {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
             arView.environment.lighting.resource = resource
-            // intensityExponent uses a 2^n scale; 1.0 = 2^1 = balanced IBL illumination.
-            // Crevice darkening is now handled by the Metal SSAO post-process (SSAO.metal).
-            arView.environment.lighting.intensityExponent = 1.0
+            // intensityExponent uses a 2^n scale; 0.5 = 2^0.5 = 1.41× baseline — a gentle
+            // IBL lift without over-brightening. SSAO handles crevice darkening.
+            arView.environment.lighting.intensityExponent = 0.5
             
-            print("✅ HDR IBL loaded (intensityExponent: 1.0 — SSAO handles crevice darkening)")
+            print("✅ HDR IBL loaded (intensityExponent: 0.5 — gentle ambient, SSAO darkens crevices)")
         } catch {
             print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -411,8 +411,8 @@ extension IosARViewRealityKit {
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 1.0
-                        print("✅ HDR IBL loaded async (intensityExponent: 1.0 — SSAO handles crevice darkening)")
+                        self.arView.environment.lighting.intensityExponent = 0.5
+                        print("✅ HDR IBL loaded async (intensityExponent: 0.5 — gentle ambient, SSAO darkens crevices)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -437,7 +437,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.0)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 0.5)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -495,8 +495,8 @@ extension IosARViewRealityKit {
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 500  // Balanced key light; SSAO darkens contacts
-        directionalLightEntity.light.isRealWorldProxy = false
+        directionalLightEntity.light.intensity = 200  // ARKit estimation drives the main fill; this is just key top-up
+        directionalLightEntity.light.isRealWorldProxy = true  // tracks real-world estimated light direction
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
             maximumDistance: 10,
             depthBias: 0.5
@@ -509,15 +509,15 @@ extension IosARViewRealityKit {
         fillLightEntity.name = "__fill_light__"
         fillLightEntity.position = SIMD3<Float>(0, 3, 0)
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 100  // gentle — 100 lm
+        fillLightEntity.light.intensity = 150  // slightly stronger to compensate for lower IBL exponent
         fillLightEntity.light.attenuationRadius = 15
         lightAnchor.addChild(fillLightEntity)
 
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (500 lux) with shadow casting")
-        print("   ✓ Fill light (100 lm point light) to lift dark sides")
-        print("   ✓ IBL intensityExponent 1.0 — balanced ambient")
-        print("   ✓ SSAO post-process handles crevice darkening (iOS 15+)")
+        print("   ✓ Directional light (200 lux, isRealWorldProxy=true — tracks scene lighting)")
+        print("   ✓ Fill light (150 lm point light) to lift dark sides")
+        print("   ✓ IBL intensityExponent 0.5 — gentle ambient (1.41× baseline)")
+        print("   ✓ SSAO post-process with 5×5 Gaussian blur + floor lift (iOS 15+)")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.
