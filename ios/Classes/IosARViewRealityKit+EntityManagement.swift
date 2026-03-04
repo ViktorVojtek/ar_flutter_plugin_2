@@ -63,34 +63,56 @@ extension IosARViewRealityKit {
                         // PBR QUALITY CHECKS (match Android Filament quality)
                         // =====================================================
                         
-                        // Check roughness — if fully rough (1.0) with no texture, the model
-                        // will look completely matte with no specular highlights.
-                        // Android Filament preserves roughness accurately from the glTF model.
-                        // After GLB→USDZ conversion, roughness may reset to 1.0.
+                        // ---- Roughness ----
+                        // If roughness defaulted to 1.0 with no texture it was likely lost in
+                        // GLB→USDZ conversion (SCNScene.write() does not always preserve it).
+                        // 0.7 gives a natural semi-matte look without eliminating specular entirely.
                         if pbrMaterial.roughness.texture == nil {
-                            // Extract current roughness scalar value
                             let currentRoughness = pbrMaterial.roughness.scale
                             if currentRoughness >= 0.99 {
-                                // Roughness at max probably means it was lost in conversion.
-                                // Use 0.75 for a natural matte look that avoids rubber-like shine.
-                                // Android Filament typically preserves the original glTF roughness;
-                                // if the conversion lost it, err on the rougher (more matte) side.
-                                pbrMaterial.roughness = .init(scale: 0.75)
-                                print("🔧 Roughness corrected: 1.0 → 0.75 (likely lost in GLB→USDZ conversion)")
+                                pbrMaterial.roughness = .init(scale: 0.7)
+                                print("🔧 Roughness corrected: 1.0 → 0.7 (likely lost in GLB→USDZ conversion)")
                             }
                         }
-                        
-                        // Specular: Only give a subtle boost if specular is near zero.
-                        // Over-boosting specular causes a shiny/rubber appearance.
-                        // Android Filament uses physically-correct specular from the glTF;
-                        // we only nudge materials that lost specular entirely in conversion.
+
+                        // ---- Metallic ----
+                        // Metal value is frequently dropped to 0 after USDZ export.
+                        // We can't recover the original value but a mid-range (0.0) dielectric
+                        // default is physically correct for most non-metal products.
+                        // Only log when it's suspiciously zero alongside a roughness that also
+                        // reset — that pattern indicates a full PBR property loss.
+                        if pbrMaterial.metallic.texture == nil {
+                            let currentMetallic = pbrMaterial.metallic.scale
+                            // Leave metallic as-is; just ensure it's not negative (NaN from conversion)
+                            if currentMetallic.isNaN || currentMetallic < 0 {
+                                pbrMaterial.metallic = .init(scale: 0.0)
+                                print("🔧 Metallic NaN/negative fixed → 0.0")
+                            }
+                        }
+
+                        // ---- Specular ----
+                        // Nudge only if entirely missing; over-boosting causes a rubber look.
                         if pbrMaterial.specular.texture == nil {
                             let currentSpecular = pbrMaterial.specular.scale
                             if currentSpecular < 0.01 {
                                 pbrMaterial.specular = .init(scale: 0.2)
                             }
                         }
-                        
+
+                        // ---- Clearcoat (iOS 15+) ----
+                        // Add a subtle clearcoat layer for non-metallic, non-transparent materials.
+                        // This gives plastics and painted surfaces a realistic thin-film specular
+                        // highlight that matches Android Filament's second specular lobe.
+                        // Only apply when metallic is low (dielectric) and the surface has a
+                        // texture (actual product geometry, not a flat colour placeholder).
+                        let isOpaque = alpha >= 0.99 && pbrMaterial.opacityThreshold == nil
+                        let isDielectric = pbrMaterial.metallic.scale < 0.3
+                        let hasBaseTexture = pbrMaterial.baseColor.texture != nil
+                        if isOpaque && isDielectric && hasBaseTexture {
+                            pbrMaterial.clearcoat = .init(scale: 0.15)
+                            pbrMaterial.clearcoatRoughness = .init(scale: 0.25)
+                        }
+
                         newMaterials.append(pbrMaterial)
                         materialsModified = true
                     } else {

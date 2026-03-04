@@ -186,9 +186,9 @@ extension IosARViewRealityKit {
         // --- Build SSAOScalarParams ---
         var scalarParams = SSAOScalarParams(
             screenSize: SIMD2<Float>(Float(W), Float(H)),
-            radius:      0.05,   // 5 cm — tuned for product-scale AR models
-            bias:        0.005,  // prevents surface self-occlusion
-            intensity:   1.5,    // power applied to the final AO value
+            radius:      0.035,   // 6 cm — large enough to catch where model planes meet
+            bias:        0.008,  // 10 mm — prevents flat-surface self-occlusion while catching edges
+            intensity:   1.25,    // >1.0 crushes occluded areas dark; open surfaces remain bright
             sampleCount: 32,
             pad:         .zero
         )
@@ -417,8 +417,8 @@ kernel void ssaoBlurAndComposite(
 
     float aoSum     = 0.0f;
     float weightSum = 0.0f;
-    const int   R              = 2;
-    const float kDepthThresh   = 0.008f;
+    const int   R              = 1;      // 3x3 kernel — avoids bleeding AO onto surrounding floor
+    const float kDepthThresh   = 0.003f; // tight edge preservation — no cross-surface blur
 
     for (int dy = -R; dy <= R; ++dy) {
         for (int dx = -R; dx <= R; ++dx) {
@@ -434,6 +434,14 @@ kernel void ssaoBlurAndComposite(
     }
 
     float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
+
+    // Contrast remap: smoothstep compresses midtones toward 1.0 (bright)
+    // and crushes the dark end, so crevices/edges get noticeably darker
+    // while open flat surfaces are barely affected.
+    ao = smoothstep(0.0f, 1.0f, ao);      // soften the very-dark end
+    ao = mix(ao, ao * ao, 0.4f);          // slight gamma crush on dark zones only
+
+    // Multiply AO into RGB, preserve alpha
     targetTex.write(float4(color.rgb * ao, color.a), gid);
 }
 """#
