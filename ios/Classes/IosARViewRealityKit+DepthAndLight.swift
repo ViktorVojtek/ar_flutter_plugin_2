@@ -389,12 +389,12 @@ extension IosARViewRealityKit {
             let resource = try EnvironmentResource.load(named: "pdp-model-viewer", in: pluginBundle)
             
             arView.environment.lighting.resource = resource
-            // intensityExponent uses a 2^n scale; 1.5 = 2^1.5 = 2.83× baseline.
-            // ACES tone mapping in the post-process compresses highlights gracefully,
-            // so we can push IBL higher for richer specular/metallic response.
-            arView.environment.lighting.intensityExponent = 1.5
+            // intensityExponent uses a 2^n scale; 2.0 = 2^2 = 4× baseline.
+            // Raised from 1.5 → 2.0 to match Filament's default skybox probe output
+            // (richer specular reflections, brighter ambient on metallic surfaces).
+            arView.environment.lighting.intensityExponent = 2.0
             
-            print("✅ HDR IBL loaded (intensityExponent: 1.5 — ACES tone mapping compresses highlights)")
+            print("✅ HDR IBL loaded (intensityExponent: 2.0 — 4× baseline, matches Filament probe)")
         } catch {
             print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
             print("💡 Trying async load...")
@@ -412,8 +412,8 @@ extension IosARViewRealityKit {
                     receiveValue: { [weak self] environmentResource in
                         guard let self = self else { return }
                         self.arView.environment.lighting.resource = environmentResource
-                        self.arView.environment.lighting.intensityExponent = 1.5
-                        print("✅ HDR IBL loaded async (intensityExponent: 1.5 — ACES tone mapping compresses highlights)")
+                        self.arView.environment.lighting.intensityExponent = 2.0
+                        print("✅ HDR IBL loaded async (intensityExponent: 2.0 — 4× baseline, matches Filament probe)")
                     }
                 )
                 .store(in: &cancellableCollection)
@@ -438,7 +438,7 @@ extension IosARViewRealityKit {
                 iblEntity.name = "__enhanced_ibl__"
                 
                 // Apply ImageBasedLightComponent with the HDR resource
-                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 1.5)
+                let iblComponent = ImageBasedLightComponent(source: .single(resource), intensityExponent: 2.0)
                 iblEntity.components.set(iblComponent)
                 
                 // Create an anchor for the IBL entity (or reuse existing light anchor)
@@ -496,11 +496,11 @@ extension IosARViewRealityKit {
         directionalLightEntity.position = SIMD3<Float>(0, 5, 0)
         directionalLightEntity.look(at: SIMD3<Float>(0, 0, 0), from: SIMD3<Float>(0, 5, 2), relativeTo: nil)
         directionalLightEntity.light.color = .white
-        directionalLightEntity.light.intensity = 100  // subtle key top-up; IBL + accent lights now carry the load
+        directionalLightEntity.light.intensity = 150  // lux — raised for crisper highlights + shadow edges
         directionalLightEntity.light.isRealWorldProxy = true  // tracks real-world estimated light direction
         directionalLightEntity.shadow = DirectionalLightComponent.Shadow(
-            maximumDistance: 10,
-            depthBias: 0.5
+            maximumDistance: 3.0,   // reduced range → more shadow-map resolution near the model
+            depthBias: 0.25         // tighter bias → shadow attaches closer to geometry
         )
         lightAnchor.addChild(directionalLightEntity)
 

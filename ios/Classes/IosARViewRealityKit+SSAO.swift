@@ -76,6 +76,11 @@ extension IosARViewRealityKit {
         ssaoBlurCompositePipeline = nil
         ssaoTexture = nil
         ssaoSampleKernel = []
+        bloomExtractPipeline = nil
+        bloomBlurHPipeline   = nil
+        bloomBlurVPipeline   = nil
+        bloomHalfTex1 = nil
+        bloomHalfTex2 = nil
         print("🧹 SSAO: pipelines and callbacks cleared")
     }
 
@@ -109,6 +114,28 @@ extension IosARViewRealityKit {
             ssaoComputePipeline = nil
             ssaoBlurCompositePipeline = nil
             print("❌ SSAO: pipeline creation failed: \(error.localizedDescription)")
+        }
+
+        // --- Bloom pipelines ---
+        for name in ["bloomExtract", "bloomBlurH", "bloomBlurV"] {
+            guard let fn = library.makeFunction(name: name) else {
+                print("❌ Bloom: '\(name)' not found in Metal library")
+                continue
+            }
+            do {
+                let ps = try device.makeComputePipelineState(function: fn)
+                switch name {
+                case "bloomExtract": bloomExtractPipeline = ps
+                case "bloomBlurH":   bloomBlurHPipeline   = ps
+                case "bloomBlurV":   bloomBlurVPipeline   = ps
+                default: break
+                }
+            } catch {
+                print("❌ Bloom: pipeline '\(name)' failed: \(error.localizedDescription)")
+            }
+        }
+        if bloomExtractPipeline != nil && bloomBlurHPipeline != nil && bloomBlurVPipeline != nil {
+            print("✅ Bloom: all three compute pipelines created")
         }
     }
 
@@ -183,6 +210,22 @@ extension IosARViewRealityKit {
         }
         guard let ssaoTex = ssaoTexture else { return }
 
+        // --- Lazily create/recreate half-res bloom ping-pong textures ---
+        let bW = max(W / 2, 1)
+        let bH = max(H / 2, 1)
+        if bloomHalfTex1 == nil || bloomHalfTex1!.width != bW || bloomHalfTex1!.height != bH {
+            let device = cmdBuf.device
+            let bd = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: colorTex.pixelFormat,
+                width: bW, height: bH, mipmapped: false
+            )
+            bd.usage = [.shaderRead, .shaderWrite]
+            bd.storageMode = .private
+            bloomHalfTex1 = device.makeTexture(descriptor: bd)
+            bloomHalfTex2 = device.makeTexture(descriptor: bd)
+        }
+        let bloomFinalTex: MTLTexture? = bloomHalfTex1  // final blurred bloom (may be nil if alloc failed)
+
         // --- Build SSAOScalarParams ---
         var scalarParams = SSAOScalarParams(
             screenSize: SIMD2<Float>(Float(W), Float(H)),
@@ -224,16 +267,55 @@ extension IosARViewRealityKit {
         }
 
         // ---------------------------------------------------------------
-        // Pass 2 — ssaoBlurAndComposite: ssaoTex + colorTex → targetTex
+        // Pass 2a-c — Bloom: colorTex → bloomHalfTex1 (extract) → bloomHalfTex2 (blurH) → bloomHalfTex1 (blurV)
+        // ---------------------------------------------------------------
+        let bloomGridSize = MTLSize(width: bW, height: bH, depth: 1)
+        if let ep = bloomExtractPipeline, let bh = bloomBlurHPipeline, let bv = bloomBlurVPipeline,
+           let bt1 = bloomHalfTex1, let bt2 = bloomHalfTex2 {
+
+            // Extract bright pixels at half resolution
+            if let encoder = cmdBuf.makeComputeCommandEncoder() {
+                encoder.label = "Bloom_Extract"
+                encoder.setComputePipelineState(ep)
+                encoder.setTexture(colorTex, index: 0)
+                encoder.setTexture(bt1,      index: 1)
+                encoder.dispatchThreads(bloomGridSize, threadsPerThreadgroup: threadGroupSize)
+                encoder.endEncoding()
+            }
+
+            // Horizontal Gaussian blur (bt1 → bt2)
+            if let encoder = cmdBuf.makeComputeCommandEncoder() {
+                encoder.label = "Bloom_BlurH"
+                encoder.setComputePipelineState(bh)
+                encoder.setTexture(bt1, index: 0)
+                encoder.setTexture(bt2, index: 1)
+                encoder.dispatchThreads(bloomGridSize, threadsPerThreadgroup: threadGroupSize)
+                encoder.endEncoding()
+            }
+
+            // Vertical Gaussian blur (bt2 → bt1): final bloom in bt1
+            if let encoder = cmdBuf.makeComputeCommandEncoder() {
+                encoder.label = "Bloom_BlurV"
+                encoder.setComputePipelineState(bv)
+                encoder.setTexture(bt2, index: 0)
+                encoder.setTexture(bt1, index: 1)
+                encoder.dispatchThreads(bloomGridSize, threadsPerThreadgroup: threadGroupSize)
+                encoder.endEncoding()
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Pass 2 — ssaoBlurAndComposite: ssaoTex + colorTex + bloomTex → targetTex
         // ---------------------------------------------------------------
         if let encoder = cmdBuf.makeComputeCommandEncoder() {
             encoder.label = "SSAO_Blur_Composite"
             encoder.setComputePipelineState(blurPipeline)
 
-            encoder.setTexture(ssaoTex,   index: 0)
-            encoder.setTexture(colorTex,  index: 1)
-            encoder.setTexture(targetTex, index: 2)
-            encoder.setTexture(depthTex,  index: 3)
+            encoder.setTexture(ssaoTex,      index: 0)
+            encoder.setTexture(colorTex,     index: 1)
+            encoder.setTexture(targetTex,    index: 2)
+            encoder.setTexture(depthTex,     index: 3)
+            encoder.setTexture(bloomFinalTex ?? bloomHalfTex1, index: 4)  // nil-safe: kernel clamps to 0 if black
 
             encoder.dispatchThreads(threadGridSize, threadsPerThreadgroup: threadGroupSize)
             encoder.endEncoding()
@@ -439,6 +521,7 @@ kernel void ssaoBlurAndComposite(
     texture2d<float, access::read>  colorTex  [[ texture(1) ]],
     texture2d<float, access::write> targetTex [[ texture(2) ]],
     texture2d<float, access::read>  depthTex  [[ texture(3) ]],
+    texture2d<float, access::read>  bloomTex  [[ texture(4) ]],
     uint2                           gid       [[ thread_position_in_grid ]])
 {
     uint W = colorTex.get_width();
@@ -480,14 +563,27 @@ kernel void ssaoBlurAndComposite(
         color.rgb *= ao;
 
         // --- Colour-neutral contrast lift for virtual pixels ---
-        // A simple luminance gamma (pow 0.88) lifts midtone contrast without ANY
-        // hue shift. ACES was discarded because its Narkowicz coefficients introduce
-        // a warm bias that tints white/grey surfaces beige/brown.
-        // This scales RGB by newLuma/luma — hue is mathematically unchanged.
+        // pow(luma, 0.88) scales all channels proportionally → zero hue shift.
         float luma = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
         if (luma > 0.001f) {
             color.rgb *= pow(luma, 0.88f) / luma;
         }
+
+        // --- Saturation boost ---
+        // mix(achromatic, colour, kSatBoost): kSatBoost > 1.0 expands chroma away
+        // from grey in a hue-preserving way. 1.25 = +25% chroma → matches the
+        // vivid appearance of Android Filament without clipping neutral greys.
+        const float kSatBoost = 1.25f;
+        float newLuma = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+        color.rgb = clamp(mix(float3(newLuma), color.rgb, kSatBoost), 0.0f, 1.0f);
+
+        // --- Bloom additive composite ---
+        // bloomTex is half-res; read nearest-neighbor at gid/2.
+        // kBloomStrength = 0.18 matches Filament's default bloom(strength: 0.1)
+        // feel when combined with the half-res downsample + 2-pass Gaussian blur.
+        const float kBloomStrength = 0.18f;
+        float4 bloom = bloomTex.read(gid / 2);
+        color.rgb = min(color.rgb + bloom.rgb * kBloomStrength, 1.0f);
     } else {
         // Camera passthrough: 30% ACES blend adds just enough contrast to
         // prevent a brightness seam, without over-processing the sRGB camera feed.
@@ -495,5 +591,81 @@ kernel void ssaoBlurAndComposite(
     }
 
     targetTex.write(color, gid);
+}
+
+// =============================================================================
+// Bloom kernels (Filament-style Gaussian bloom)
+// =============================================================================
+
+/// bloomExtract — half-resolution bright-pass filter.
+/// Averages a 2×2 box from full-res colour into the half-res bloom texture,
+/// then keeps only pixels above kBloomThreshold (smooth knee to avoid a hard cut).
+kernel void bloomExtract(
+    texture2d<float, access::read>  colorTex  [[ texture(0) ]],
+    texture2d<float, access::write> bloomTex  [[ texture(1) ]],
+    uint2                           gid       [[ thread_position_in_grid ]])
+{
+    uint bW = bloomTex.get_width();
+    uint bH = bloomTex.get_height();
+    if (gid.x >= bW || gid.y >= bH) return;
+
+    // 2×2 box downsample
+    uint cW = colorTex.get_width();
+    uint cH = colorTex.get_height();
+    uint2 src = gid * 2;
+    float4 c00 = colorTex.read(uint2(min(src.x,   cW-1), min(src.y,   cH-1)));
+    float4 c10 = colorTex.read(uint2(min(src.x+1, cW-1), min(src.y,   cH-1)));
+    float4 c01 = colorTex.read(uint2(min(src.x,   cW-1), min(src.y+1, cH-1)));
+    float4 c11 = colorTex.read(uint2(min(src.x+1, cW-1), min(src.y+1, cH-1)));
+    float4 avg = (c00 + c10 + c01 + c11) * 0.25f;
+
+    // Threshold with smooth knee — same curve Filament uses.
+    const float kThreshold = 0.75f;
+    const float kKnee      = 0.05f;
+    float luma       = dot(avg.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+    float brightness = max(luma - kThreshold, 0.0f);
+    float knee       = smoothstep(0.0f, kKnee, brightness);
+    bloomTex.write(float4(avg.rgb * knee, avg.a), gid);
+}
+
+/// bloomBlurH — horizontal 9-tap Gaussian (σ=2.0) on the half-res bloom texture.
+kernel void bloomBlurH(
+    texture2d<float, access::read>  srcTex  [[ texture(0) ]],
+    texture2d<float, access::write> dstTex  [[ texture(1) ]],
+    uint2                           gid     [[ thread_position_in_grid ]])
+{
+    uint W = srcTex.get_width();
+    uint H = srcTex.get_height();
+    if (gid.x >= W || gid.y >= H) return;
+
+    // Gaussian weights normalised for σ=2.0, radius 4
+    const float kW[5] = { 0.20417f, 0.18010f, 0.12378f, 0.06627f, 0.02763f };
+    float4 col = srcTex.read(gid) * kW[0];
+    for (int i = 1; i <= 4; ++i) {
+        uint2 s0 = uint2(uint(clamp(int(gid.x)-i, 0, int(W)-1)), gid.y);
+        uint2 s1 = uint2(uint(clamp(int(gid.x)+i, 0, int(W)-1)), gid.y);
+        col += (srcTex.read(s0) + srcTex.read(s1)) * kW[i];
+    }
+    dstTex.write(col, gid);
+}
+
+/// bloomBlurV — vertical 9-tap Gaussian (σ=2.0). Ping-pongs back to bloomHalfTex1.
+kernel void bloomBlurV(
+    texture2d<float, access::read>  srcTex  [[ texture(0) ]],
+    texture2d<float, access::write> dstTex  [[ texture(1) ]],
+    uint2                           gid     [[ thread_position_in_grid ]])
+{
+    uint W = srcTex.get_width();
+    uint H = srcTex.get_height();
+    if (gid.x >= W || gid.y >= H) return;
+
+    const float kW[5] = { 0.20417f, 0.18010f, 0.12378f, 0.06627f, 0.02763f };
+    float4 col = srcTex.read(gid) * kW[0];
+    for (int i = 1; i <= 4; ++i) {
+        uint2 s0 = uint2(gid.x, uint(clamp(int(gid.y)-i, 0, int(H)-1)));
+        uint2 s1 = uint2(gid.x, uint(clamp(int(gid.y)+i, 0, int(H)-1)));
+        col += (srcTex.read(s0) + srcTex.read(s1)) * kW[i];
+    }
+    dstTex.write(col, gid);
 }
 """#

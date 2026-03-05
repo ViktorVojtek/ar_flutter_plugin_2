@@ -113,6 +113,31 @@ extension IosARViewRealityKit {
                             pbrMaterial.clearcoatRoughness = .init(scale: 0.25)
                         }
 
+                        // ---- baseColor vibrancy boost (tint-only, opaque surfaces) ----
+                        // Filament renders tint-colour surfaces ~15% more vivid than
+                        // RealityKit's conservative PBR default. Boost only when no
+                        // texture drives the colour (texture pixels are unaffected).
+                        if pbrMaterial.baseColor.texture == nil && isOpaque {
+                            var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 1
+                            pbrMaterial.baseColor.tint.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+                            let boost: CGFloat = 1.15
+                            pbrMaterial.baseColor.tint = UIColor(
+                                red:   min(r2 * boost, 1.0),
+                                green: min(g2 * boost, 1.0),
+                                blue:  min(b2 * boost, 1.0),
+                                alpha: a2
+                            )
+                        }
+
+                        // ---- Emissive micro-glow ----
+                        // A 0.06 emissiveIntensity adds subtle self-luminance that prevents
+                        // the "dead matte" look on opaque dielectric surfaces. This mirrors
+                        // Filament's implicit HDR over-exposure of bright lit areas without
+                        // adding visible glow halos at normal viewing distances.
+                        if isOpaque && pbrMaterial.emissiveIntensity < 0.01 {
+                            pbrMaterial.emissiveIntensity = 0.06
+                        }
+
                         newMaterials.append(pbrMaterial)
                         materialsModified = true
                     } else {

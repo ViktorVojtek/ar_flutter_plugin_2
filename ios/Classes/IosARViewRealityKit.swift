@@ -63,6 +63,13 @@ class IosARViewRealityKit: NSObject, FlutterPlatformView, ARSessionDelegate {
     var ssaoTexture: MTLTexture?
     var ssaoSampleKernel: [SIMD4<Float>] = []
 
+    // Bloom pipeline states + ping-pong half-resolution textures
+    var bloomExtractPipeline: MTLComputePipelineState?
+    var bloomBlurHPipeline:   MTLComputePipelineState?
+    var bloomBlurVPipeline:   MTLComputePipelineState?
+    var bloomHalfTex1: MTLTexture?   // extract result / final blurred bloom
+    var bloomHalfTex2: MTLTexture?   // horizontal-blur scratch
+
     // Configurable gesture settings (set at init time only)
     var debugGesturesEnabled = false  // Enable verbose gesture logging for development
     var maxPanDistanceMeters: Float = 5.0  // Maximum distance from camera for pan gestures (default 5m)
