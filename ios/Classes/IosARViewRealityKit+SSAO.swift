@@ -448,13 +448,7 @@ kernel void ssaoBlurAndComposite(
     float4 color       = colorTex.read(gid);
     float  centerDepth = depthTex.read(gid).r;
 
-    // ACESBlend drives tone mapping below:
-    //   1.0 = full ACES + desat     → lit model surfaces
-    //   0.3 = gentle 30% ACES blend → camera feed OR flat unoccluded virtual floor
-    // Starting at 0.3 (camera default); virtualpixels may raise it.
-    float acesBlend = 0.3f;
-
-    // --- AO: only for pixels that have virtual geometry depth ---
+    // --- AO + contrast lift: only for pixels with virtual geometry depth ---
     if (centerDepth > 0.001f) {
         // 7×7 depth-aware Gaussian bilateral blur (sigma = 2.0).
         float aoSum     = 0.0f;
@@ -479,28 +473,27 @@ kernel void ssaoBlurAndComposite(
 
         float ao_raw = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
 
-        // Model pixels are occluded (ao_raw < ~0.7) → acesBlend → 1.0 (full).
-        // Flat unoccluded virtual surfaces like the ground plane (ao_raw ≈ 1.0)
-        // get the same gentle 0.3 blend as camera pixels so there is no visible
-        // brightness seam at the virtual/real floor boundary.
-        acesBlend = mix(1.0f, 0.3f, smoothstep(0.7f, 0.95f, ao_raw));
-
-        // Apply AO floor and multiply into colour
-        const float kMinAO = 0.15f;
+        // Raise floor to 0.22: contacts/crevices stay shadowed but flat lit surfaces
+        // are barely affected, reducing SSAO visibility on bright materials.
+        const float kMinAO = 0.22f;
         float ao = ao_raw * (1.0f - kMinAO) + kMinAO;
         color.rgb *= ao;
+
+        // --- Colour-neutral contrast lift for virtual pixels ---
+        // A simple luminance gamma (pow 0.88) lifts midtone contrast without ANY
+        // hue shift. ACES was discarded because its Narkowicz coefficients introduce
+        // a warm bias that tints white/grey surfaces beige/brown.
+        // This scales RGB by newLuma/luma — hue is mathematically unchanged.
+        float luma = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+        if (luma > 0.001f) {
+            color.rgb *= pow(luma, 0.88f) / luma;
+        }
+    } else {
+        // Camera passthrough: 30% ACES blend adds just enough contrast to
+        // prevent a brightness seam, without over-processing the sRGB camera feed.
+        color.rgb = mix(color.rgb, ACESFilm(color.rgb), 0.3f);
     }
 
-    // --- Tone mapping ---
-    // acesBlend near 1.0: full ACES + 7% desaturation (removes Narkowicz warm bias on models)
-    // acesBlend near 0.3: gentle blend (camera feed and virtual floor — keeps them matched)
-    float3 acesToned = ACESFilm(color.rgb);
-    if (acesBlend > 0.35f) {
-        // Model surface: desaturate slightly to stay colour-neutral
-        float luma = dot(acesToned, float3(0.2126f, 0.7152f, 0.0722f));
-        acesToned = mix(float3(luma), acesToned, 0.93f);
-    }
-    color.rgb = mix(color.rgb, acesToned, acesBlend);
     targetTex.write(color, gid);
 }
 """#
