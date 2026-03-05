@@ -482,12 +482,23 @@ kernel void ssaoBlurAndComposite(
         color.rgb *= ao;
     }
 
-    // Apply ACES filmic tone mapping to ALL pixels uniformly — both virtual
-    // objects and camera passthrough. This prevents the visible brightness seam
-    // at the depth boundary where the virtual ground plane meets the real floor.
-    // Camera feed in RealityKit’s linear pipeline benefits from the subtle
-    // contrast enhancement, matching Filament’s global ACES on Android.
-    color.rgb = ACESFilm(color.rgb);
+    // --- Tone mapping ---
+    // Virtual pixels: full ACES + slight desaturation to counter the Narkowicz
+    // curve's warm bias (prevents white surfaces appearing cream/beige).
+    //
+    // Camera passthrough pixels: the feed is already gamma-encoded sRGB from the
+    // sensor, NOT linear HDR. Full ACES over-crushes darks and makes the real world
+    // look hyper-contrasted. Instead, blend 30% toward ACES — enough to eliminate
+    // the brightness seam at the boundary without hammering camera colours.
+    if (centerDepth > 0.001f) {
+        // Virtual: full ACES + 7% desaturation to stay colour-neutral
+        float3 aces = ACESFilm(color.rgb);
+        float luma = dot(aces, float3(0.2126f, 0.7152f, 0.0722f));
+        color.rgb = mix(float3(luma), aces, 0.93f);
+    } else {
+        // Camera: 30% blend toward ACES — seam-free, real world stays natural
+        color.rgb = mix(color.rgb, ACESFilm(color.rgb), 0.3f);
+    }
     targetTex.write(color, gid);
 }
 """#

@@ -533,8 +533,8 @@ extension IosARViewRealityKit {
         keyLight.name = "__accent_key__"
         keyLight.position = SIMD3<Float>(-0.5, 0.8, 0.3)
         keyLight.look(at: SIMD3<Float>(0, 0.3, 0), from: keyLight.position, relativeTo: anchorEntity)
-        keyLight.light.color = UIColor(red: 1.0, green: 0.95, blue: 0.88, alpha: 1.0)  // warm ~3500K
-        keyLight.light.intensity = 200  // lumens
+        keyLight.light.color = UIColor(red: 1.0, green: 0.96, blue: 0.94, alpha: 1.0)  // near-neutral ~5500K — avoids warm cast on white/light surfaces
+        keyLight.light.intensity = 150  // lumens — reduced to prevent beige tint on white objects
         keyLight.light.innerAngleInDegrees = 30   // full-intensity cone
         keyLight.light.outerAngleInDegrees = 60   // soft falloff edge
         keyLight.light.attenuationRadius = 3.0
@@ -546,7 +546,7 @@ extension IosARViewRealityKit {
         rimLight.position = SIMD3<Float>(0.5, 0.6, -0.4)
         rimLight.look(at: SIMD3<Float>(0, 0.3, 0), from: rimLight.position, relativeTo: anchorEntity)
         rimLight.light.color = UIColor(red: 0.88, green: 0.93, blue: 1.0, alpha: 1.0)  // cool ~6500K
-        rimLight.light.intensity = 120  // lumens
+        rimLight.light.intensity = 80   // lumens — reduced to prevent blue-grey cast on neutral surfaces
         rimLight.light.innerAngleInDegrees = 25
         rimLight.light.outerAngleInDegrees = 55
         rimLight.light.attenuationRadius = 3.0
