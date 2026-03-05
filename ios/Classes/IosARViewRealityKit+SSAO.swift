@@ -562,28 +562,36 @@ kernel void ssaoBlurAndComposite(
         float ao = ao_raw * (1.0f - kMinAO) + kMinAO;
         color.rgb *= ao;
 
+        // ---- Model-surface gate ----
+        // ao_raw ≈ 1.0  → virtual ground plane (depth > 0.001 but no model above it)
+        // ao_raw < 0.92 → actual model surface (geometry with self-occlusion neighbours)
+        //
+        // We apply contrast/saturation/bloom ONLY to model surfaces.
+        // Ground-plane virtual pixels get the same 30% ACES as camera pixels so
+        // there is no visible seam regardless of scene brightness.
+        float surfaceWeight = 1.0f - smoothstep(0.88f, 0.96f, ao_raw);
+
         // --- Colour-neutral contrast lift for virtual pixels ---
-        // pow(luma, 0.88) scales all channels proportionally → zero hue shift.
         float luma = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
         if (luma > 0.001f) {
-            color.rgb *= pow(luma, 0.88f) / luma;
+            float scale = pow(luma, 0.88f) / luma;
+            color.rgb = mix(color.rgb, color.rgb * scale, surfaceWeight);
         }
 
-        // --- Saturation boost ---
-        // mix(achromatic, colour, kSatBoost): kSatBoost > 1.0 expands chroma away
-        // from grey in a hue-preserving way. 1.25 = +25% chroma → matches the
-        // vivid appearance of Android Filament without clipping neutral greys.
+        // --- Saturation boost (model surfaces only) ---
         const float kSatBoost = 1.25f;
         float newLuma = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
-        color.rgb = clamp(mix(float3(newLuma), color.rgb, kSatBoost), 0.0f, 1.0f);
+        float3 saturated = clamp(mix(float3(newLuma), color.rgb, kSatBoost), 0.0f, 1.0f);
+        color.rgb = mix(color.rgb, saturated, surfaceWeight);
 
-        // --- Bloom additive composite ---
-        // bloomTex is half-res; read nearest-neighbor at gid/2.
-        // kBloomStrength = 0.18 matches Filament's default bloom(strength: 0.1)
-        // feel when combined with the half-res downsample + 2-pass Gaussian blur.
+        // --- Camera-grade ACES for ground-plane virtual pixels (makes them match passthrough) ---
+        float3 acesGroundBlend = mix(color.rgb, ACESFilm(color.rgb), 0.3f);
+        color.rgb = mix(acesGroundBlend, color.rgb, surfaceWeight);
+
+        // --- Bloom additive composite (model surfaces only, ao_raw-gated) ---
         const float kBloomStrength = 0.18f;
         float4 bloom = bloomTex.read(gid / 2);
-        color.rgb = min(color.rgb + bloom.rgb * kBloomStrength, 1.0f);
+        color.rgb = min(color.rgb + bloom.rgb * (kBloomStrength * surfaceWeight), 1.0f);
     } else {
         // Camera passthrough: 30% ACES blend adds just enough contrast to
         // prevent a brightness seam, without over-processing the sRGB camera feed.

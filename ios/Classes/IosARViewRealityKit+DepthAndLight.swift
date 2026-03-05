@@ -396,17 +396,26 @@ extension IosARViewRealityKit {
             
             print("✅ HDR IBL loaded (intensityExponent: 2.0 — 4× baseline, matches Filament probe)")
         } catch {
-            print("⚠️ Sync HDR load failed: \(error.localizedDescription)")
+            // Sync HDR failed — boost the ARKit auto-estimated environment immediately
+            // so the scene isn't flat while we wait for the async attempt.
+            arView.environment.lighting.intensityExponent = 2.0
+            print("⚠️ Sync HDR load failed: \(error.localizedDescription) — ARKit auto-env boosted to 2.0")
             print("💡 Trying async load...")
             
             // Async fallback
             EnvironmentResource.loadAsync(named: "pdp-model-viewer", in: pluginBundle)
                 .receive(on: DispatchQueue.main)
                 .sink(
-                    receiveCompletion: { completion in
+                    receiveCompletion: { [weak self] completion in
                         if case .failure(let err) = completion {
                             print("⚠️ Async HDR load also failed: \(err.localizedDescription)")
-                            print("💡 IBL unavailable — scene uses ARKit auto-lighting only")
+                            print("💡 IBL unavailable — using ARKit auto-lighting with boosted intensity")
+                            // Still amplify the ARKit auto-estimated environment so the
+                            // scene doesn't look flat even without a custom HDR file.
+                            DispatchQueue.main.async {
+                                self?.arView.environment.lighting.intensityExponent = 2.0
+                                print("✅ ARKit auto-environment intensityExponent = 2.0")
+                            }
                         }
                     },
                     receiveValue: { [weak self] environmentResource in
@@ -515,11 +524,11 @@ extension IosARViewRealityKit {
         lightAnchor.addChild(fillLightEntity)
 
         print("✅ Enhanced lighting added:")
-        print("   ✓ Directional light (100 lux, isRealWorldProxy=true)")
-        print("   ✓ Fill light (200 lm point light)")
-        print("   ✓ IBL intensityExponent 1.5 — 2.83× baseline (ACES compresses highlights)")
+        print("   ✓ Directional light (150 lux, isRealWorldProxy=true)")
+        print("   ✓ Fill light (80 lm, radius 1.5 m)")
+        print("   ✓ IBL intensityExponent target 2.0 — 4× baseline")
         print("   ✓ Per-model warm key + cool rim accent lights")
-        print("   ✓ SSAO + ACES tone mapping post-process (iOS 15+)")
+        print("   ✓ SSAO + saturation/bloom post-process (iOS 15+)")
     }
     
     /// Add per-model accent lights (warm key + cool rim) as children of the anchor entity.
