@@ -510,8 +510,8 @@ extension IosARViewRealityKit {
         fillLightEntity.name = "__fill_light__"
         fillLightEntity.position = SIMD3<Float>(0, 3, 0)
         fillLightEntity.light.color = .white
-        fillLightEntity.light.intensity = 200  // compensates for directional reduction
-        fillLightEntity.light.attenuationRadius = 15
+        fillLightEntity.light.intensity = 80   // lumens — gentle lift; IBL carries the ambient load
+        fillLightEntity.light.attenuationRadius = 1.5  // tight radius — only reaches the model, not the floor plane
         lightAnchor.addChild(fillLightEntity)
 
         print("✅ Enhanced lighting added:")

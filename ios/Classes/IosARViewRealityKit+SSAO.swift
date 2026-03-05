@@ -448,16 +448,20 @@ kernel void ssaoBlurAndComposite(
     float4 color       = colorTex.read(gid);
     float  centerDepth = depthTex.read(gid).r;
 
+    // ACESBlend drives tone mapping below:
+    //   1.0 = full ACES + desat     → lit model surfaces
+    //   0.3 = gentle 30% ACES blend → camera feed OR flat unoccluded virtual floor
+    // Starting at 0.3 (camera default); virtualpixels may raise it.
+    float acesBlend = 0.3f;
+
     // --- AO: only for pixels that have virtual geometry depth ---
     if (centerDepth > 0.001f) {
         // 7×7 depth-aware Gaussian bilateral blur (sigma = 2.0).
-        // Gaussian weights smooth the 4×4 tiled noise cleanly; the depth edge
-        // check prevents AO from bleeding across object/floor boundaries.
         float aoSum     = 0.0f;
         float weightSum = 0.0f;
-        const int   R            = 3;       // 7×7 footprint — covers >1 full 4×4 tile in all directions
-        const float kDepthThresh = 0.005f;  // depth edge preservation
-        const float kSigma2      = 8.0f;    // 2 × sigma², sigma = 2.0
+        const int   R            = 3;
+        const float kDepthThresh = 0.005f;
+        const float kSigma2      = 8.0f;
 
         for (int dy = -R; dy <= R; ++dy) {
             for (int dx = -R; dx <= R; ++dx) {
@@ -473,32 +477,30 @@ kernel void ssaoBlurAndComposite(
             }
         }
 
-        float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
+        float ao_raw = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
 
-        // Minimum AO floor: 15% ambient retained in fully-occluded crevices.
+        // Model pixels are occluded (ao_raw < ~0.7) → acesBlend → 1.0 (full).
+        // Flat unoccluded virtual surfaces like the ground plane (ao_raw ≈ 1.0)
+        // get the same gentle 0.3 blend as camera pixels so there is no visible
+        // brightness seam at the virtual/real floor boundary.
+        acesBlend = mix(1.0f, 0.3f, smoothstep(0.7f, 0.95f, ao_raw));
+
+        // Apply AO floor and multiply into colour
         const float kMinAO = 0.15f;
-        ao = ao * (1.0f - kMinAO) + kMinAO;
-
+        float ao = ao_raw * (1.0f - kMinAO) + kMinAO;
         color.rgb *= ao;
     }
 
     // --- Tone mapping ---
-    // Virtual pixels: full ACES + slight desaturation to counter the Narkowicz
-    // curve's warm bias (prevents white surfaces appearing cream/beige).
-    //
-    // Camera passthrough pixels: the feed is already gamma-encoded sRGB from the
-    // sensor, NOT linear HDR. Full ACES over-crushes darks and makes the real world
-    // look hyper-contrasted. Instead, blend 30% toward ACES — enough to eliminate
-    // the brightness seam at the boundary without hammering camera colours.
-    if (centerDepth > 0.001f) {
-        // Virtual: full ACES + 7% desaturation to stay colour-neutral
-        float3 aces = ACESFilm(color.rgb);
-        float luma = dot(aces, float3(0.2126f, 0.7152f, 0.0722f));
-        color.rgb = mix(float3(luma), aces, 0.93f);
-    } else {
-        // Camera: 30% blend toward ACES — seam-free, real world stays natural
-        color.rgb = mix(color.rgb, ACESFilm(color.rgb), 0.3f);
+    // acesBlend near 1.0: full ACES + 7% desaturation (removes Narkowicz warm bias on models)
+    // acesBlend near 0.3: gentle blend (camera feed and virtual floor — keeps them matched)
+    float3 acesToned = ACESFilm(color.rgb);
+    if (acesBlend > 0.35f) {
+        // Model surface: desaturate slightly to stay colour-neutral
+        float luma = dot(acesToned, float3(0.2126f, 0.7152f, 0.0722f));
+        acesToned = mix(float3(luma), acesToned, 0.93f);
     }
+    color.rgb = mix(color.rgb, acesToned, acesBlend);
     targetTex.write(color, gid);
 }
 """#
