@@ -526,27 +526,33 @@ extension IosARViewRealityKit {
     /// Creates subtle 3-point lighting depth that matches Filament's ENVIRONMENTAL_HDR
     /// directional + spherical harmonics look.
     func addAccentLightsToAnchor(_ anchorEntity: AnchorEntity) {
-        // Warm key light — above-left, slightly forward
-        // Simulates a warm studio key light adding shape to the model
-        let keyLight = PointLight()
+        // Warm key SpotLight — above-left, aimed at model center.
+        // SpotLight instead of PointLight prevents light from spilling onto
+        // the virtual ground plane and creating a visible bright rectangle.
+        let keyLight = SpotLight()
         keyLight.name = "__accent_key__"
         keyLight.position = SIMD3<Float>(-0.5, 0.8, 0.3)
+        keyLight.look(at: SIMD3<Float>(0, 0.3, 0), from: keyLight.position, relativeTo: anchorEntity)
         keyLight.light.color = UIColor(red: 1.0, green: 0.95, blue: 0.88, alpha: 1.0)  // warm ~3500K
-        keyLight.light.intensity = 200  // lumens — subtle fill
+        keyLight.light.intensity = 200  // lumens
+        keyLight.light.innerAngleInDegrees = 30   // full-intensity cone
+        keyLight.light.outerAngleInDegrees = 60   // soft falloff edge
         keyLight.light.attenuationRadius = 3.0
         anchorEntity.addChild(keyLight)
 
-        // Cool rim light — behind-right, above
-        // Adds edge definition and separates model from background
-        let rimLight = PointLight()
+        // Cool rim SpotLight — behind-right, aimed at model center
+        let rimLight = SpotLight()
         rimLight.name = "__accent_rim__"
         rimLight.position = SIMD3<Float>(0.5, 0.6, -0.4)
+        rimLight.look(at: SIMD3<Float>(0, 0.3, 0), from: rimLight.position, relativeTo: anchorEntity)
         rimLight.light.color = UIColor(red: 0.88, green: 0.93, blue: 1.0, alpha: 1.0)  // cool ~6500K
-        rimLight.light.intensity = 120  // lumens — subtle rim
+        rimLight.light.intensity = 120  // lumens
+        rimLight.light.innerAngleInDegrees = 25
+        rimLight.light.outerAngleInDegrees = 55
         rimLight.light.attenuationRadius = 3.0
         anchorEntity.addChild(rimLight)
         
-        print("💡 Accent lights added (warm key 200lm + cool rim 120lm)")
+        print("💡 Accent spot lights added (warm key 200lm + cool rim 120lm, aimed at model)")
     }
     
     /// Apply ImageBasedLightReceiverComponent to an entity so it receives custom per-entity IBL lighting.

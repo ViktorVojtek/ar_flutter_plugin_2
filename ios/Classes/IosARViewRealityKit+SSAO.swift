@@ -448,43 +448,46 @@ kernel void ssaoBlurAndComposite(
     float4 color       = colorTex.read(gid);
     float  centerDepth = depthTex.read(gid).r;
 
-    if (centerDepth <= 0.001f) { targetTex.write(color, gid); return; }
+    // --- AO: only for pixels that have virtual geometry depth ---
+    if (centerDepth > 0.001f) {
+        // 7×7 depth-aware Gaussian bilateral blur (sigma = 2.0).
+        // Gaussian weights smooth the 4×4 tiled noise cleanly; the depth edge
+        // check prevents AO from bleeding across object/floor boundaries.
+        float aoSum     = 0.0f;
+        float weightSum = 0.0f;
+        const int   R            = 3;       // 7×7 footprint — covers >1 full 4×4 tile in all directions
+        const float kDepthThresh = 0.005f;  // depth edge preservation
+        const float kSigma2      = 8.0f;    // 2 × sigma², sigma = 2.0
 
-    // 5×5 depth-aware Gaussian bilateral blur (sigma = 1.5).
-    // Gaussian weights smooth the 4×4 tiled noise cleanly; the depth edge
-    // check prevents AO from bleeding across object/floor boundaries.
-    float aoSum     = 0.0f;
-    float weightSum = 0.0f;
-    const int   R            = 3;       // 7×7 footprint — covers >1 full 4×4 tile in all directions
-    const float kDepthThresh = 0.005f;  // depth edge preservation
-    const float kSigma2      = 8.0f;    // 2 × sigma², sigma = 2.0
-
-    for (int dy = -R; dy <= R; ++dy) {
-        for (int dx = -R; dx <= R; ++dx) {
-            int sx = int(gid.x) + dx;
-            int sy = int(gid.y) + dy;
-            if (sx < 0 || sy < 0 || sx >= int(W) || sy >= int(H)) continue;
-            uint2 nc = uint2(sx, sy);
-            float nd = depthTex.read(nc).r;
-            if (abs(centerDepth - nd) > kDepthThresh) continue;
-            float gw  = exp(-float(dx*dx + dy*dy) / kSigma2);
-            aoSum     += ssaoTex.read(nc).r * gw;
-            weightSum += gw;
+        for (int dy = -R; dy <= R; ++dy) {
+            for (int dx = -R; dx <= R; ++dx) {
+                int sx = int(gid.x) + dx;
+                int sy = int(gid.y) + dy;
+                if (sx < 0 || sy < 0 || sx >= int(W) || sy >= int(H)) continue;
+                uint2 nc = uint2(sx, sy);
+                float nd = depthTex.read(nc).r;
+                if (abs(centerDepth - nd) > kDepthThresh) continue;
+                float gw  = exp(-float(dx*dx + dy*dy) / kSigma2);
+                aoSum     += ssaoTex.read(nc).r * gw;
+                weightSum += gw;
+            }
         }
+
+        float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
+
+        // Minimum AO floor: 15% ambient retained in fully-occluded crevices.
+        const float kMinAO = 0.15f;
+        ao = ao * (1.0f - kMinAO) + kMinAO;
+
+        color.rgb *= ao;
     }
 
-    float ao = (weightSum > 0.0f) ? (aoSum / weightSum) : ssaoTex.read(gid).r;
-
-    // Minimum AO floor: 15% ambient retained in fully-occluded crevices.
-    // ACES tone mapping naturally lifts shadow detail, so the floor can be lower
-    // than before while still preventing pitch-black crevices.
-    const float kMinAO = 0.15f;
-    ao = ao * (1.0f - kMinAO) + kMinAO;
-
-    // Apply AO then ACES filmic tone mapping.
-    // Camera passthrough pixels (depth ≤ 0.001) are already sRGB and skip this path.
-    float3 lit = color.rgb * ao;
-    lit = ACESFilm(lit);
-    targetTex.write(float4(lit, color.a), gid);
+    // Apply ACES filmic tone mapping to ALL pixels uniformly — both virtual
+    // objects and camera passthrough. This prevents the visible brightness seam
+    // at the depth boundary where the virtual ground plane meets the real floor.
+    // Camera feed in RealityKit’s linear pipeline benefits from the subtle
+    // contrast enhancement, matching Filament’s global ACES on Android.
+    color.rgb = ACESFilm(color.rgb);
+    targetTex.write(color, gid);
 }
 """#
