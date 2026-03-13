@@ -84,9 +84,12 @@ class ArCoreCompatView(
         val errorMessage = throwable.message?.lowercase() ?: ""
         val stackTrace = throwable.stackTraceToString()
         
-        // Check if this is an expected camera/session exception
-        val isCameraException = throwable is IllegalStateException && 
-            (errorMessage.contains("session") || errorMessage.contains("camera") || errorMessage.contains("closed"))
+        // Check if this is an expected camera/session exception.
+        // CameraAccessException explicit type check is R8/obfuscation-safe and covers
+        // the "createDefaultRequest template 3 not implemented" crash from the camera HAL.
+        val isCameraException = throwable is android.hardware.camera2.CameraAccessException ||
+            (throwable is IllegalStateException &&
+                (errorMessage.contains("session") || errorMessage.contains("camera") || errorMessage.contains("closed")))
         val isCameraStackTrace = stackTrace.contains("CameraCaptureSession") ||
             stackTrace.contains("stopRepeating") || stackTrace.contains("Camera")
         
@@ -837,6 +840,10 @@ class ArCoreCompatView(
             
         } catch (t: Throwable) {
             Log.e(TAG, "❌ Error during force sync dispose", t)
+        } finally {
+            // Signal the cleanup gate in prepareForNewView() regardless of success/failure.
+            // This ensures the waiting thread is never stuck for the full timeout.
+            ArSessionCoordinator.signalCleanupComplete()
         }
     }
     
@@ -900,11 +907,33 @@ class ArCoreCompatView(
             }
         } catch (e: IllegalStateException) {
             Log.e(TAG, "❌ Session resume failed (session may be closed): ${e.message}")
+            notifySessionError("Session resume failed: ${e.message}")
+        } catch (e: android.hardware.camera2.CameraAccessException) {
+            Log.e(TAG, "❌ Session resume CameraAccessException: ${e.message}")
+            notifySessionError("Camera access error resuming AR session: ${e.message}")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Session resume threw unexpected exception: ${e.message}")
+            notifySessionError("AR session error: ${e.message}")
         }
     }
-    
+
+    /**
+     * Send an error message to Flutter via the session channel.
+     * Uses the existing \"onError\" method call already handled by ARSessionManager.
+     * Must be called from any thread — posts to the main thread automatically.
+     */
+    private fun notifySessionError(message: String) {
+        uiHandler.post {
+            try {
+                if (!isDisposed) {
+                    sessionChannel.invokeMethod("onError", listOf(message))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Failed to send session error to Flutter: ${e.message}")
+            }
+        }
+    }
+
     /**
      * Set the creation sequence number for this view.
      * Used to detect stale dispose calls from old views.

@@ -150,6 +150,20 @@ object ArSessionCoordinator {
     // Original exception handler
     private var originalHandler: Thread.UncaughtExceptionHandler? = null
     
+    // Latch used to signal that the previous view's Kotlin-level cleanup is complete.
+    // Allows prepareForNewView() to wait efficiently instead of using a fixed sleep.
+    @Volatile
+    private var cleanupLatch: CountDownLatch? = null
+
+    /**
+     * Signal that the current view's synchronous cleanup (scope cancel + session pause)
+     * has completed. Called from forceDisposeSync() at the end of its work.
+     */
+    fun signalCleanupComplete() {
+        cleanupLatch?.countDown()
+        Log.d(TAG, "✅ Cleanup-complete latch signalled")
+    }
+    
     // Runnable for delayed cache expiry
     private val cacheExpiryRunnable = Runnable {
         synchronized(lock) {
@@ -385,6 +399,11 @@ object ArSessionCoordinator {
         val message = throwable.message?.lowercase() ?: ""
         val stackTrace = throwable.stackTraceToString()
         
+        // CameraAccessException is always camera-related — explicit type check is R8/obfuscation-safe
+        if (throwable is android.hardware.camera2.CameraAccessException) {
+            return true
+        }
+        
         // Check for IllegalStateException with camera-related messages
         if (throwable is IllegalStateException) {
             if (message.contains("session has been closed") ||
@@ -434,16 +453,29 @@ object ArSessionCoordinator {
                 suppressCameraExceptions = true  // Start suppressing camera exceptions
                 
                 try {
+                    // Arm the latch BEFORE calling forceDisposeSync() so the signal
+                    // from inside forceDisposeSync() is guaranteed not to be missed.
+                    cleanupLatch = CountDownLatch(1)
+
                     // Force dispose the existing view synchronously
                     existing.forceDisposeSync()
-                    
-                    // Longer delay to let camera resources fully release
-                    // Camera release can take 500-1000ms on some devices
-                    // CRITICAL: This must be long enough for Camera2 API background threads
-                    // to finish their stopRepeating() calls
-                    Log.d(TAG, "⏳ Waiting for AR session to fully release...")
-                    Thread.sleep(1200)  // Increased from 800ms to 1200ms for safer cleanup
-                    
+
+                    // Wait for forceDisposeSync() to signal Kotlin-level cleanup done,
+                    // then allow a short extra window for Camera2 HAL background threads
+                    // (e.g. the stopRepeating() race) to drain before we create a new session.
+                    Log.d(TAG, "⏳ Waiting for AR session cleanup signal...")
+                    val signalled = cleanupLatch?.await(1000, TimeUnit.MILLISECONDS) ?: false
+                    if (!signalled) {
+                        Log.w(TAG, "⚠️ Cleanup latch timed out — proceeding anyway")
+                    }
+                    cleanupLatch = null
+
+                    // Additional Camera2 HAL drain: background Camera2 threads
+                    // (stopRepeating, camera device disconnect) can still be running
+                    // after our Kotlin cleanup is done. A short sleep bridges the gap.
+                    Log.d(TAG, "⏳ Camera2 HAL drain wait...")
+                    Thread.sleep(300)
+
                 } catch (e: Exception) {
                     Log.e(TAG, "Error disposing existing view", e)
                 } finally {
