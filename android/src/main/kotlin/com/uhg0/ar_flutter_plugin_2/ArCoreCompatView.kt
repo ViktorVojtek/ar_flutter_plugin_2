@@ -74,6 +74,17 @@ class ArCoreCompatView(
 
     companion object {
         private const val TAG = "SceneViewCompat"
+
+        // ── Lighting intensity caps ──────────────────────────────────────────
+        // ARCore's ENVIRONMENTAL_HDR mode updates indirectLightEstimated and
+        // mainLightEstimatedNode every frame.  In bright outdoor/indoor scenes
+        // these values can reach 100,000+ lux, blowing out the top surfaces of
+        // models to solid white.  We cap them after SceneView's estimator has
+        // written the frame so ENVIRONMENTAL_HDR keeps working normally.
+        private const val MAX_INDIRECT_LIGHT_INTENSITY = 15_000f   // lux – IBL / ambient
+        private const val MAX_DIRECTIONAL_LIGHT_INTENSITY = 40_000f // lux – main sun light
+        // Only enforce caps every N frames to minimise Filament state writes
+        private const val LIGHT_CAP_FRAME_INTERVAL = 2
     }
 
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -124,6 +135,8 @@ class ArCoreCompatView(
     private val seenPlanes = mutableSetOf<String>()
     private var environmentInitialized = false
     private var isDisposed = false
+    // Frame counter used to throttle per-frame light-cap enforcement
+    private var lightCapFrameCount = 0
     
     // CRITICAL FIX: Track when the native session/engine has been destroyed
     // This prevents SIGSEGV crashes when calling session.pause() on a destroyed session
@@ -2035,6 +2048,40 @@ class ArCoreCompatView(
         
         sendPlaneUpdates(frame)
         sendLightingUpdate(frame)
+        capLightIntensities()
+    }
+
+    /**
+     * Caps the per-frame light intensities produced by ARCore's ENVIRONMENTAL_HDR estimator.
+     *
+     * SceneView's ARLightEstimator writes [indirectLightEstimated] (IBL / spherical harmonics)
+     * and [mainLightEstimatedNode] (directional sun light) on every rendered frame.  In bright
+     * environments the estimator can push these past 100,000 lux, causing the top surfaces of
+     * models to blow out to solid white (#fff) and producing pink/purple fringing on metallic
+     * materials.  Capping here keeps ENVIRONMENTAL_HDR active and realistic while preventing
+     * overexposure.
+     */
+    private fun capLightIntensities() {
+        // Throttle: skip frames to reduce Filament state-write overhead
+        if (lightCapFrameCount++ % LIGHT_CAP_FRAME_INTERVAL != 0) return
+
+        // 1. Cap IBL (ambient / indirect) light from ARCore spherical harmonics.
+        //    sceneView.indirectLightEstimated is the ENVIRONMENTAL_HDR-updated object;
+        //    sceneView.indirectLight is the static fallback we set from pdp-model-viewer.hdr.
+        sceneView.indirectLightEstimated?.let { ibl ->
+            if (ibl.intensity > MAX_INDIRECT_LIGHT_INTENSITY) {
+                ibl.intensity = MAX_INDIRECT_LIGHT_INTENSITY
+            }
+        }
+
+        // 2. Cap main directional / sun light from ARCore's main light estimate.
+        //    Upper model surfaces appear pure-white when this exceeds ~40,000 lux because
+        //    the directional light hits top-facing normals most directly.
+        sceneView.mainLightEstimatedNode?.let { lightNode ->
+            if (lightNode.intensity > MAX_DIRECTIONAL_LIGHT_INTENSITY) {
+                lightNode.intensity = MAX_DIRECTIONAL_LIGHT_INTENSITY
+            }
+        }
     }
 
     private fun initializeDefaultEnvironment() {
@@ -2060,16 +2107,26 @@ class ArCoreCompatView(
                 )
                 
                 environment?.let { env ->
+                    // Set static HDR as the initial fallback environment for the first few frames
+                    // before ARCore's ENVIRONMENTAL_HDR estimator provides valid data.
+                    // SceneView will progressively replace this with live ARCore environment probes.
                     sceneView.environment = env
-                    
-                    // Reduce indirect light intensity for softer, more natural lighting
-                    // Default is quite bright which causes the bloomy/artificial look
-                    // A value around 10000-20000 provides softer ambient lighting similar to Sceneform
+
+                    // Set a warmup intensity on the static IBL.  The sustained cap is applied
+                    // every frame in capLightIntensities() against indirectLightEstimated, which
+                    // is the ENVIRONMENTAL_HDR-updated object (separate from this static one).
                     sceneView.indirectLight?.let { light ->
-                        light.intensity = 15000f  // Reduced from default ~100000
+                        light.setIntensity(MAX_INDIRECT_LIGHT_INTENSITY)
                     }
-                    
-                    Log.d(TAG, "✅ HDR environment loaded with neutral lighting (15000 lux)")
+
+                    // Configure fixed camera exposure to prevent Filament's auto-exposure from
+                    // contributing to overbrightness on top of the light caps.
+                    // f/16 · 1/125 s · ISO 100 ≈ EV 14.6 — balanced for indoor and outdoor AR.
+                    runCatching {
+                        sceneView.cameraNode.setExposure(16f, 1f / 125f, 100f)
+                    }
+
+                    Log.d(TAG, "✅ HDR environment loaded (warmup); per-frame caps active at IBL=${MAX_INDIRECT_LIGHT_INTENSITY} dir=${MAX_DIRECTIONAL_LIGHT_INTENSITY} lux")
                 }
                 environmentInitialized = true
             }.onFailure { error ->
