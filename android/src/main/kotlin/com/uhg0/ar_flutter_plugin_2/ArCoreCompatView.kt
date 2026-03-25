@@ -259,7 +259,22 @@ class ArCoreCompatView(
         }
         lifecycle.addObserver(lifecycleObserver!!)
         Log.d(TAG, "👀 Lifecycle observer installed on Flutter lifecycle - will detect background transitions")
-        
+
+        // CRITICAL FIX: Detect when the SurfaceView is detached from the window hierarchy.
+        // SceneView auto-destroys its Filament engine + EGL context when the SurfaceView is
+        // detached. This happens BEFORE Flutter calls dispose(), so we must mark the session
+        // destroyed here to prevent safelyPauseSession() from calling session.pause() on an
+        // already-destroyed EGL context (which causes a native SIGABRT).
+        sceneView.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: android.view.View) {
+                Log.d(TAG, "🔗 SceneView attached to window")
+            }
+            override fun onViewDetachedFromWindow(v: android.view.View) {
+                Log.d(TAG, "🔌 SceneView detached from window - marking session as destroyed to prevent EGL crash")
+                sessionDestroyed = true
+            }
+        })
+
         // Setup callbacks for BOTH new and reused SceneViews
         sceneView.apply {
             onSessionUpdated = { _, frame ->
@@ -775,19 +790,20 @@ class ArCoreCompatView(
             // CRITICAL: Pause session SYNCHRONOUSLY with defensive exception handling
             // The Camera2 API may throw IllegalStateException if session is already closed
             // by background cleanup threads - this is expected and safe to ignore
-            // CRITICAL FIX: Check engine validity to prevent SIGSEGV on destroyed session
+            // CRITICAL FIX: Check view attachment AND engine validity to prevent SIGABRT on destroyed EGL
             if (!sessionDestroyed) {
                 try {
                     Log.d(TAG, "🧹 SYNC Phase 1: Pausing AR session")
                     val session = sceneView.session
                     if (session != null) {
-                        // Check engine validity first
-                        val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                        // CRITICAL: Check view attachment first - detached = EGL context destroyed
+                        val isViewAttached = sceneView.isAttachedToWindow
+                        val isEngineValid = isViewAttached && runCatching { sceneView.renderer != null }.getOrDefault(false)
                         if (isEngineValid) {
                             session.pause()
                             Log.d(TAG, "✅ Session paused successfully")
                         } else {
-                            Log.w(TAG, "⚠️ Engine already destroyed, skipping session pause")
+                            Log.w(TAG, "⚠️ Engine/EGL already destroyed (attached=$isViewAttached), skipping session pause")
                             sessionDestroyed = true
                         }
                     } else {
@@ -856,13 +872,20 @@ class ArCoreCompatView(
      */
     fun pauseSessionOnly() {
         Log.d(TAG, "⏸️ Pausing session only (keeping resources)")
-        
+
         // CRITICAL FIX: Check session validity before pausing
         if (sessionDestroyed) {
             Log.w(TAG, "⚠️ Session already destroyed, skipping pause")
             return
         }
-        
+
+        // CRITICAL FIX: If the SurfaceView has been detached, EGL context is destroyed.
+        if (!sceneView.isAttachedToWindow) {
+            Log.w(TAG, "⚠️ SceneView detached from window - skipping session pause (EGL destroyed)")
+            sessionDestroyed = true
+            return
+        }
+
         try {
             val session = sceneView.session
             if (session != null) {
@@ -873,7 +896,7 @@ class ArCoreCompatView(
                     sessionDestroyed = true
                     return
                 }
-                
+
                 session.pause()
                 Log.d(TAG, "✅ Session paused")
             } else {
@@ -953,19 +976,35 @@ class ArCoreCompatView(
     private fun isRecoverableDispose(): Boolean {
         val activityFinishing = activity?.isFinishing ?: false
         val activityDestroyed = activity?.isDestroyed ?: false
-        
+
         Log.d(TAG, "🔍 isRecoverableDispose check: finishing=$activityFinishing, destroyed=$activityDestroyed")
-        
+
         // If activity is finishing or destroyed, this is NOT recoverable - full cleanup needed
         if (activityFinishing || activityDestroyed) {
             return false
         }
-        
+
+        // CRITICAL FIX: If the SceneView is already detached from the window, the Filament
+        // engine and EGL context are already destroyed. This happens during Flutter route
+        // navigation (activity is NOT finishing, so the old check missed this). Attempting
+        // session.pause() in this state causes a native SIGABRT.
+        if (!sceneView.isAttachedToWindow) {
+            Log.d(TAG, "🔍 SceneView already detached from window - NOT recoverable (engine destroyed)")
+            return false
+        }
+
+        // If the native session/engine was already destroyed (flagged by the attach listener
+        // or a previous exception), treat as non-recoverable to avoid a double-pause attempt.
+        if (sessionDestroyed) {
+            Log.d(TAG, "🔍 sessionDestroyed flag set - NOT recoverable")
+            return false
+        }
+
         // Check if we're reusing a cached view - if so, we shouldn't re-cache
         if (isReusingCachedView) {
             Log.d(TAG, "🔍 Already using a cached view, can re-cache")
         }
-        
+
         // Otherwise, this is likely a background transition - recoverable!
         return true
     }
@@ -1068,18 +1107,20 @@ class ArCoreCompatView(
             
             // CRITICAL FIX: Pause session with defensive exception handling
             // Camera2 API may throw IllegalStateException if session is already closed
-            // Also check engine validity to prevent SIGSEGV on destroyed session
+            // Also check engine validity and view attachment to prevent SIGABRT on destroyed EGL context
             if (!sessionDestroyed) {
                 try {
                     Log.d(TAG, "🧹 Phase 1: Pausing AR session")
                     val session = sceneView.session
                     if (session != null) {
-                        val isEngineValid = runCatching { sceneView.renderer != null }.getOrDefault(false)
+                        // CRITICAL: Check view attachment first - detached = EGL context destroyed
+                        val isViewAttached = sceneView.isAttachedToWindow
+                        val isEngineValid = isViewAttached && runCatching { sceneView.renderer != null }.getOrDefault(false)
                         if (isEngineValid) {
                             session.pause()
                             Log.d(TAG, "✅ Session paused")
                         } else {
-                            Log.w(TAG, "⚠️ Engine already destroyed, skipping session pause")
+                            Log.w(TAG, "⚠️ Engine/EGL already destroyed (attached=$isViewAttached), skipping session pause")
                             sessionDestroyed = true
                         }
                     }
@@ -1389,14 +1430,23 @@ class ArCoreCompatView(
             Log.w(TAG, "⚠️ [$caller] Session already destroyed, skipping pause")
             return
         }
-        
+
+        // CRITICAL FIX: If the SurfaceView has been detached from the window, the Filament
+        // engine and EGL context are already destroyed. Calling session.pause() now would
+        // trigger a native SIGABRT (Check failed: client_egl_state_.has_value()).
+        if (!sceneView.isAttachedToWindow) {
+            Log.w(TAG, "⚠️ [$caller] SceneView detached from window - skipping session pause (EGL destroyed)")
+            sessionDestroyed = true
+            return
+        }
+
         try {
             val session = sceneView.session
             if (session == null) {
                 Log.w(TAG, "⚠️ [$caller] Session is null, skipping pause")
                 return
             }
-            
+
             // Additional safety: check if SceneView's renderer is still valid
             // If the engine was destroyed (e.g., by Filament cleanup after corrupted model),
             // we shouldn't try to pause as it will cause a native crash
@@ -1406,17 +1456,17 @@ class ArCoreCompatView(
                 Log.w(TAG, "⚠️ [$caller] Engine check threw exception: ${e.message}")
                 false
             }
-            
+
             if (!isEngineValid) {
                 Log.w(TAG, "⚠️ [$caller] Engine already destroyed, skipping session pause")
                 sessionDestroyed = true  // Mark for future calls
                 return
             }
-            
+
             // Session and engine are valid, safe to pause
             session.pause()
             Log.d(TAG, "⏸️ [$caller] AR session paused successfully")
-            
+
         } catch (e: IllegalStateException) {
             // Session was already closed/destroyed - this is expected in some cases
             Log.w(TAG, "⚠️ [$caller] Session pause threw IllegalStateException (expected): ${e.message}")
