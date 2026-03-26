@@ -2225,13 +2225,11 @@ class ArCoreCompatView(
         // uiHandler delivers the callback on the main thread so result can be returned safely.
         descriptor.setCallback(uiHandler, Runnable {
             buffer.rewind()
-            // Filament readPixels uses bottom-left origin (OpenGL convention).
-            // Flip vertically to produce an image with Android's top-left origin.
+            // Filament readPixels on Android is already top-to-bottom; no flip needed.
             val intArray = IntArray(width * height)
             for (row in 0 until height) {
-                val srcRow = height - 1 - row
                 for (col in 0 until width) {
-                    val pixelIdx = (srcRow * width + col) * 4
+                    val pixelIdx = (row * width + col) * 4
                     val r = buffer.get(pixelIdx).toInt() and 0xFF
                     val g = buffer.get(pixelIdx + 1).toInt() and 0xFF
                     val b = buffer.get(pixelIdx + 2).toInt() and 0xFF
