@@ -10,6 +10,8 @@ import android.view.MotionEvent
 import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
+import com.google.android.filament.Texture
+import java.nio.ByteBuffer
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -2203,35 +2205,46 @@ class ArCoreCompatView(
     // ------------------------------------------------------------------------
 
     private fun takeSnapshot(result: MethodChannel.Result) {
-        val surfaceView = sceneView as? SurfaceView
-        if (surfaceView == null) {
-            result.error("SNAPSHOT_ERROR", "SceneView is not a SurfaceView", null)
-            return
-        }
+        val width = sceneView.width
+        val height = sceneView.height
 
-        if (surfaceView.width <= 0 || surfaceView.height <= 0) {
+        if (width <= 0 || height <= 0) {
             result.error("SNAPSHOT_ERROR", "View has invalid dimensions", null)
             return
         }
 
-        val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
+        // Use Filament's readPixels to capture the fully composited AR frame,
+        // including the camera background rendered by ARCameraStream.
+        // PixelCopy on a Filament SurfaceView does not capture the camera background.
+        val buffer = ByteBuffer.allocateDirect(width * height * 4)
+        val descriptor = Texture.PixelBufferDescriptor(
+            buffer,
+            Texture.Format.RGBA,
+            Texture.Type.UBYTE
+        )
+        // uiHandler delivers the callback on the main thread so result can be returned safely.
+        descriptor.setCallback(uiHandler, Runnable {
+            buffer.rewind()
+            // Filament readPixels uses bottom-left origin (OpenGL convention).
+            // Flip vertically to produce an image with Android's top-left origin.
+            val intArray = IntArray(width * height)
+            for (row in 0 until height) {
+                val srcRow = height - 1 - row
+                for (col in 0 until width) {
+                    val pixelIdx = (srcRow * width + col) * 4
+                    val r = buffer.get(pixelIdx).toInt() and 0xFF
+                    val g = buffer.get(pixelIdx + 1).toInt() and 0xFF
+                    val b = buffer.get(pixelIdx + 2).toInt() and 0xFF
+                    val a = buffer.get(pixelIdx + 3).toInt() and 0xFF
+                    intArray[row * width + col] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+            val bitmap = Bitmap.createBitmap(intArray, width, height, Bitmap.Config.ARGB_8888)
+            result.success(bitmapToByteArray(bitmap))
+            bitmap.recycle()
+        })
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PixelCopy.request(
-                surfaceView,
-                bitmap,
-                { copyResult ->
-                    if (copyResult == PixelCopy.SUCCESS) {
-                        result.success(bitmapToByteArray(bitmap))
-                    } else {
-                        result.error("SNAPSHOT_ERROR", "PixelCopy failed with code $copyResult", null)
-                    }
-                },
-                uiHandler
-            )
-        } else {
-            result.error("SNAPSHOT_UNSUPPORTED", "PixelCopy requires Android O+", null)
-        }
+        sceneView.renderer.readPixels(0, 0, width, height, descriptor)
     }
 
     private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
