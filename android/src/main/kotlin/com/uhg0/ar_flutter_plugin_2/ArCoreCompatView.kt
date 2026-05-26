@@ -2213,19 +2213,41 @@ class ArCoreCompatView(
             return
         }
 
-        // Use Filament's readPixels to capture the fully composited AR frame,
-        // including the camera background rendered by ARCameraStream.
-        // PixelCopy on a Filament SurfaceView does not capture the camera background.
+        // Primary path (API 26+): PixelCopy on the ARSceneView SurfaceView.
+        // This captures the GPU-composited frame including the ARCore camera background
+        // rendered by ARCameraStream into Filament's framebuffer.
+        // Fallback: Filament readPixels with alpha forced to 0xFF (see readPixelsFallback).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            PixelCopy.request(sceneView, bitmap, { copyResult ->
+                if (copyResult == PixelCopy.SUCCESS) {
+                    Log.d(TAG, "📸 snapshot via PixelCopy, size=${bitmap.byteCount}")
+                    result.success(bitmapToByteArray(bitmap))
+                    bitmap.recycle()
+                } else {
+                    Log.w(TAG, "📸 PixelCopy failed (code=$copyResult), falling back to readPixels")
+                    bitmap.recycle()
+                    readPixelsFallback(width, height, result)
+                }
+            }, uiHandler)
+        } else {
+            readPixelsFallback(width, height, result)
+        }
+    }
+
+    private fun readPixelsFallback(width: Int, height: Int, result: MethodChannel.Result) {
         val buffer = ByteBuffer.allocateDirect(width * height * 4)
         val descriptor = Texture.PixelBufferDescriptor(
             buffer,
             Texture.Format.RGBA,
             Texture.Type.UBYTE
         )
-        // uiHandler delivers the callback on the main thread so result can be returned safely.
         descriptor.setCallback(uiHandler, Runnable {
             buffer.rewind()
-            // Filament readPixels on Android is already top-to-bottom; no flip needed.
+            if (BuildConfig.DEBUG) {
+                logSnapshotDiagnostics(buffer, width, height)
+                buffer.rewind()
+            }
             val intArray = IntArray(width * height)
             for (row in 0 until height) {
                 for (col in 0 until width) {
@@ -2233,16 +2255,34 @@ class ArCoreCompatView(
                     val r = buffer.get(pixelIdx).toInt() and 0xFF
                     val g = buffer.get(pixelIdx + 1).toInt() and 0xFF
                     val b = buffer.get(pixelIdx + 2).toInt() and 0xFF
-                    val a = buffer.get(pixelIdx + 3).toInt() and 0xFF
-                    intArray[row * width + col] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    // Force alpha fully opaque: Filament's swapchain surface may output
+                    // alpha=0 even when RGB channels contain valid camera + model data.
+                    intArray[row * width + col] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                 }
             }
             val bitmap = Bitmap.createBitmap(intArray, width, height, Bitmap.Config.ARGB_8888)
-            result.success(bitmapToByteArray(bitmap))
+            val bytes = bitmapToByteArray(bitmap)
+            Log.d(TAG, "📸 snapshot via readPixels, size=${bytes.size}")
+            result.success(bytes)
             bitmap.recycle()
         })
-
         sceneView.renderer.readPixels(0, 0, width, height, descriptor)
+    }
+
+    private fun logSnapshotDiagnostics(buffer: ByteBuffer, width: Int, height: Int) {
+        val samplePoints = listOf(
+            0 to 0, (width - 1) to 0, 0 to (height - 1),
+            (width - 1) to (height - 1), (width / 2) to (height / 2)
+        )
+        for ((col, row) in samplePoints) {
+            val idx = (row * width + col) * 4
+            val r = buffer.get(idx).toInt() and 0xFF
+            val g = buffer.get(idx + 1).toInt() and 0xFF
+            val b = buffer.get(idx + 2).toInt() and 0xFF
+            val a = buffer.get(idx + 3).toInt() and 0xFF
+            Log.d(TAG, "📸 pixel[$col,$row] RGBA=($r,$g,$b,$a)")
+        }
+        Log.d(TAG, "📸 sceneView size=${width}x${height} isOpaque=${sceneView.isOpaque} frameTs=${sceneView.frame?.timestamp}")
     }
 
     private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
