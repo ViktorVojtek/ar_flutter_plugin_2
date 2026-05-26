@@ -2244,10 +2244,8 @@ class ArCoreCompatView(
         )
         descriptor.setCallback(uiHandler, Runnable {
             buffer.rewind()
-            if (BuildConfig.DEBUG) {
-                logSnapshotDiagnostics(buffer, width, height)
-                buffer.rewind()
-            }
+            logSnapshotDiagnostics(buffer, width, height)
+            buffer.rewind()
             val intArray = IntArray(width * height)
             for (row in 0 until height) {
                 for (col in 0 until width) {
